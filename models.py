@@ -1,0 +1,116 @@
+# models.py
+from datetime import datetime
+from mongoengine import (
+    Document, EmbeddedDocument,
+    StringField, IntField, DateTimeField,FloatField,ListField,DictField,
+    EmbeddedDocumentField,ReferenceField
+)
+
+class WindowRange(EmbeddedDocument):
+    after_epoch = IntField(required=True)
+    before_epoch = IntField(required=True)
+
+class FromInfo(EmbeddedDocument):
+    raw   = StringField()
+    name  = StringField()
+    email = StringField()
+
+class InternalDate(EmbeddedDocument):
+    ts_ms = IntField()
+    iso   = StringField()
+
+class Bodies(EmbeddedDocument):
+    text      = StringField()
+    html_full = StringField()
+    html_ai   = StringField()
+
+class FilteredListingEmail(Document):
+    meta = {
+        "collection": "filtered_listing_emails",
+        "indexes": [
+            {"fields": ["account_label", "gmail_message_id"], "unique": True, "name": "uniq_account_msg"},
+            {"fields": ["from_info.email"], "name": "from_email"},
+            {"fields": ["window.after_epoch", "window.before_epoch"], "name": "window_range"},
+            {"fields": ["status"], "name": "status_idx"},  # optional but handy
+        ]
+    }
+
+    # keys
+    account_label    = StringField(required=True)
+    gmail_message_id = StringField(required=True)
+
+    # refs / convenience
+    gmail_thread_id  = StringField()
+    subject          = StringField()
+
+    # window used to fetch
+    window           = EmbeddedDocumentField(WindowRange, required=True)
+
+    # headers / dates
+    from_info        = EmbeddedDocumentField(FromInfo)
+    rfc822_date      = StringField()
+    internal_date    = EmbeddedDocumentField(InternalDate)
+
+    # bodies
+    bodies           = EmbeddedDocumentField(Bodies)
+
+        # processing status
+    status           = StringField(
+        choices=("not_processed", "processing", "processed", "error"),
+        default="not_processed"
+    )
+
+    # audit
+    created_at       = DateTimeField(default=datetime.utcnow)
+    updated_at       = DateTimeField(default=datetime.utcnow)
+
+    def touch(self):
+        self.updated_at = datetime.utcnow()
+
+
+
+# ---------- NEW: per-listing collection ----------
+class ParsedListing(Document):
+    meta = {
+        "collection": "parsed_listings",
+        "indexes": [
+            # one row per listing within an email
+            {"fields": ["account_label", "gmail_message_id", "list_index"], "unique": True, "name": "uniq_email_list_index"},
+            {"fields": ["status"], "name": "listing_status_idx"},
+            {"fields": ["city", "state", "zip"], "name": "city_state_zip_idx"},
+            {"fields": ["address", "price"], "name": "addr_price_idx"},
+        ]
+    }
+
+    # linkage
+    account_label     = StringField(required=True)
+    gmail_message_id  = StringField(required=True)
+    list_index        = IntField(required=True)
+    source_email      = ReferenceField(FilteredListingEmail, required=True)
+
+    # requested fields
+    address      = StringField()
+    city              = StringField()
+    state             = StringField()
+    zip               = StringField()
+    price             = FloatField()  # store USD price (list_price_usd)
+
+    images            = ListField(StringField())   # array of URLs
+    other_images_source = StringField()            # single URL
+
+    complete_info     = DictField()  # full JSON blob returned for this listing
+
+    status            = StringField(
+        choices=("not_processed", "image_processed", "passed", "posted", "skipped"),
+        default="not_processed"
+    )
+
+    rules_ai_rule_id = StringField()   # e.g., "R3"
+    rules_ai_version = StringField()   # store YAML version as string (flexible)
+    rules_ai_reason  = StringField()   # short reason when Skipped
+
+    created_at        = DateTimeField(default=datetime.utcnow)
+    updated_at        = DateTimeField(default=datetime.utcnow)
+
+    def touch(self):
+        self.updated_at = datetime.utcnow()
