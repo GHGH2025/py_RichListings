@@ -14,7 +14,9 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from emailExtract import extract_email_body_simple
-
+from forwardInline import forward_inline_html
+from mongo_engine_conn import init_db
+from models import FilteredListingEmail, ParsedListing, WindowRange, FromInfo, InternalDate, Bodies
 # -------------------- CONFIGURE YOUR ACCOUNTS HERE --------------------
 ACCOUNTS = [
     # Example for acct1 (keep commented if not used)
@@ -23,9 +25,30 @@ ACCOUNTS = [
         "base_dir": os.path.join("accounts", "acct1"),
         "allowed_senders": [
             # leave empty to allow everyone, or add patterns:
-            "Zillow Alerts",               # name contains
-            "agent@broker.com",            # exact email
-            "*@myfavdomain.com",           # any user at this domain
+            "info-jefinancialholdings.com@shared1.ccsend.com ",               # name contains
+            "david@theligongroup.com",
+            "talya@safetynetinv.com",
+            "info@assetsbyalec.com",
+            "todd@southfloridawholesalehomes.ccsend.com",
+            "jpaul@7kidsandflipping.com",
+            "the3minvestments-gmail.com@shared1.ccsend.com",
+            "tricountyflippers-gmail.com@shared1.ccsend.com",
+            "erek@marketing.vesta.app",
+            "info@zcginvestments.com",
+            "john@wholesalejax.com",
+            "sales-islandlivingrealty.com@shared1.ccsend.com",
+            "re@1motivatedseller.com",
+            "carlos@ccjinvestmentsgroup.com",
+            "lenny-riverwalkproperties.net@shared1.ccsend.com",
+            "info@avainvestmentproperties.com",
+            "info-abccapitalgroupusa.com@shared1.ccsend.com",
+            "deals@allaboutrealestate.com",
+            "@homeventureinvestments.com",
+            "manny@homeventureinvestments.com"
+
+
+    #         # "agent@broker.com",            # exact email
+    #         # "*@myfavdomain.com",           # any user at this domain
         ],
         "skip_senders": [
             # optional blocklist patterns (checked after allow)
@@ -36,13 +59,34 @@ ACCOUNTS = [
         "token_filename": "token.json",
         "state_filename": "state.json",
     },
-    # {
-    #     "label": "acct2",
-    #     "base_dir": os.path.join("accounts", "acct2"),
+    {
+        "label": "acct2",
+        "base_dir": os.path.join("accounts", "acct2"),
+        "allowed_senders": [
+            # examples:
+            "richard@oasispropertyinvestments.ccsend.com",
+            "alex@lexicorealty.ccsend.com",
+            "iwantacheaphousenow-gmail.com@shared1.ccsend.com",
+            "craig@nowhomebuyers.com",
+            "ctorres@spectrumpropertygroup.com"
+            # or: "*@oasispropertyinvestments.ccsend.com",
+        ],
+        "skip_senders": [
+            # e.g., "noreply@*"
+        ],
+        "only_inbox": True,
+        "fallback_lookback_min": 60,
+        "credentials_filename": "credentials.json",
+        "token_filename": "token.json",
+        "state_filename": "state.json",
+    },
+    #     {
+    #     "label": "acct3",
+    #     "base_dir": os.path.join("accounts", "acct3"),
     #     "allowed_senders": [
     #         # examples:
     #         # "richard@oasispropertyinvestments.ccsend.com",
-    #         "alex@lexicorealty.ccsend.com"
+    #         "devs@learn.deepgram.com"
     #         # or: "*@oasispropertyinvestments.ccsend.com",
     #     ],
     #     "skip_senders": [
@@ -56,7 +100,10 @@ ACCOUNTS = [
     # },
 ]
 # Gmail read-only scope
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly"
+    # "https://www.googleapis.com/auth/gmail.send",
+]
 # ---------------------------------------------------------------------
 
 
@@ -216,7 +263,7 @@ def _choose_window(state_path: str, fallback_lookback_min: int) -> Tuple[int, in
         after_ep = int(last_ep)
 
     before_ep = now_ep
-    return 1756114365, 1756270950
+    return 1756969781, 1757315415
     # return after_ep, before_ep
 
 
@@ -319,6 +366,8 @@ def process_account(acct: AccountConfig) -> None:
         subj = _header(headers, "Subject") or "(no subject)"
         date_h = _header(headers, "Date") or ""
 
+        full_norm, name_norm, email_norm, domain_norm = _normalize_from(from_h)
+
         # Gmail internalDate is in **milliseconds**
         internal_ts_ms = int(m.get("internalDate", "0") or 0)
         internal_dt = datetime.fromtimestamp(internal_ts_ms / 1000, tz=timezone.utc).isoformat()
@@ -329,6 +378,44 @@ def process_account(acct: AccountConfig) -> None:
         plain = content["text"]
         html_full = content["html_full"]
         html_ai = content["html_ai"]
+
+        q = FilteredListingEmail.objects(
+            account_label=acct.label,
+            gmail_message_id=m.get("id"),
+        )
+
+        q.update_one(
+            upsert=True,
+            set__gmail_thread_id=m.get("threadId"),
+            set__subject=subj,
+            set__window=WindowRange(after_epoch=after_ep, before_epoch=before_ep),
+            set__from_info=FromInfo(
+                raw=from_h,
+                name=(full_norm or "").strip(),
+                email=(email_norm or "").strip().lower(),
+            ),
+            set__rfc822_date=date_h,
+            set__internal_date=InternalDate(ts_ms=internal_ts_ms, iso=internal_dt),
+            set__bodies=Bodies(text=plain, html_full=html_full, html_ai=html_ai),
+            set_on_insert__status="not_processed",
+            set__updated_at=datetime.utcnow(),
+            set_on_insert__created_at=datetime.utcnow(),
+        )
+
+        # Get the saved _id (for referencing later)
+        saved = q.only("id").first()
+        saved_id = str(saved.id) if saved else None
+        print(f"[{acct.label}] saved filtered email ⇒ _id={saved_id}")
+
+        # step to forward the complete email
+
+        # forward_inline_html(
+        #     service,
+        #     to_addr="sparsh@concepttocode.in",
+        #     original_subject=subj,
+        #     original_html=html_full,
+        #     preface_text="Use the below email to process for test",
+        #         )
 
         print("-" * 80)
         print(f"[{acct.label}] From: {from_h}")
@@ -352,6 +439,10 @@ def process_account(acct: AccountConfig) -> None:
 
 
 def main():
+    init_db()  # connect using env; handles TLS flags if set
+    # Optionally ensure indexes now:
+    FilteredListingEmail.ensure_indexes()
+    ParsedListing.ensure_indexes()
     any_error = False
     for raw in ACCOUNTS:
         acct = _ensure_paths(raw)

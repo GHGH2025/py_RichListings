@@ -101,13 +101,14 @@ class ParsedListing(Document):
     complete_info     = DictField()  # full JSON blob returned for this listing
 
     status            = StringField(
-        choices=("not_processed", "image_processed", "passed", "posted", "skipped"),
+        choices=("not_processed","ready_to_post", "processed", "passed", "posted", "skipped"),
         default="not_processed"
     )
 
-    rules_ai_rule_id = StringField()   # e.g., "R3"
-    rules_ai_version = StringField()   # store YAML version as string (flexible)
-    rules_ai_reason  = StringField()   # short reason when Skipped
+    rules_ai_rule_id            = StringField()   # e.g., "R3"
+    rules_ai_version            = StringField()   # store YAML version as string (flexible)
+    rules_ai_reason             = StringField()   # short reason when Skipped
+    skipped_or_posted_at        = DateTimeField(null=True)
 
     created_at        = DateTimeField(default=datetime.utcnow)
     updated_at        = DateTimeField(default=datetime.utcnow)

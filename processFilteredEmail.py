@@ -3,7 +3,7 @@ from models import FilteredListingEmail, ParsedListing
 from listingDetails import upsert_parsed_listings_from_html
 
 
-def process_pending(limit=50):
+def process_pending(limit=1):
     init_db()
     FilteredListingEmail.ensure_indexes()
     ParsedListing.ensure_indexes()

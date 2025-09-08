@@ -1,0 +1,57 @@
+version: 1
+updated: "2025-09-05"
+
+policy: |
+  Apply the rules below IN ORDER. Stop at the first rule that applies and is not exempted by its “Unless” line.
+  If information required to evaluate a rule is missing or unclear, DO NOT skip on that rule; continue to the next rule.
+  Use only the facts provided in the listing JSON. Do not guess.
+  Treat “on the water” as true if the listing explicitly indicates waterfront or a water feature such as: oceanfront, ocean access, intracoastal, bayfront, canal, lakefront, or riverfront.
+  “South Florida Tri-County” means Miami-Dade, Broward, or Palm Beach.
+  “Rest of Florida” means Florida locations outside the South Florida Tri-County (including St. Lucie and Fort Pierce).
+  For condos, “HOA fee” means the monthly HOA fee plus any monthly assessments; if both are present, sum them.
+
+rules:
+  - id: R1
+    text: >
+      No 2-bed houses over $250,000 in South Florida Tri-County.
+      Unless they are on the water.
+
+  - id: R2
+    text: >
+      No 2-bed houses over $150,000 in the rest of Florida.
+      Unless they are on the water.
+
+  - id: R3
+    text: >
+      No condos over $250,000, unless they are on the Ocean, have Ocean Access, or are on the Intracoastal Waterway.
+
+  - id: R4
+    text: >
+      No condos with HOA (fee + any assessments) over $600 when the asking price is under $150,000.
+
+  - id: R5
+    text: >
+      No land under 5,000 sqft or under 0.12 acre.
+
+  - id: R6
+    text: >
+      South Florida only: No 3-bed / 1-bath houses over $375,000.
+      Unless they are on the water.
+
+  - id: R7
+    text: >
+      South Florida only: No 3-bed / 1-bath houses that are under 900 sqft and priced over $325,000.
+      Unless they are on the water.
+
+  - id: R8
+    text: >
+      No frame or wood houses, except in Jacksonville, Port St Lucie, Ft Pierce, Tampa, Ocala, Pensacola, or anywhere in South Florida Tri-County.
+      If the ad says “Tear Down” or “Re-Development”, ignore the location exception above and allow it to pass this rule.
+
+  - id: R9
+    text: >
+      Outside South Florida only: No houses under 900 sqft unless the price is $170,000 or less.
+
+  - id: R10
+    text: >
+      No mobile homes when the only thing being sold in the ad is a mobile home.
