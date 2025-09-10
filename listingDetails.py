@@ -394,6 +394,7 @@ def upsert_parsed_listings_from_html(
     account_label: str,
     gmail_message_id: str,
     source_email_doc: FilteredListingEmail,
+    list_slice: Optional[tuple[int, int]] = None,   # NEW
 ) -> Dict[str, Any]:
     """
     Run extraction on given HTML, then upsert rows into parsed_listings.
@@ -402,8 +403,19 @@ def upsert_parsed_listings_from_html(
     result = extract_listings_from_email_html(email_html)
     listings = result.get("listings", []) or []
     saved_ids: List[str] = []
+    
+    # bounds
+    start_i = 1
+    end_i = len(listings)
+    if list_slice:
+        s, e = list_slice
+        start_i = max(1, s)
+        end_i = min(len(listings), e)
 
     for idx, lst in enumerate(listings, start=1):  # 1..N within this email
+        # honor slice by original position, so list_index stays stable for this email
+        if not (start_i <= idx <= end_i):
+            continue 
         try:
             addr  = (lst.get("address") or "").strip()
             city  = (lst.get("city") or "").strip()

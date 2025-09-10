@@ -33,6 +33,7 @@ ACCOUNTS = [
             "jpaul@7kidsandflipping.com",
             "the3minvestments-gmail.com@shared1.ccsend.com",
             "tricountyflippers-gmail.com@shared1.ccsend.com",
+            "jc-quickturnproperties.com@shared1.ccsend.com",
             "erek@marketing.vesta.app",
             "info@zcginvestments.com",
             "john@wholesalejax.com",
@@ -198,7 +199,7 @@ def _gmail_search(service, query: str, only_inbox: bool) -> List[str]:
         if page_token:
             params["pageToken"] = page_token
         if only_inbox:
-            params["labelIds"] = ["INBOX"]
+            params["labelIds"] = ["TRASH"]
 
         resp = service.users().messages().list(**params).execute()
         messages = resp.get("messages", [])
@@ -263,7 +264,7 @@ def _choose_window(state_path: str, fallback_lookback_min: int) -> Tuple[int, in
         after_ep = int(last_ep)
 
     before_ep = now_ep
-    return 1756969781, 1757315415
+    return 1755775802, 1755779402
     # return after_ep, before_ep
 
 
