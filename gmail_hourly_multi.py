@@ -199,7 +199,7 @@ def _gmail_search(service, query: str, only_inbox: bool) -> List[str]:
         if page_token:
             params["pageToken"] = page_token
         if only_inbox:
-            params["labelIds"] = ["TRASH"]
+            params["labelIds"] = ["INBOX"]
 
         resp = service.users().messages().list(**params).execute()
         messages = resp.get("messages", [])
@@ -264,8 +264,8 @@ def _choose_window(state_path: str, fallback_lookback_min: int) -> Tuple[int, in
         after_ep = int(last_ep)
 
     before_ep = now_ep
-    return 1755775802, 1755779402
-    # return after_ep, before_ep
+    # return 1755775802, 1755779402
+    return after_ep, before_ep
 
 
 def _update_state(state_path: str, before_ep: int) -> None:
@@ -436,25 +436,25 @@ def process_account(acct: AccountConfig) -> None:
     print(f"[{acct.label}] Processed (after sender filter): {kept}")
 
     # checkpoint after successful processing
-    # _update_state(acct.state_path, before_ep)
+    _update_state(acct.state_path, before_ep)
 
 
-def main():
-    init_db()  # connect using env; handles TLS flags if set
-    # Optionally ensure indexes now:
-    FilteredListingEmail.ensure_indexes()
-    ParsedListing.ensure_indexes()
-    any_error = False
-    for raw in ACCOUNTS:
-        acct = _ensure_paths(raw)
-        try:
-            process_account(acct)
-        except Exception as e:
-            any_error = True
-            print(f"[ERROR][{acct.label}] {e}", file=sys.stderr)
-    if any_error:
-        sys.exit(1)
+# def main():
+#     init_db()  # connect using env; handles TLS flags if set
+#     # Optionally ensure indexes now:
+#     FilteredListingEmail.ensure_indexes()
+#     ParsedListing.ensure_indexes()
+#     any_error = False
+#     for raw in ACCOUNTS:
+#         acct = _ensure_paths(raw)
+#         try:
+#             process_account(acct)
+#         except Exception as e:
+#             any_error = True
+#             print(f"[ERROR][{acct.label}] {e}", file=sys.stderr)
+#     if any_error:
+#         sys.exit(1)
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()

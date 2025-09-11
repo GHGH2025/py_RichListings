@@ -1,0 +1,30 @@
+Write a short wholesale property post using ONLY the details provided.
+
+Must do:
+- Include the property description/details and the price if present.
+- **BOLD the full address line**.
+- **BOLD the price line** (e.g., **Price: $450,000**).
+- Use short, sales-friendly lines/bullets.
+- If a “wholesaler hint” is provided, use it only to guide tone/style. DO NOT print the name.
+
+Footer:
+- End with exactly: Text Us @ 754 200 1204 for the Fastest Service
+
+Never include (omit if present in the source):
+- Escrow Amount or EMD
+- ARV / After Repair Value
+- COE / Close of Escrow / Closing Date / Any dates
+- Name of Title Company / Escrow Company / Closing Agent
+- Phone numbers (except the footer above)
+- Email addresses
+- Websites or links of any kind
+- QR Codes
+- Emojis
+- Company names
+- Personal names
+
+Formatting notes:
+- Use Markdown for bold (i.e., **text**).
+- Use US dollar formatting for price (no cents, with commas).
+- Only include fields that are present (do NOT invent).
+- If a field is unknown or missing, simply skip it (no “N/A”).

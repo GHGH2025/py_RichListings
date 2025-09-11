@@ -23,14 +23,14 @@ def _facts_from_doc(pl: ParsedListing) -> Dict[str, Any]:
     return facts
 
 def apply_ai_english_rules(rules_path: str, limit: int = 100) -> Dict[str, int]:
-    init_db()
+    # init_db()
     with open(rules_path, "r", encoding="utf-8") as f:
         rules_yaml = yaml.safe_load(f)
 
     total = passed = skipped = 0
 
     # Pull a batch ready to screen
-    q = ParsedListing.objects(status="not_processed").limit(limit)
+    q = ParsedListing.objects(status="processed").limit(limit)
 
     for pl in q:
         total += 1
@@ -71,7 +71,7 @@ def apply_ai_english_rules(rules_path: str, limit: int = 100) -> Dict[str, int]:
 
     return {"total": total, "passed": passed, "skipped": skipped}
 
-if __name__ == "__main__":
-    # Example: python ai_nl_rules_runner.py
-    stats = apply_ai_english_rules("ai_listing_rules.yaml", limit=100)
-    print(stats)
+# if __name__ == "__main__":
+#     # Example: python ai_nl_rules_runner.py
+#     stats = apply_ai_english_rules("ai_listing_rules.yaml", limit=100)
+#     print(stats)
