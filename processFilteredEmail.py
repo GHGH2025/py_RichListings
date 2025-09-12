@@ -1,35 +1,25 @@
-from mongo_engine_conn import init_db
+from datetime import datetime
+# from mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing
 from listingDetails import upsert_parsed_listings_from_html
 
 SENDER_LISTING_SLICES = {
     "acct1": [
-        {"pattern": "jc-quickturnproperties.com@shared1.ccsend.com", "range": "1-1"},  # first only
-        # {"pattern": "*.ccsend.com", "range": "1-2"},  # example: take first two items
+        {"pattern": "jc-quickturnproperties.com@shared1.ccsend.com", "range": "1-1"},
     ],
-    "acct2": [
-        # examples per account
-    ],
+    "acct2": [],
 }
 
-
 def _parse_range_spec(spec: str) -> tuple[int, int] | None:
-    if not spec:
-        return None
+    if not spec: return None
     s = spec.strip().replace(" ", "")
-    if "-" in s:
-        a, b = s.split("-", 1)
-    elif "," in s:
-        a, b = s.split(",", 1)
-    else:
-        a, b = s, s
+    if "-" in s: a, b = s.split("-", 1)
+    elif "," in s: a, b = s.split(",", 1)
+    else: a, b = s, s
     try:
-        start = int(a)
-        end = int(b)
-        if start < 1 or end < 1:
-            return None
-        if end < start:
-            start, end = end, start
+        start, end = int(a), int(b)
+        if start < 1 or end < 1: return None
+        if end < start: start, end = end, start
         return (start, end)
     except Exception:
         return None
@@ -45,37 +35,54 @@ def _sender_slice_for(acct_label: str, sender_email: str) -> tuple[int, int] | N
             return rng
     return None
 
-def process_pending(limit=1):
-    init_db()
-    FilteredListingEmail.ensure_indexes()
-    ParsedListing.ensure_indexes()
+def process_pending(limit=2):
+    # init_db()
+    # FilteredListingEmail.ensure_indexes()
+    # ParsedListing.ensure_indexes()
 
-    # fetch a batch of emails to process
     pending = FilteredListingEmail.objects(status="not_processed").limit(limit)
 
-    print("pending",pending)
-
     for fe in pending:
-        print("fe",fe)
-        html = (fe.bodies.html_ai or fe.bodies.html_full or "")
-        if not html.strip():
-            fe.update(set__status="error")
+        print("fe.id",fe.id)
+        # Atomically mark this record as 'processing' only if it’s still 'not_processed'
+        updated = FilteredListingEmail.objects(id=fe.id, status="not_processed").update_one(
+            set__status="processing",
+            set__updated_at=datetime.utcnow(),
+        )
+        if updated == 0:
+            # Someone else took it, skip
             continue
 
-         # resolve slice by sender (1-based inclusive)
-        slice_range = _sender_slice_for(fe.account_label, getattr(fe.from_info, "email", None))
+        try:
+            html = (fe.bodies.html_ai or fe.bodies.html_full or "") if fe.bodies else ""
+            if not html.strip():
+                FilteredListingEmail.objects(id=fe.id).update_one(
+                    set__status="error",
+                    set__updated_at=datetime.utcnow(),
+                )
+                continue
 
-        res = upsert_parsed_listings_from_html(
-            email_html=html,
-            account_label=fe.account_label,
-            gmail_message_id=fe.gmail_message_id,
-            source_email_doc=fe,
-            list_slice=slice_range,
-        )
-        print("saved:", res)
+            slice_range = _sender_slice_for(fe.account_label, getattr(fe.from_info, "email", None))
 
-        # mark the source email as processed (or leave as-is if you want a second pass)
-        fe.update(set__status="processed")
+            res = upsert_parsed_listings_from_html(
+                email_html=html,
+                account_label=fe.account_label,
+                gmail_message_id=fe.gmail_message_id,
+                source_email_doc=fe,
+                list_slice=slice_range,  # make sure your function supports this optional arg
+            )
+            print("saved:", res)
+
+            FilteredListingEmail.objects(id=fe.id).update_one(
+                set__status="processed",
+                set__updated_at=datetime.utcnow(),
+            )
+        except Exception as e:
+            print(f"[filtered_email] error processing {fe.id}: {e}")
+            FilteredListingEmail.objects(id=fe.id).update_one(
+                set__status="error",
+                set__updated_at=datetime.utcnow(),
+            )
 
 
-process_pending()
+# process_pending()

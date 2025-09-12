@@ -97,6 +97,7 @@ class ParsedListing(Document):
 
     images            = ListField(StringField())   # array of URLs
     other_images_source = StringField()            # single URL
+    other_images_dropbox_link  = StringField()
 
     complete_info     = DictField()  # full JSON blob returned for this listing
 

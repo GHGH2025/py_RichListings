@@ -248,7 +248,7 @@ def handle_Link(links, folder = ""):
         #resolve to final link
         response = requests.get(link, allow_redirects=True, timeout=15)
         link = response.url
-        print(f"Resolved link: {link}")
+        # print(f"Resolved link: {link}")
         if "drive.google.com/drive/folders/" in link:
             print(f"Processing Google Drive folder link: {link}")
             try:
@@ -258,7 +258,7 @@ def handle_Link(links, folder = ""):
                 print(f"Error processing Google Drive link {link}: {e}")
 
         elif re.search(r"(?:^https?://)?(?:www\.)?(?:dropbox\.com|dl\.dropboxusercontent\.com)/", link):
-                print(f"Processing Dropbox link: {link}")
+                # print(f"Processing Dropbox link: {link}")
                 try:
                     uploaded = process_dropbox_link(
                         link,
@@ -272,7 +272,7 @@ def handle_Link(links, folder = ""):
         elif link.startswith("http"):
             is_img, ct = is_direct_image_url(link)
             if is_img:
-                print(f"Processing direct image link: {link}")
+                # print(f"Processing direct image link: {link}")
                 try:
                     file_name = safe_filename_from_url(link, ct)
                     local_file = os.path.join("downloads", file_name)
@@ -291,10 +291,10 @@ def handle_Link(links, folder = ""):
                 except Exception as e:
                     print(f"Error processing direct link {link}: {e}")
             else:
-                print("Processing web page for image scraping")
+                # print("Processing web page for image scraping")
                 try:
                     img_links = extract_image_links(link)
-                    print(f"\n\n Extracted {len(img_links)} image links from {link}")
+                    # print(f"\n\n Extracted {len(img_links)} image links from {link}")
                     links.extend(img_links)
                     continue
                 except Exception as e:
@@ -308,13 +308,13 @@ def handle_Link(links, folder = ""):
 
 
 
-links=["https://fcvx-zgpvh.maillist-manage.net/click/19daed7a21ecd4c7/19daed7a21ecabd5"]
+# links=["https://fcvx-zgpvh.maillist-manage.net/click/19daed7a21ecd4c7/19daed7a21ecabd5"]
 
-shared_links = handle_Link(links,folder="PropertyListings/prop123")
+# shared_links = handle_Link(links,folder="PropertyListings/prop123")
 
-print("\nFinal Shared Links:")
-for link in shared_links:
-    print(link,"\n")
+# print("\nFinal Shared Links:")
+# for link in shared_links:
+#     print(link,"\n")
 
 
 

@@ -1,10 +1,13 @@
 # post_selection.py
 import math
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from mongo_engine_conn import init_db
 from models import ParsedListing
+from dropboxImageUpload import handle_Link
+
 
 # Allowed regions we will post from
 ALLOWED_REGIONS = {
@@ -29,6 +32,22 @@ def _get_region(pl: ParsedListing) -> Optional[str]:
 def _now():
     return datetime.utcnow()
 
+def _slugify_for_folder(name: str, fallback: str) -> str:
+    """
+    Create a Dropbox-safe folder slug from an address.
+    - strip weird chars
+    - remove spaces
+    - cap length
+    """
+    s = (name or "").strip()
+    if not s:
+        s = fallback
+    # keep letters, digits, space, dot, dash, underscore; turn the rest into underscore
+    s = re.sub(r"[^A-Za-z0-9 ._-]", "_", s)
+    s = s.replace(" ", "")        # compact spaces so path is tidy
+    s = s.strip("._-") or fallback
+    return s[:80]
+
 def select_passed_listings_for_post(
     limit: Optional[int] = None,
     sort_by: str = "created_at",       # or "price", "updated_at", etc.
@@ -40,7 +59,7 @@ def select_passed_listings_for_post(
 
     Returns summary dict with IDs of kept and skipped.
     """
-    init_db()
+    # init_db()
 
     # Fetch all PASSED that are candidates for posting
     q = ParsedListing.objects(status="passed")
@@ -113,13 +132,43 @@ def select_passed_listings_for_post(
     # 4) kept = all non_rest + up-to-cap rest → set to ready_to_post
     kept = non_rest + rest_keep
     for pl in kept:
-        # If already ready_to_post, this is a no-op update; if 'passed', we promote it.
-        pl.update(
-            set__status="ready_to_post",
-            set__updated_at=now,
-            # We do NOT set skipped_or_posted_at here; set it when actually posted.
-        )
+
+        db_updates = {
+            "set__status": "ready_to_post",
+            "set__updated_at": now,
+        }
+
+        # If we have a source gallery link and we haven't uploaded yet, push to Dropbox
+        try:
+            src = (pl.other_images_source or "").strip()
+            already = (pl.other_images_dropbox_link or "").strip()
+            print("src",src)
+            print("already",already)
+            if src and not already:
+                # pick address from top-level field, or from the complete_info blob, or fallback to id
+                addr = (pl.address or (pl.complete_info or {}).get("address") or str(pl.id)).strip()
+                folder_slug = _slugify_for_folder(addr, fallback=str(pl.id))
+                # IMPORTANT: pass only the slug; handle_Link prepends "/PropertyListings/"
+                print("folder_slug",folder_slug)
+                shared_links = handle_Link([src], folder=folder_slug)  # returns list, usually one folder link
+                if shared_links:
+                    # store the first link; it’s a shared link to the folder
+                    db_updates["set__other_images_dropbox_link"] = shared_links[0]
+        except Exception as e:
+            print(f"dropbox_upload_error: {e}")
+            # Don’t block posting if Dropbox fails; you can optionally log or track this
+            # db_updates["set__rules_ai_reason"] = f"dropbox_upload_error: {e}"
+            pass
+
+        pl.update(**db_updates)
         kept_ids.append(str(pl.id))
+        # # If already ready_to_post, this is a no-op update; if 'passed', we promote it.
+        # pl.update(
+        #     set__status="ready_to_post",
+        #     set__updated_at=now,
+        #     # We do NOT set skipped_or_posted_at here; set it when actually posted.
+        # )
+        # kept_ids.append(str(pl.id))
 
     return {
         "total_candidates": len(candidates),
@@ -133,5 +182,5 @@ def select_passed_listings_for_post(
     }
 
 
-summary = select_passed_listings_for_post(limit=200, sort_by="created_at", mark_ready_status=None)
-print(summary)
+# summary = select_passed_listings_for_post(limit=200, sort_by="created_at", mark_ready_status=None)
+# print(summary)

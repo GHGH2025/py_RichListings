@@ -4,6 +4,7 @@ Must do:
 - Include the property description/details and the price if present.
 - **BOLD the full address line**.
 - **BOLD the price line** (e.g., **Price: $450,000**).
+- Immediately under the price line, if available, print ONLY the `other_images_dropbox_link` on its own line (no label, no formatting).
 - Use short, sales-friendly lines/bullets.
 - If a “wholesaler hint” is provided, use it only to guide tone/style. DO NOT print the name.
 

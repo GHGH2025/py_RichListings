@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple
 from mongoengine.queryset.visitor import Q
 
-from mongo_engine_conn import init_db
+# from mongo_engine_conn import init_db
 from models import ParsedListing
 
 NEXT_STATUS_ON_PASS = "processed"                 # what to set on pass
@@ -87,7 +87,6 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
           * If current price is >= 6% lower than prior => processed
           * Else => skipped with rules_ai_reason explaining why
     """
-    init_db()
 
     since = _now() - timedelta(days=30)
     checked = processed = skipped = missing_addr = 0
@@ -174,6 +173,6 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
     }
 
 
-if __name__ == "__main__":
-    stats = process_not_processed_with_duplicate_rule(limit=500)
-    print(stats)
+# if __name__ == "__main__":
+#     stats = process_not_processed_with_duplicate_rule(limit=500)
+#     print(stats)

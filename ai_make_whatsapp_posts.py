@@ -9,9 +9,83 @@ from openai import OpenAI
 from mongo_engine_conn import init_db
 from models import ParsedListing
 
+import requests 
+
+
 load_dotenv()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 client = OpenAI()
+
+
+POSTED_LISTING_WEBHOOK_URL = os.getenv("POSTED_LISTING_WEBHOOK_URL")
+
+
+def _iso(dt):
+    try:
+        return dt.isoformat()
+    except Exception:
+        return None
+
+
+def _serialize_listing_full(pl) -> dict:
+    """Serialize everything useful currently in DB for the posted listing."""
+    return {
+        "id": str(pl.id),
+        "status": pl.status,
+        "account_label": pl.account_label,
+        "gmail_message_id": pl.gmail_message_id,
+        "list_index": pl.list_index,
+        "address": pl.address,
+        "city": pl.city,
+        "state": pl.state,
+        "zip": pl.zip,
+        "price": pl.price,
+        "images": list(pl.images or []),
+        "other_images_source": pl.other_images_source,
+        "other_images_dropbox_link": getattr(pl, "other_images_dropbox_link", None),
+        "post_content": pl.post_content,
+        "complete_info": pl.complete_info or {},
+        "rules_ai_rule_id": pl.rules_ai_rule_id,
+        "rules_ai_version": pl.rules_ai_version,
+        "rules_ai_reason": pl.rules_ai_reason,
+        "created_at": _iso(getattr(pl, "created_at", None)),
+        "updated_at": _iso(getattr(pl, "updated_at", None)),
+        "skipped_or_posted_at": _iso(getattr(pl, "skipped_or_posted_at", None)),
+    }
+
+
+def _post_listing_to_webhook(pl_id) -> None:
+    """
+    Best-effort webhook post. Never raises; short timeout.
+    Sends the full, current DB view of the listing after it is marked posted.
+    """
+    if not POSTED_LISTING_WEBHOOK_URL:
+        return  # disabled by config
+
+    try:
+        # re-load from DB to ensure we send exactly what's persisted
+        fresh = ParsedListing.objects(id=pl_id).first()
+        if not fresh:
+            return
+
+        payload = {
+            "event": "listing_posted",
+            "listing": _serialize_listing_full(fresh)
+        }
+
+        headers = {"Content-Type": "application/json"}
+
+        r = requests.post(
+            POSTED_LISTING_WEBHOOK_URL,
+            json=payload,
+            headers=headers,
+            timeout=5,
+        )
+        # Don't raise—log-ish only
+        if r.status_code >= 400:
+            print(f"[webhook] non-2xx: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"[webhook] failed: {e}")
 
 # System prompt keeps it dead simple and forces WhatsApp formatting
 SYSTEM_PROMPT = """You create short wholesale property posts for WHATSAPP.
@@ -25,6 +99,7 @@ USER_TMPL = """RULES (verbatim text file):
 {rules_text}
 
 LISTING (full object we saved; use fields from complete_info first, fallback to top-level):
+{listing_json}
 
 TASK:
 - Apply the RULES to this LISTING.
@@ -51,6 +126,7 @@ def _listing_payload(pl: ParsedListing) -> Dict[str, Any]:
         "price": pl.price,
         "images": list(pl.images or []),
         "other_images_source": pl.other_images_source,
+        "other_images_dropbox_link": pl.other_images_dropbox_link,
         "rules_ai_rule_id": pl.rules_ai_rule_id,
         "rules_ai_version": pl.rules_ai_version,
         "rules_ai_reason": pl.rules_ai_reason,
@@ -94,7 +170,7 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
     - For each: create WhatsApp post via AI, save to post_content, mark posted.
     - On error: store reason in rules_ai_reason, leave status unchanged.
     """
-    init_db()
+    # init_db()
 
     with open(rules_path, "r", encoding="utf-8") as f:
         rules_text = f.read().strip()
@@ -113,6 +189,10 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
                 set__updated_at=datetime.utcnow(),
                 set__rules_ai_reason=None,
             )
+
+            # NEW: best-effort webhook (does not affect flow)
+            _post_listing_to_webhook(pl.id)
+
             done += 1
         except Exception as e:
             pl.update(
@@ -124,5 +204,5 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
     return {"total": total, "posted": done, "failed": failed}
 
 
-stats = make_whatsapp_posts_from_ready_to_post("ad_post_rules.txt", limit=2)
-print(stats)
+# stats = make_whatsapp_posts_from_ready_to_post("ad_post_rules.txt", limit=5)
+# print(stats)
