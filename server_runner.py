@@ -33,7 +33,7 @@ def placeholder_other_job():
 
 
 
-schedule every 30 minutes
+# schedule every 30 minutes
 @repeat(every(30).minutes)
 def run_gmail_job():
     gmail_fetch_all()
