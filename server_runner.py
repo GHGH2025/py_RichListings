@@ -34,7 +34,7 @@ def placeholder_other_job():
 
 
 # schedule every 30 minutes
-@repeat(every(30).minutes)
+@repeat(every(5).minutes)
 def run_gmail_job():
     gmail_fetch_all()
 
@@ -57,7 +57,7 @@ def run_ai_nl_rules_runner():
     apply_ai_english_rules("ai_listing_rules.yaml", limit=100)
 
 
-@repeat(every(1).minutes)
+@repeat(every(10).minutes)
 def run_select_passed_listings_for_post():
     logging.info("select_passed_listings_for_post")
     select_passed_listings_for_post(limit=200, sort_by="created_at", mark_ready_status=None)
