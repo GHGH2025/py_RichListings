@@ -13,7 +13,7 @@ def _facts_from_doc(pl: ParsedListing) -> Dict[str, Any]:
         if facts.get(k) is None:
             facts[k] = v
     # Minimal backfills that rules may rely on:
-    ensure("address_line", getattr(pl, "address_line", None))
+    ensure("address", getattr(pl, "address", None))
     ensure("city", getattr(pl, "city", None))
     ensure("state", getattr(pl, "state", None))
     ensure("zip", getattr(pl, "zip", None))

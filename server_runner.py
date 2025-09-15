@@ -11,9 +11,15 @@ from ai_nl_rules_runner import apply_ai_english_rules
 from post_selection import select_passed_listings_for_post
 from ai_make_whatsapp_posts import make_whatsapp_posts_from_ready_to_post
 
+from gmail_hourly_multi import build_service_by_account
+from forward_completed_sources import forward_completed_source_emails
 
 from mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing
+
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -67,6 +73,21 @@ def run_select_passed_listings_for_post():
 def run_make_whatsapp_posts_from_ready_to_post():
     logging.info("make_whatsapp_posts_from_ready_to_post")
     make_whatsapp_posts_from_ready_to_post("ad_post_rules.txt", limit=5)
+
+
+@repeat(every(15).minutes)
+def run_forward_email():
+    logging.info("run_forward_email")
+    service_by_account = build_service_by_account()
+
+    # Where to forward
+    TO = os.getenv("FORWARD_EMAIL")
+
+    stats = forward_completed_source_emails(
+        service_by_account=service_by_account,
+        to_addr=TO,
+        limit=10,
+    )
 
 
 # example: another job every 2 hours

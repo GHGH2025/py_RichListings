@@ -60,6 +60,12 @@ class FilteredListingEmail(Document):
         default="not_processed"
     )
 
+    forward_status       = StringField(choices=["forwarded","skipped"], null=True)  # unset initially
+    forwarded_at         = DateTimeField()
+    forward_to           = StringField()
+    forward_preface_text = StringField()
+    forward_error        = StringField()
+
     # audit
     created_at       = DateTimeField(default=datetime.utcnow)
     updated_at       = DateTimeField(default=datetime.utcnow)

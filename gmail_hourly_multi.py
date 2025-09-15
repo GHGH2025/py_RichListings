@@ -102,8 +102,8 @@ ACCOUNTS = [
 ]
 # Gmail read-only scope
 SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly"
-    # "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 # ---------------------------------------------------------------------
 
@@ -188,6 +188,13 @@ def _build_time_window_query(after_epoch: int, before_epoch: int) -> str:
     # Gmail expects epoch seconds here (not ms)
     return f"after:{after_epoch} before:{before_epoch}"
 
+
+def build_service_by_account() -> Dict[str, any]:
+    services = {}
+    for raw in ACCOUNTS:
+        acct = _ensure_paths(raw)
+        services[acct.label] = _gmail_service(acct.credentials_path, acct.token_path)
+    return services
 
 def _gmail_search(service, query: str, only_inbox: bool) -> List[str]:
     user_id = "me"
