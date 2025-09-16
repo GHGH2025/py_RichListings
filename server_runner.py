@@ -91,7 +91,7 @@ def run_forward_email():
         limit=10,
     )
 
-# @repeat(every(15).minutes)
+# @repeat(every(15).hours)
 # def run_whatsapp_keepalive():
 #     logging.info("run_whatsapp_keepalive")
 #     recipients = parse_recipients_env(os.getenv("TEAM_WHATSAPP_RECIPIENTS", ""))

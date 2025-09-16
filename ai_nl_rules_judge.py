@@ -116,9 +116,22 @@ Respond ONLY with the JSON object matching the schema. Do not include any text, 
 
     # === CALL LLM (model name can come from env; default matches your test) ===
     llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4"), temperature=0)
-    resp = llm([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
+
+    # resp = llm([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
+
+    # result = _extract_json(resp.content)
+
+    # # Return exactly what the model produced (same as your tested flow)
+    # return result
+
+    messages = [SystemMessage(content=system_prompt),HumanMessage(content=human_prompt)]
+
+    # Prefer the new API, fall back if running on an older LangChain
+    invoke = getattr(llm, "invoke", None)
+    if callable(invoke):
+        resp = llm.invoke(messages)   # ✅ no deprecation warning
+    else:
+        resp = llm(messages)          # legacy fallback
 
     result = _extract_json(resp.content)
-
-    # Return exactly what the model produced (same as your tested flow)
     return result
