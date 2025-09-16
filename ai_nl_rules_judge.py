@@ -1,90 +1,124 @@
-# ai_nl_rules_judge.py
+# --- add (or keep) these imports/helpers at top of ai_nl_rules_judge.py ---
 import os, json, yaml, re
 from typing import Dict, Any
 from dotenv import load_dotenv
-from openai import OpenAI
-
 load_dotenv()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
 
-JUDGE_SYSTEM_PROMPT = """\
-You are a strict listing screener.
-
-INPUTS YOU WILL RECEIVE:
-1) A human-written screening policy containing plain-English rules in a specific order.
-2) JSON facts for ONE listing, using keys like: property_type, bedrooms, bathrooms_full, list_price_usd,
-   region_bucket, city, state, is_on_water, water_feature, is_land_only, lot_size_sqft, lot_size_acres,
-   land_under_5000_sqft, under_900_sqft, is_frame_or_wood, is_teardown_or_redevelopment, is_mobile_home,
-   hoa_total_monthly_usd (fee + assessments), etc. Missing fields may be null.
-
-HOW TO DECIDE:
-- Evaluate rules IN THE GIVEN ORDER. Stop at the FIRST rule that applies and is not exempted by its “Unless” clause.
-- If a rule has an exception ("Unless ...") and the exception is satisfied, that rule does NOT cause a skip. Continue to the next rule.
-- If information to evaluate a rule is missing/uncertain, do NOT skip on that rule; continue to the next rule.
-- Use only the listing facts provided. Do not guess or add information.
-- Interpret “on the water” as true if the listing explicitly shows waterfront or these features: oceanfront, ocean access, intracoastal, bayfront, canal, lakefront, riverfront.
-- “South Florida Tri-County” = Miami-Dade, Broward, Palm Beach.
-- “Rest of Florida” = anywhere in Florida outside South Florida Tri-County (includes St. Lucie and Fort Pierce).
-- For condos: if both HOA fee and assessments exist, sum them for “hoa_total_monthly_usd”.
-
-OUTPUT FORMAT (STRICT):
-Return a JSON object with EXACTLY these keys:
-- "listing_status": "Passed" or "Skipped"
-- "skip_reason": string or null
-- "matched_rule_id": string or null
-
-If Skipped, supply a short skip_reason paraphrasing the matching rule. If Passed, both reason and rule id must be null.
-"""
+# LangChain (newer/older compatibility)
+try:
+    from langchain_openai import ChatOpenAI
+except Exception:
+    from langchain.chat_models import ChatOpenAI
+from langchain.schema import SystemMessage, HumanMessage
 
 def _response_format() -> Dict[str, Any]:
     return {
         "type": "json_schema",
         "json_schema": {
-            "name": "listing_rule_decision",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "listing_status": {"type": "string", "enum": ["Passed", "Skipped"]},
-                    "skip_reason": {"type": ["string", "null"]},
-                    "matched_rule_id": {"type": ["string", "null"]}
-                },
-                "required": ["listing_status", "skip_reason", "matched_rule_id"]
-            }
+                "name": "listing_rule_decision",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "listing_status": {"type": "string", "enum": ["Passed", "Skipped"]},
+                        "skip_reason": {"type": ["string", "null"]},
+                        "matched_rule_id": {"type": ["string", "null"]}
+                    },
+                    "required": ["listing_status", "skip_reason", "matched_rule_id"]
+                }
         }
     }
 
+def _extract_json(text: str) -> Dict[str, Any]:
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    try:
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            return json.loads(m.group(0))
+    except Exception:
+        pass
+    # bracket-balance fallback
+    start = text.find("{")
+    if start != -1:
+        depth = 0
+        for i, ch in enumerate(text[start:], start=start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start:i+1]
+                    return json.loads(candidate)
+    raise ValueError("LLM did not return valid JSON")
+
+# --- DROP-IN: same name/signature/output ---
 def judge_listing_with_english_rules(listing_facts: Dict[str, Any], rules_yaml: Dict[str, Any]) -> Dict[str, Any]:
-    # Render policy text
-    policy = rules_yaml.get("policy", "").strip()
-    rules_lines = []
-    for r in rules_yaml.get("rules", []):
-        rid = r.get("id", "")
-        text = (r.get("text") or "").strip()
-        rules_lines.append(f"[{rid}] {text}")
-    rules_text = f"POLICY:\n{policy}\n\nRULES (ordered):\n" + "\n".join(f"- {line}" for line in rules_lines)
+    policy = rules_yaml.get("policy", "")
+    rules  = rules_yaml.get("rules", []) or []
+    rule_text = "\n".join([f"- [{r['id']}] {r['text'].strip()}" for r in rules if r.get("id") and r.get("text")])
 
-    messages = [
-        {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
-        {"role": "user",
-         "content": (
-            f"{rules_text}\n\n"
-            f"LISTING FACTS (strict JSON):\n{json.dumps(listing_facts, ensure_ascii=False)}\n\n"
-            "TASK: Apply rules in order. Stop at the first applicable rule (unless its exception applies). "
-            "If a rule applies and no exception applies, return Skipped with a short reason and the rule id. "
-            "If none apply, return Passed with null reason and null rule id."
-         )
-        }
-    ]
+    # === CONSTRUCT PROMPT (unchanged from your tested code) ===
+    system_prompt = f"""
+You are a real estate compliance assistant. You will receive:
 
-    chat = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=messages,
-        temperature=0.0,
-        response_format=_response_format(),
-        max_tokens=700
-    )
-    return json.loads(chat.choices[0].message.content)
+1. A listing JSON object.
+2. A policy and a set of rules to evaluate in order.
+
+NUMERIC RULES:
+- "Over $X" means strictly greater than X (price > X)
+- "Under $X" means strictly less than X (price < X)
+- "At least X" means price >= X
+- "At most X" means price <= X
+
+Do not confuse "over" with "greater than or equal to".
+
+
+# Evaluate the listing against the rules. Follow these instructions:
+# - Apply rules in order.
+# - Use only information in the listing.
+# - Do not guess missing fields. If a field is missing and required for a rule, skip the rule.
+# - Return only a JSON object matching the schema below.
+
+Evaluation Instructions:
+- Apply rules in order.
+- Stop at the first rule that applies and is not exempted.
+- Use only information in the listing.
+- Do not guess missing fields. If a field is missing and required for a rule, skip that rule.
+- Return a JSON object that matches the schema.
+
+Important:
+- If listing is "Skipped", include a clear, detailed explanation in `skip_reason` showing why it was skipped and how the rule applies.
+- Mention the rule logic (e.g., price threshold, property type, location).
+- If listing is "Passed", set `skip_reason` and `matched_rule_id` to null.
+
+{_response_format()}
+
+Here is the decision policy:
+{policy}
+
+Rules:
+{rule_text}
+""".strip()
+
+    listing_str = json.dumps(listing_facts, indent=2, ensure_ascii=False)
+    human_prompt = f"""
+Evaluate this listing:
+
+{listing_str}
+
+Respond ONLY with the JSON object matching the schema. Do not include any text, explanation, or markdown — just the raw JSON.
+
+""".strip()
+
+    # === CALL LLM (model name can come from env; default matches your test) ===
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4"), temperature=0)
+    resp = llm([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
+
+    result = _extract_json(resp.content)
+
+    # Return exactly what the model produced (same as your tested flow)
+    return result

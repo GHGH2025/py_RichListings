@@ -17,6 +17,8 @@ from forward_completed_sources import forward_completed_source_emails
 from mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing
 
+from whatsapp_keepalive import send_keepalive_template, parse_recipients_env
+
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -60,7 +62,7 @@ def run_process_dup30days():
 @repeat(every(5).minutes)
 def run_ai_nl_rules_runner():
     logging.info("ai_nl_rules_runner")
-    apply_ai_english_rules("ai_listing_rules.yaml", limit=100)
+    apply_ai_english_rules("ai_listing_rules.yaml", limit=50)
 
 
 @repeat(every(10).minutes)
@@ -88,6 +90,18 @@ def run_forward_email():
         to_addr=TO,
         limit=10,
     )
+
+# @repeat(every(15).minutes)
+# def run_whatsapp_keepalive():
+#     logging.info("run_whatsapp_keepalive")
+#     recipients = parse_recipients_env(os.getenv("TEAM_WHATSAPP_RECIPIENTS", ""))
+#     if not recipients:
+#         logging.warning("No TEAM_WHATSAPP_RECIPIENTS configured; skipping keepalive")
+#         return
+#     try:
+#         send_keepalive_template(recipients)
+#     except Exception:
+#         logging.exception("run_whatsapp_keepalive failed")
 
 
 # example: another job every 2 hours

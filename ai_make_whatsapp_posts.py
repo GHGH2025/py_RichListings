@@ -10,7 +10,7 @@ from mongo_engine_conn import init_db
 from models import ParsedListing
 
 import requests 
-
+from whatsapp_sender import send_listing_to_whatsapp
 
 load_dotenv()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -18,6 +18,7 @@ client = OpenAI()
 
 
 POSTED_LISTING_WEBHOOK_URL = os.getenv("POSTED_LISTING_WEBHOOK_URL")
+TEAM_NUMBERS = [n.strip() for n in os.getenv("TEAM_WHATSAPP_NUMBERS","").split(",") if n.strip()]
 
 
 def _iso(dt):
@@ -192,6 +193,12 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
 
             # NEW: best-effort webhook (does not affect flow)
             _post_listing_to_webhook(pl.id)
+
+            try:
+                if TEAM_NUMBERS:
+                    send_listing_to_whatsapp(pl, TEAM_NUMBERS)
+            except Exception as we:
+                print(f"[warn] WhatsApp send failed for {pl.id}: {we}")
 
             done += 1
         except Exception as e:

@@ -8,3 +8,5 @@ PyYAML
 dropbox
 beautifulsoup4
 schedule
+langchain
+langchain-community

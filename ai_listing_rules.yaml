@@ -13,13 +13,11 @@ policy: |
 rules:
   - id: R1
     text: >
-      No 2-bed houses over $250,000 in South Florida Tri-County.
-      Unless they are on the water.
+      No 2-bed houses over $250,000 in South Florida Tri-County unless they are on the water.
 
   - id: R2
     text: >
-      No 2-bed houses over $150,000 in the rest of Florida.
-      Unless they are on the water.
+      No 2-bed houses over $150,000 in the rest of Florida unless they are on the water.
 
   - id: R3
     text: >
@@ -35,13 +33,11 @@ rules:
 
   - id: R6
     text: >
-      South Florida only: No 3-bed / 1-bath houses over $375,000.
-      Unless they are on the water.
+      South Florida only: No 3-bed / 1-bath houses over $375,000 unless they are on the water.
 
   - id: R7
     text: >
-      South Florida only: No 3-bed / 1-bath houses that are under 900 sqft and priced over $325,000.
-      Unless they are on the water.
+      South Florida only: No 3-bed / 1-bath houses that are under 900 sqft and priced over $325,000 unless they are on the water.
 
   - id: R8
     text: >
