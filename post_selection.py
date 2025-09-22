@@ -134,7 +134,7 @@ def select_passed_listings_for_post(
     for pl in kept:
 
         db_updates = {
-            "set__status": "ready_to_post",
+            "set__status": "ready_for_image_processing",
             "set__updated_at": now,
         }
 

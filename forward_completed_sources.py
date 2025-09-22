@@ -40,6 +40,22 @@ def _fmt_addr(pl: ParsedListing) -> str:
             pass
     return out or "(no address)"
 
+def _star_original_message(service, gmail_message_id: str, keep_in_inbox: bool = True) -> None:
+    """
+    Adds STARRED (and optionally INBOX) to the original Gmail message.
+    """
+    if not gmail_message_id:
+        return
+    add_labels = ["STARRED"]
+    if keep_in_inbox:
+        add_labels.append("INBOX")
+    service.users().messages().modify(
+        userId="me",
+        id=gmail_message_id,
+        body={"addLabelIds": add_labels, "removeLabelIds": []},
+    ).execute()
+
+
 def forward_completed_source_emails(
     service_by_account: Dict[str, any],   # {"acct1": gmail_service, ...}
     to_addr: str,
@@ -134,6 +150,14 @@ def forward_completed_source_emails(
                 original_html=html,
                 preface_text=preface_text
             )
+            
+            # ⭐ Star the original message and keep it in Inbox
+            try:
+                _star_original_message(service, getattr(fe, "gmail_message_id", None), keep_in_inbox=True)
+            except Exception as star_err:
+                # Non-fatal: log it but don't fail the forward flow
+                print(f"Warning: could not star original message {getattr(fe, 'gmail_message_id', None)}: {star_err}")
+
             fe.update(
                 set__forward_status="forwarded",
                 set__forwarded_at=datetime.utcnow(),

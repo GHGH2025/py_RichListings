@@ -102,13 +102,14 @@ class ParsedListing(Document):
     price             = FloatField()  # store USD price (list_price_usd)
 
     images            = ListField(StringField())   # array of URLs
+    skipped_images    = DictField() 
     other_images_source = StringField()            # single URL
     other_images_dropbox_link  = StringField()
 
     complete_info     = DictField()  # full JSON blob returned for this listing
 
     status            = StringField(
-        choices=("not_processed","ready_to_post", "processed", "passed", "posted", "skipped"),
+        choices=("not_processed","ready_to_post", "processed", "passed", "posted", "skipped","ready_for_image_processing"),
         default="not_processed"
     )
 

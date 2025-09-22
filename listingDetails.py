@@ -297,6 +297,17 @@ Rules:
   • Do NOT paraphrase or normalize wording; preserve numbers, currency symbols, and units as written.
   • If extremely long, keep the first ~1800–2000 characters and append an ellipsis (…) at the end.
   • Do not mix content from different listings.
+  
+  Property-type classification (very important; use these exact enum values):
+- "multi_family" if the text clearly indicates MULTIPLE UNITS/DOORS: e.g., "multi-family", "multifamily", "duplex", "triplex", "fourplex/quadplex", "multiple units", "2 units", "3 doors", "4plex", or lists several units.
+- "single_family" if it mentions "single family", "SFR", "home", or "house" referring to the subject property.
+- "land" if it says "land", "vacant land/lot", "tear down", "teardown", "knockdown", or "development opportunity". (When property_type="land", also set is_land_only=true if no structure is being sold.)
+- "condo" if it says "condo". (Also set is_condo=true.)
+- "townhouse" if it says "townhouse", "townhome", "TH".
+- "mobile_home" or "manufactured" if it explicitly says "mobile home", "manufactured", "MH". Prefer "mobile_home" if unsure between the two.
+- If none of the above are explicitly indicated, return property_type=null (do NOT guess).
+- These keywords may appear in subject, title blocks, body text, bullets, image captions, or buttons.
+
 - For each listing, populate image fields:
   • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section.
     - Exclude logos, broker badges, agent headshots, social icons, QR codes, and tracking pixels.

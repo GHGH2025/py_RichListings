@@ -19,6 +19,8 @@ from models import FilteredListingEmail, ParsedListing
 
 from whatsapp_keepalive import send_keepalive_template, parse_recipients_env
 
+from image_curation import process_listings_ready_for_image_processing
+
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -69,6 +71,12 @@ def run_ai_nl_rules_runner():
 def run_select_passed_listings_for_post():
     logging.info("select_passed_listings_for_post")
     select_passed_listings_for_post(limit=200, sort_by="created_at", mark_ready_status=None)
+
+
+@repeat(every(2).minutes)
+def run_process_listings_ready_for_image_processing():
+    logging.info("process_listings_ready_for_image_processing")
+    process_listings_ready_for_image_processing(limit=5)
 
 
 @repeat(every(2).minutes)
