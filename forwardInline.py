@@ -37,4 +37,6 @@ def forward_inline_html(service, to_addr: str, original_subject: str, original_h
     </div>"""
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    _send_raw_message(service, msg.as_bytes())
+    resp = _send_raw_message(service, msg.as_bytes())
+    # resp is a Gmail Message resource (usually includes "id")
+    return (resp or {}).get("id", "")

@@ -1,7 +1,51 @@
-from datetime import datetime
+from datetime import datetime, timezone
 # from mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing
 from listingDetails import upsert_parsed_listings_from_html
+
+from email.utils import parsedate_to_datetime
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # if you use backports
+
+TZ_NY = ZoneInfo("America/New_York")
+START_MIN = 7 * 60    # 07:00
+END_MIN   = 21 * 60   # 21:00
+
+def _email_local_dt(fe) -> datetime:
+    """
+    Return the email's datetime in America/New_York.
+    Prefers internal_date.ts_ms; falls back to RFC822 Date header.
+    """
+    # Prefer Gmail internalDate (ms since epoch, UTC)
+    try:
+        ts_ms = int(getattr(fe.internal_date, "ts_ms", 0) or 0)
+        if ts_ms:
+            return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).astimezone(TZ_NY)
+    except Exception as e:
+        pass
+
+    # Fallback: RFC822 Date header
+    try:
+        rfc822 = (fe.rfc822_date or "").strip()
+        if rfc822:
+            dt = parsedate_to_datetime(rfc822)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(TZ_NY)
+    except Exception:
+        pass
+
+    # Last resort: now (ET)
+    return datetime.now(tz=TZ_NY)
+
+def _within_et_window(dt_local: datetime) -> bool:
+    """
+    True if local ET time is between 07:00 and 21:00 inclusive.
+    """
+    mins = dt_local.hour * 60 + dt_local.minute
+    return START_MIN <= mins <= END_MIN
 
 SENDER_LISTING_SLICES = {
     "acct1": [
@@ -44,6 +88,16 @@ def process_pending(limit=2):
 
     for fe in pending:
         print("fe.id",fe.id)
+        # ---- new window check (before taking the lock) ----
+        local_dt = _email_local_dt(fe)
+        if not _within_et_window(local_dt):
+            # mark skipped and continue
+            FilteredListingEmail.objects(id=fe.id, status="not_processed").update_one(
+                set__status="skipped",
+                set__updated_at=datetime.utcnow(),
+            )
+            continue
+        # ---------------------------------------------------
         # Atomically mark this record as 'processing' only if it’s still 'not_processed'
         updated = FilteredListingEmail.objects(id=fe.id, status="not_processed").update_one(
             set__status="processing",

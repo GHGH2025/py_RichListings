@@ -40,6 +40,61 @@ def _fmt_addr(pl: ParsedListing) -> str:
             pass
     return out or "(no address)"
 
+def _get_or_create_label(service, label_name: str) -> Optional[str]:
+    """
+    Return the labelId for `label_name`. Create it if it doesn't exist.
+    """
+    try:
+        resp = service.users().labels().list(userId="me").execute()
+        for lab in resp.get("labels", []):
+            if lab.get("name") == label_name:
+                return lab.get("id")
+
+        # Not found → create it
+        created = service.users().labels().create(
+            userId="me",
+            body={
+                "name": label_name,
+                "labelListVisibility": "labelShow",
+                "messageListVisibility": "show"
+            }
+        ).execute()
+        return created.get("id")
+    except Exception as e:
+        print(f"Warning: could not get/create label '{label_name}': {e}")
+        return None
+
+def _label_message(service, gmail_message_id: str, label_ids: List[str]) -> None:
+    """
+    Add one or more labels to a message.
+    """
+    if not gmail_message_id or not label_ids:
+        return
+    service.users().messages().modify(
+        userId="me",
+        id=gmail_message_id,
+        body={"addLabelIds": label_ids, "removeLabelIds": []},
+    ).execute()
+
+
+def _star_and_label_original(service, gmail_message_id: str, ai_label_id: Optional[str], keep_in_inbox: bool = True) -> None:
+    """
+    Adds STARRED, optional INBOX, and AI_Agent to the original Gmail message.
+    """
+    if not gmail_message_id:
+        return
+    add_labels = ["STARRED"]
+    if keep_in_inbox:
+        add_labels.append("INBOX")
+    if ai_label_id:
+        add_labels.append(ai_label_id)
+    service.users().messages().modify(
+        userId="me",
+        id=gmail_message_id,
+        body={"addLabelIds": add_labels, "removeLabelIds": []},
+    ).execute()
+
+
 def _star_original_message(service, gmail_message_id: str, keep_in_inbox: bool = True) -> None:
     """
     Adds STARRED (and optionally INBOX) to the original Gmail message.
@@ -74,7 +129,11 @@ def forward_completed_source_emails(
 
     # "Not forwarded yet" — either forward_status missing or None/""
     fe_q = FilteredListingEmail.objects(
-        Q(forward_status=None) | Q(forward_status__exists=False) | Q(forward_status="")
+        (
+            Q(forward_status=None) |
+            Q(forward_status__exists=False) |
+            Q(forward_status="")
+        ) & Q(status="processed")
     ).order_by("+created_at").limit(limit)
 
     for fe in fe_q:
@@ -127,6 +186,9 @@ def forward_completed_source_emails(
             skipped += 1
             continue
 
+        # Ensure AI_Agent label exists (or create)
+        ai_label_id = _get_or_create_label(service, "AI_Agent")
+
         # Original subject + HTML body (prefer full HTML)
         subj = getattr(fe, "subject", "") or ""
         html = ""
@@ -143,7 +205,7 @@ def forward_completed_source_emails(
 
         # Try to forward
         try:
-            forward_inline_html(
+            sent_id = forward_inline_html(
                 service=service,
                 to_addr=to_addr,
                 original_subject=subj,
@@ -153,10 +215,23 @@ def forward_completed_source_emails(
             
             # ⭐ Star the original message and keep it in Inbox
             try:
-                _star_original_message(service, getattr(fe, "gmail_message_id", None), keep_in_inbox=True)
+                # _star_original_message(service, getattr(fe, "gmail_message_id", None), keep_in_inbox=True)
+                _star_and_label_original(
+                    service,
+                    getattr(fe, "gmail_message_id", None),
+                    ai_label_id,
+                    keep_in_inbox=True
+                )
             except Exception as star_err:
                 # Non-fatal: log it but don't fail the forward flow
                 print(f"Warning: could not star original message {getattr(fe, 'gmail_message_id', None)}: {star_err}")
+
+            # Label the SENT/forwarded message with AI_Agent (if we got its id)
+            try:
+                if ai_label_id and sent_id:
+                    _label_message(service, sent_id, [ai_label_id])
+            except Exception as lab_err:
+                print(f"Warning: could not label sent message {sent_id}: {lab_err}")
 
             fe.update(
                 set__forward_status="forwarded",

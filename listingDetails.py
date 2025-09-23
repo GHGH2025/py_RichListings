@@ -16,7 +16,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # client = OpenAI(api_key=OPENAI_API_KEY)
 client = OpenAI(
     api_key=OPENAI_API_KEY,
-    timeout=300.0,        # 30s hard timeout for network+read
+    timeout=500.0,        # 30s hard timeout for network+read
     max_retries=0        # keep low; you can set 0 or 1
 )
 
@@ -268,7 +268,7 @@ def _response_format() -> Dict[str, Any]:
 # PROMPT UTILS
 # -------------------------
 _SYSTEM_PROMPT = """\
-You extract structured data from EMAIL HTML containing MULTIPLE property listings. 
+You extract structured data from EMAIL HTML containing MULTIPLE property listings, Process and return ALL listings. 
 VERY IMPORTANT: Use the field names EXACTLY as defined in the JSON schema.
 
 OUTPUT CONTRACT (must follow exactly):

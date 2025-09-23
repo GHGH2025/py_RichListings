@@ -45,7 +45,10 @@ ACCOUNTS = [
             "info-abccapitalgroupusa.com@shared1.ccsend.com",
             "deals@allaboutrealestate.com",
             "@homeventureinvestments.com",
-            "manny@homeventureinvestments.com"
+            "manny@homeventureinvestments.com",
+            "gene@bankonit.com",
+            "oviedomike@oviedomike.robly.com",
+            "dispositionsynergy-gmail.com@shared1.ccsend.com"
 
 
     #         # "agent@broker.com",            # exact email
@@ -87,7 +90,7 @@ ACCOUNTS = [
     #     "allowed_senders": [
     #         # examples:
     #         # "richard@oasispropertyinvestments.ccsend.com",
-    #         "devs@learn.deepgram.com"
+    #         "sparsh@concepttocode.in"
     #         # or: "*@oasispropertyinvestments.ccsend.com",
     #     ],
     #     "skip_senders": [
