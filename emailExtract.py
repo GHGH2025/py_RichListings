@@ -64,91 +64,223 @@ def _choose_largest(parts: List[str]) -> str:
 
 
 
-def _strip_for_ai(html: str, *, keep_gallery_links: bool = True, max_chars: int = 120_000) -> str:
+# def _strip_for_ai(html: str, *, keep_gallery_links: bool = True, max_chars: int = 120_000) -> str:
+#     """
+#     Return a tiny, model-friendly HTML but KEEP links:
+#       - Keep <a href="...">text</a> (href only), unwrap anchors with no href.
+#       - Remove scripts/styles/head/meta/link/svg/iframe/object/embed/noscript and comments
+#       - Flatten tables -> block containers, normalize to minimal tag set
+#       - Drop ALL attributes from all tags except: <img src>, <a href>
+#       - Collapse whitespace and cap total characters
+#     """
+#     if not html:
+#         return ""
+
+#     try:
+#         from bs4 import BeautifulSoup, Comment
+
+#         def _safe_int(x):
+#             try:
+#                 return int(str(x).strip())
+#             except Exception:
+#                 return None
+
+#         soup = BeautifulSoup(html, "lxml")
+
+#         # 1) strip junk blocks
+#         for tag in soup(["script","style","head","meta","link","svg","form","iframe","object","embed","noscript"]):
+#             tag.decompose()
+#         for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
+#             c.extract()
+
+#         # 2) flatten tables to block containers
+#         for t in soup.find_all(["table","thead","tbody","tfoot","tr","th","td"]):
+#             t.name = "div"
+
+#         # 3) drop/normalize images (keep only src; remove tracking/logos/tiny)
+#         def _looks_tracking_or_logo(src: str) -> bool:
+#             s = src.lower()
+#             return any(k in s for k in [
+#                 "pixel","track","trk","open","beacon","utm_", "qr","qrcode","logo","icon",
+#                 "facebook","instagram","twitter","youtube","linkedin","header","footer","banner"
+#             ])
+
+#         for img in soup.find_all("img"):
+#             src = (img.get("src") or "").strip()
+#             w = _safe_int(img.get("width"))
+#             h = _safe_int(img.get("height"))
+#             if (w and w <= 40) or (h and h <= 40) or not src or _looks_tracking_or_logo(src):
+#                 img.decompose()
+#             else:
+#                 img.attrs = {"src": src}
+
+#         # 4) anchors: KEEP them; keep only href; unwrap if no href
+#         for a in soup.find_all("a"):
+#             href = (a.get("href") or "").strip()
+#             if href:
+#                 a.attrs = {"href": href}
+#             else:
+#                 a.unwrap()
+
+#         # 5) normalize tag set
+#         allowed = {"p","br","strong","b","em","i","img","a"}  # <-- include 'a'
+#         for tag in soup.find_all(True):
+#             if tag.name in ("div","span"):
+#                 tag.name = "p"
+#             elif tag.name not in allowed:
+#                 tag.unwrap()
+
+#         # 6) drop attributes from remaining tags EXCEPT <img src> and <a href>
+#         for tag in soup.find_all(True):
+#             if tag.name == "img":
+#                 tag.attrs = {"src": tag.get("src")} if tag.get("src") else {}
+#             elif tag.name == "a":
+#                 tag.attrs = {"href": tag.get("href")} if tag.get("href") else {}
+#                 if not tag.attrs:
+#                     tag.unwrap()
+#             else:
+#                 tag.attrs = {}
+
+#         # 7) remove empty <p>
+#         for p in soup.find_all("p"):
+#             if not (p.get_text(strip=True) or p.find("img") or p.find("a")):
+#                 p.decompose()
+
+#         # 8) compact + cap
+#         body = soup.body or soup
+#         html_min = re.sub(r"^<body[^>]*>|</body>$", "", str(body), flags=re.I)
+#         html_min = re.sub(r"[ \t\f\r\v]+", " ", html_min)
+#         html_min = re.sub(r"\n{2,}", "\n", html_min)
+#         html_min = re.sub(r">\s+<", "><", html_min)
+
+#         if len(html_min) > max_chars:
+#             html_min = html_min[:max_chars] + "\n<!-- TRUNCATED -->"
+
+#         return html_min.strip()
+
+#     except Exception:
+#         # Regex fallback that PRESERVES anchors:
+#         h = html
+#         # remove junk blocks
+#         h = re.sub(r"(?is)<(script|style|head|meta|link|svg|iframe|object|embed|noscript)[^>]*>.*?</\1>", "", h)
+#         h = re.sub(r"(?is)<!--.*?-->", "", h)
+
+#         # Normalize anchors to <a href="...">inner</a>
+#         def _anchor_keep(m):
+#             url = m.group(2)
+#             inner = re.sub(r"<[^>]+>", " ", m.group(3))
+#             inner = re.sub(r"\s+", " ", inner).strip()
+#             return f'<a href="{url}">{inner}</a>'
+
+#         # keep anchors with href
+#         h = re.sub(r'(?is)<a\b[^>]*href=(["\'])(.*?)\1[^>]*>(.*?)</a>', _anchor_keep, h)
+#         # unwrap anchors without href
+#         h = re.sub(r'(?is)<a\b(?![^>]*href=)[^>]*>(.*?)</a>', r'\1', h)
+
+#         # drop noisy attributes but NOT href
+#         h = re.sub(r'\s(?:class|style|id|width|height|onclick|on\w+|data-[\w-]+)="[^"]*"', "", h)
+#         h = re.sub(r"\s(?:class|style|id|width|height|onclick|on\w+|data-[\w-]+)='[^']*'", "", h)
+
+#         # remove obvious tracking/logo images
+#         h = re.sub(r'(?is)<img[^>]*?(pixel|track|qr|logo|icon|facebook|instagram|twitter|youtube|linkedin)[^>]*>', "", h)
+
+#         # flatten tables
+#         h = re.sub(r"(?i)</?(table|thead|tbody|tfoot|tr|th|td)\b[^>]*>", "<div>", h)
+
+#         # compact + cap
+#         h = re.sub(r"[ \t\f\r\v]+", " ", h)
+#         h = re.sub(r"\n{2,}", "\n", h)
+#         h = re.sub(r">\s+<", "><", h)
+#         if len(h) > max_chars:
+#             h = h[:max_chars] + "\n<!-- TRUNCATED -->"
+#         return h.strip()
+
+
+def _strip_for_ai(html: str, *, keep_gallery_links: bool = True, max_chars: int = 160_000) -> str:
     """
-    Return a tiny, model-friendly HTML but KEEP links:
-      - Keep <a href="...">text</a> (href only), unwrap anchors with no href.
-      - Remove scripts/styles/head/meta/link/svg/iframe/object/embed/noscript and comments
-      - Flatten tables -> block containers, normalize to minimal tag set
-      - Drop ALL attributes from all tags except: <img src>, <a href>
-      - Collapse whitespace and cap total characters
+    Use a robust sanitizer (BeautifulSoup) as the main path, preserving DOM structure and links:
+      - Remove script/style/template/noscript + stylesheet <link>
+      - Remove inline style/class and JS event attributes (onclick, onload, etc.)
+      - Optionally drop obvious tracking pixels (1x1/spacers)
+      - Keep <a href> and <img src> as-is (do not unwrap)
+      - Keep tables/divs/sections (do NOT flatten)
+      - Then compact whitespace a bit and cap output length.
+
+    Fallback: regex cleaner that preserves anchors (previous implementation).
     """
     if not html:
         return ""
 
     try:
         from bs4 import BeautifulSoup, Comment
+        import re
 
-        def _safe_int(x):
-            try:
-                return int(str(x).strip())
-            except Exception:
-                return None
+        # ---------- Your working sanitizer logic (as-is) ----------
+        DROP_TAGS = {"script", "style", "template", "noscript"}
+
+        def _is_stylesheet_link(tag) -> bool:
+            return tag.name == "link" and tag.get("rel") and any(r.lower() == "stylesheet" for r in tag["rel"])
+
+        def _is_tracking_pixel(img) -> bool:
+            w = (img.get("width") or "").strip()
+            h = (img.get("height") or "").strip()
+            style = (img.get("style") or "").lower()
+            src = (img.get("src") or "").lower()
+            if w.isdigit() and h.isdigit() and w == "1" and h == "1":
+                return True
+            if re.search(r"(?:^|;)\s*height\s*:\s*1px", style) and re.search(r"(?:^|;)\s*width\s*:\s*1px", style):
+                return True
+            if "spacer.gif" in src or "letters/images/1101116784221/s.gif" in src:
+                return True
+            return False
+
+        def _hidden_inline(el) -> bool:
+            style = (el.get("style") or "").lower()
+            return any(k in style for k in ["display:none", "visibility:hidden", "opacity:0", "max-height:0", "height:0"])
+
+        EVENT_ATTR_RE = re.compile(r"^on[a-z]+$", re.I)
+        DROP_ATTRS = {"style", "class"}  # keep ids by default
 
         soup = BeautifulSoup(html, "lxml")
 
-        # 1) strip junk blocks
-        for tag in soup(["script","style","head","meta","link","svg","form","iframe","object","embed","noscript"]):
-            tag.decompose()
-        for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
+        # 1) Remove comments
+        for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
             c.extract()
 
-        # 2) flatten tables to block containers
-        for t in soup.find_all(["table","thead","tbody","tfoot","tr","th","td"]):
-            t.name = "div"
+        # 2) Drop stylesheet links
+        for link in list(soup.find_all("link")):
+            if _is_stylesheet_link(link):
+                link.decompose()
 
-        # 3) drop/normalize images (keep only src; remove tracking/logos/tiny)
-        def _looks_tracking_or_logo(src: str) -> bool:
-            s = src.lower()
-            return any(k in s for k in [
-                "pixel","track","trk","open","beacon","utm_", "qr","qrcode","logo","icon",
-                "facebook","instagram","twitter","youtube","linkedin","header","footer","banner"
-            ])
+        # 3) Remove script/style/template/noscript tags entirely
+        for t in soup.find_all(DROP_TAGS):
+            t.decompose()
 
-        for img in soup.find_all("img"):
-            src = (img.get("src") or "").strip()
-            w = _safe_int(img.get("width"))
-            h = _safe_int(img.get("height"))
-            if (w and w <= 40) or (h and h <= 40) or not src or _looks_tracking_or_logo(src):
-                img.decompose()
-            else:
-                img.attrs = {"src": src}
+        # 4) Remove nodes hidden purely via inline CSS
+        for el in list(soup.find_all(attrs={"style": True})):
+            if _hidden_inline(el):
+                el.decompose()
 
-        # 4) anchors: KEEP them; keep only href; unwrap if no href
-        for a in soup.find_all("a"):
-            href = (a.get("href") or "").strip()
-            if href:
-                a.attrs = {"href": href}
-            else:
-                a.unwrap()
+        # 5) Optionally remove tracking pixel imgs
+        if True:  # keep default behavior
+            for img in list(soup.find_all("img")):
+                if _is_tracking_pixel(img):
+                    img.decompose()
 
-        # 5) normalize tag set
-        allowed = {"p","br","strong","b","em","i","img","a"}  # <-- include 'a'
+        # 6) Strip styling & risky attrs but keep structure and href/src
+        def clean_attrs(tag):
+            for attr in list(tag.attrs.keys()):
+                if attr in DROP_ATTRS or EVENT_ATTR_RE.match(attr):
+                    del tag.attrs[attr]
+
         for tag in soup.find_all(True):
-            if tag.name in ("div","span"):
-                tag.name = "p"
-            elif tag.name not in allowed:
-                tag.unwrap()
+            clean_attrs(tag)
 
-        # 6) drop attributes from remaining tags EXCEPT <img src> and <a href>
-        for tag in soup.find_all(True):
-            if tag.name == "img":
-                tag.attrs = {"src": tag.get("src")} if tag.get("src") else {}
-            elif tag.name == "a":
-                tag.attrs = {"href": tag.get("href")} if tag.get("href") else {}
-                if not tag.attrs:
-                    tag.unwrap()
-            else:
-                tag.attrs = {}
-
-        # 7) remove empty <p>
-        for p in soup.find_all("p"):
-            if not (p.get_text(strip=True) or p.find("img") or p.find("a")):
-                p.decompose()
-
-        # 8) compact + cap
+        # 7) Serialize body (preserve layout & anchors/images)
         body = soup.body or soup
-        html_min = re.sub(r"^<body[^>]*>|</body>$", "", str(body), flags=re.I)
+        html_min = str(body if soup.body else soup)
+
+        # 8) Light compaction + hard cap
         html_min = re.sub(r"[ \t\f\r\v]+", " ", html_min)
         html_min = re.sub(r"\n{2,}", "\n", html_min)
         html_min = re.sub(r">\s+<", "><", html_min)
@@ -195,7 +327,8 @@ def _strip_for_ai(html: str, *, keep_gallery_links: bool = True, max_chars: int 
             h = h[:max_chars] + "\n<!-- TRUNCATED -->"
         return h.strip()
 
-        
+
+     
 def extract_email_body_simple(msg: dict) -> Dict[str, str]:
     """
     Returns:

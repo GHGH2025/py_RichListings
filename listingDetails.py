@@ -11,12 +11,12 @@ from models import ParsedListing, FilteredListingEmail
 # Load environment variables
 load_dotenv()
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # supports structured outputs
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # supports structured outputs
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # client = OpenAI(api_key=OPENAI_API_KEY)
 client = OpenAI(
     api_key=OPENAI_API_KEY,
-    timeout=500.0,        # 30s hard timeout for network+read
+    timeout=600.0,        # 30s hard timeout for network+read
     max_retries=0        # keep low; you can set 0 or 1
 )
 
@@ -268,7 +268,9 @@ def _response_format() -> Dict[str, Any]:
 # PROMPT UTILS
 # -------------------------
 _SYSTEM_PROMPT = """\
-You extract structured data from EMAIL HTML containing MULTIPLE property listings, Process and return ALL listings. 
+You extract structured data from EMAIL HTML containing MULTIPLE property listings, Process and return ALL listings addresses.
+Don't skip any address to process. 
+Make sure if listing have images include in images.
 VERY IMPORTANT: Use the field names EXACTLY as defined in the JSON schema.
 
 OUTPUT CONTRACT (must follow exactly):
@@ -297,6 +299,17 @@ Rules:
   • Do NOT paraphrase or normalize wording; preserve numbers, currency symbols, and units as written.
   • If extremely long, keep the first ~1800–2000 characters and append an ellipsis (…) at the end.
   • Do not mix content from different listings.
+
+  Agent / Wholesaler contact handling (important):
+- First, scan the email for a single GLOBAL contact block (often in the header or footer) that contains any of: name, phone, email of the sender/agent/wholesaler (look for labels like “Agent”, “Broker”, “Wholesaler”, “Contact”, “Call”, “Phone”, “Email”, or a signature block).
+- Extract at most one global triple: agent_name, agent_phone, agent_email. If multiple candidates exist, pick the one that appears to be the primary sender/contact for the blast (e.g., signature or “Contact us” section).
+- For each listing:
+  • If that listing already has its own agent_name/agent_phone/agent_email, KEEP those (do not overwrite).
+  • If any of those three fields are missing/null for the listing, fill the missing ones from the GLOBAL contact (if available).
+- Formatting:
+  • agent_email: lower-case; must look like a valid email address; otherwise leave null.
+  • agent_phone: keep as a readable string (digits with punctuation ok). If multiple phones exist, prefer the one labeled sales/primary; otherwise the first plausible US phone.
+  • agent_name: keep as written (person or team name).
   
   Property-type classification (very important; use these exact enum values):
 - "multi_family" if the text clearly indicates MULTIPLE UNITS/DOORS: e.g., "multi-family", "multifamily", "duplex", "triplex", "fourplex/quadplex", "multiple units", "2 units", "3 doors", "4plex", or lists several units.
@@ -309,13 +322,10 @@ Rules:
 - These keywords may appear in subject, title blocks, body text, bullets, image captions, or buttons.
 
 - For each listing, populate image fields:
-  • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section.
-    - Exclude logos, broker badges, agent headshots, social icons, QR codes, and tracking pixels.
-    - Prefer images larger than 40x40 or clearly property photos.
+  • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
     - If URLs are relative, include them as-is.
-    - Do NOT include data: URIs.
     - Cap to the first 12 unique URLs per listing.
-  • "other_images_source": if the listing includes a link to more photos (e.g., “View more photos”, “Gallery”, Google Drive, Dropbox, MLS), return that single URL; otherwise null.
+  • "other_images_source": if the listing includes a link to more photos (e.g., “View more photos”, "Click Here For Pictures", “Gallery”, Google Drive, Dropbox, MLS), return that single URL; otherwise null.
 Output MUST strictly match the provided JSON schema.
 """
 
@@ -361,7 +371,7 @@ def extract_listings_from_email_html(email_html: str,
         chat = client.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=temperature,
+            temperature=0.1,
             response_format=_response_format()
         )
         content = chat.choices[0].message.content
