@@ -214,6 +214,7 @@ def _strip_for_ai(html: str, *, keep_gallery_links: bool = True, max_chars: int 
     try:
         from bs4 import BeautifulSoup, Comment
         import re
+        from bs4.element import Tag
 
         # ---------- Your working sanitizer logic (as-is) ----------
         DROP_TAGS = {"script", "style", "template", "noscript"}
@@ -234,9 +235,25 @@ def _strip_for_ai(html: str, *, keep_gallery_links: bool = True, max_chars: int 
                 return True
             return False
 
+        # def _hidden_inline(el) -> bool:
+        #     style = (el.get("style") or "").lower()
+        #     return any(k in style for k in ["display:none", "visibility:hidden", "opacity:0", "max-height:0", "height:0"])
+
         def _hidden_inline(el) -> bool:
-            style = (el.get("style") or "").lower()
-            return any(k in style for k in ["display:none", "visibility:hidden", "opacity:0", "max-height:0", "height:0"])
+            # Only process if it's a Tag with attributes
+            if not isinstance(el, Tag):
+                return False
+            if not hasattr(el, "attrs") or not isinstance(el.attrs, dict):
+                return False
+
+            style = (el.attrs.get("style") or "").lower()
+            return any(k in style for k in [
+                "display:none",
+                "visibility:hidden",
+                "opacity:0",
+                "max-height:0",
+                "height:0"
+            ])
 
         EVENT_ATTR_RE = re.compile(r"^on[a-z]+$", re.I)
         DROP_ATTRS = {"style", "class"}  # keep ids by default

@@ -300,8 +300,8 @@ Rules:
   • If extremely long, keep the first ~1800–2000 characters and append an ellipsis (…) at the end.
   • Do not mix content from different listings.
 
-  Agent / Wholesaler contact handling (important):
-- First, scan the email for a single GLOBAL contact block (often in the header or footer) that contains any of: name, phone, email of the sender/agent/wholesaler (look for labels like “Agent”, “Broker”, “Wholesaler”, “Contact”, “Call”, “Phone”, “Email”, or a signature block).
+  Agent / Wholesaler/ Sender Contact Details handling (important), Make sure to include:
+- First, scan the email for a single GLOBAL contact block (often in the header or footer) that contains any of: name, phone, email of the sender/agent/wholesaler.
 - Extract at most one global triple: agent_name, agent_phone, agent_email. If multiple candidates exist, pick the one that appears to be the primary sender/contact for the blast (e.g., signature or “Contact us” section).
 - For each listing:
   • If that listing already has its own agent_name/agent_phone/agent_email, KEEP those (do not overwrite).
@@ -371,7 +371,7 @@ def extract_listings_from_email_html(email_html: str,
         chat = client.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=0.1,
+            temperature=0.3,
             response_format=_response_format()
         )
         content = chat.choices[0].message.content
