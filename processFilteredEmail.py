@@ -89,14 +89,14 @@ def process_pending(limit=2):
     for fe in pending:
         print("fe.id",fe.id)
         # ---- new window check (before taking the lock) ----
-        local_dt = _email_local_dt(fe)
-        if not _within_et_window(local_dt):
-            # mark skipped and continue
-            FilteredListingEmail.objects(id=fe.id, status="not_processed").update_one(
-                set__status="skipped",
-                set__updated_at=datetime.utcnow(),
-            )
-            continue
+        # local_dt = _email_local_dt(fe)
+        # if not _within_et_window(local_dt):
+        #     # mark skipped and continue
+        #     FilteredListingEmail.objects(id=fe.id, status="not_processed").update_one(
+        #         set__status="skipped",
+        #         set__updated_at=datetime.utcnow(),
+        #     )
+        #     continue
         # ---------------------------------------------------
         # Atomically mark this record as 'processing' only if it’s still 'not_processed'
         updated = FilteredListingEmail.objects(id=fe.id, status="not_processed").update_one(
