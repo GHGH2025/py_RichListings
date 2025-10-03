@@ -167,6 +167,16 @@ def forward_completed_source_emails(
                 set__forward_error="no_posted_listings",
                 set__updated_at=datetime.utcnow(),
             )
+            try:
+                no_deals_label_id = _get_or_create_label(service, "Ai No Deals Found")
+                _star_and_label_original(
+                    service,
+                    getattr(fe, "gmail_message_id", None),
+                    no_deals_label_id,
+                    keep_in_inbox=True  # keeps existing INBOX label; just appends the new one
+                )
+            except Exception as lab_err:
+                print(f"Warning: could not label original {getattr(fe, 'gmail_message_id', None)}: {lab_err}")
             skipped += 1
             continue
 
@@ -184,17 +194,7 @@ def forward_completed_source_emails(
                 set__updated_at=datetime.utcnow(),
             )
 
-            try:
-                no_deals_label_id = _get_or_create_label(service, "Ai No Deals Found")
-                _star_and_label_original(
-                    service,
-                    getattr(fe, "gmail_message_id", None),
-                    no_deals_label_id,
-                    keep_in_inbox=True  # keeps existing INBOX label; just appends the new one
-                )
-            except Exception as lab_err:
-                print(f"Warning: could not label original {getattr(fe, 'gmail_message_id', None)}: {lab_err}")
-                
+
             skipped += 1
             continue
 
