@@ -292,6 +292,12 @@ Rules:
   • rest_of_florida if state=FL but not any above
   • outside_florida if state != FL
   • unknown if cannot determine
+- County inference policy (Florida only):
+  • If county is missing but state="FL" and either ZIP or city is present, infer the county using general US geographic knowledge (no external lookups).
+  • Prefer ZIP→county; if ZIP is absent, use city→county.
+  • If the city spans multiple counties, pick the most common/central county for that city (e.g., Miami→Miami-Dade; Fort Lauderdale→Broward; West Palm Beach→Palm Beach; Fort Pierce→St. Lucie).
+  • If you cannot infer with high confidence, leave county=null.
+  • After inferring county, update region_bucket/tri_county_name accordingly using the rules above.
 - Map "CBS" or "concrete block structure" → build_material = concrete_block.
 - Accept listings anywhere in the HTML; there may be separators or repeated blocks.
 - For each listing, also include "complete_info":

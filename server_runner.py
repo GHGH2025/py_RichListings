@@ -44,60 +44,60 @@ def placeholder_other_job():
 
 
 # schedule every 30 minutes
-@repeat(every(5).minutes)
-def run_gmail_job():
-    gmail_fetch_all()
+# @repeat(every(5).minutes)
+# def run_gmail_job():
+#     gmail_fetch_all()
 
-# schedule parse email to create listing every minute
-@repeat(every(1).minutes)
-def run_process_email():
-    logging.info("run_process_email")
-    process_pending()
+# # schedule parse email to create listing every minute
+# @repeat(every(1).minutes)
+# def run_process_email():
+#     logging.info("run_process_email")
+#     process_pending()
 
-# schedule parse email to create listing every 5 minute
-@repeat(every(1).minutes)
-def run_process_dup30days():
-    logging.info("process_dup30days")
-    process_not_processed_with_duplicate_rule()
-
-
-@repeat(every(5).minutes)
-def run_ai_nl_rules_runner():
-    logging.info("ai_nl_rules_runner")
-    apply_ai_english_rules("ai_listing_rules.yaml", limit=50)
+# # schedule parse email to create listing every 5 minute
+# @repeat(every(1).minutes)
+# def run_process_dup30days():
+#     logging.info("process_dup30days")
+#     process_not_processed_with_duplicate_rule()
 
 
-@repeat(every(10).minutes)
-def run_select_passed_listings_for_post():
-    logging.info("select_passed_listings_for_post")
-    select_passed_listings_for_post(limit=200, sort_by="created_at", mark_ready_status=None)
+# @repeat(every(5).minutes)
+# def run_ai_nl_rules_runner():
+#     logging.info("ai_nl_rules_runner")
+#     apply_ai_english_rules("ai_listing_rules.yaml", limit=50)
 
 
-@repeat(every(2).minutes)
-def run_process_listings_ready_for_image_processing():
-    logging.info("process_listings_ready_for_image_processing")
-    process_listings_ready_for_image_processing(limit=5)
+# @repeat(every(10).minutes)
+# def run_select_passed_listings_for_post():
+#     logging.info("select_passed_listings_for_post")
+#     select_passed_listings_for_post(limit=200, sort_by="created_at", mark_ready_status=None)
 
 
-@repeat(every(2).minutes)
-def run_make_whatsapp_posts_from_ready_to_post():
-    logging.info("make_whatsapp_posts_from_ready_to_post")
-    make_whatsapp_posts_from_ready_to_post("ad_post_rules.txt", limit=5)
+# @repeat(every(2).minutes)
+# def run_process_listings_ready_for_image_processing():
+#     logging.info("process_listings_ready_for_image_processing")
+#     process_listings_ready_for_image_processing(limit=5)
 
 
-@repeat(every(15).minutes)
-def run_forward_email():
-    logging.info("run_forward_email")
-    service_by_account = build_service_by_account()
+# @repeat(every(2).minutes)
+# def run_make_whatsapp_posts_from_ready_to_post():
+#     logging.info("make_whatsapp_posts_from_ready_to_post")
+#     make_whatsapp_posts_from_ready_to_post("ad_post_rules.txt", limit=5)
 
-    # Where to forward
-    TO = os.getenv("FORWARD_EMAIL")
 
-    stats = forward_completed_source_emails(
-        service_by_account=service_by_account,
-        to_addr=TO,
-        limit=10,
-    )
+# @repeat(every(15).minutes)
+# def run_forward_email():
+#     logging.info("run_forward_email")
+#     service_by_account = build_service_by_account()
+
+#     # Where to forward
+#     TO = os.getenv("FORWARD_EMAIL")
+
+#     stats = forward_completed_source_emails(
+#         service_by_account=service_by_account,
+#         to_addr=TO,
+#         limit=10,
+#     )
 
 # @repeat(every(15).hours)
 # def run_whatsapp_keepalive():
@@ -126,6 +126,9 @@ if __name__ == "__main__":
         FilteredListingEmail.ensure_indexes()
         ParsedListing.ensure_indexes()
         # gmail_fetch_all()
+        # process_pending()
+        apply_ai_english_rules("ai_listing_rules.yaml", limit=50)
+
     except Exception:
         logging.exception("ensure_indexes failed")
 
