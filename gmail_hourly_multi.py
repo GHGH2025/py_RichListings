@@ -49,7 +49,8 @@ ACCOUNTS = [
             "gene@bankonit.com",
             "oviedomike@oviedomike.robly.com",
             "dispositionsynergy-gmail.com@shared1.ccsend.com",
-            "dispositions@maxofferproperties.com"
+            "dispositions@maxofferproperties.com",
+            "ryan@floridahomeownersolutions.com"
 
 
     #         # "agent@broker.com",            # exact email
@@ -73,7 +74,8 @@ ACCOUNTS = [
             "alex@lexicorealty.ccsend.com",
             "iwantacheaphousenow-gmail.com@shared1.ccsend.com",
             "craig@nowhomebuyers.com",
-            "ctorres@spectrumpropertygroup.com"
+            "ctorres@spectrumpropertygroup.com",
+            "ryan@floridahomeownersolutions.com"
             # or: "*@oasispropertyinvestments.ccsend.com",
         ],
         "skip_senders": [
