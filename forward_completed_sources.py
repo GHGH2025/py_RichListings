@@ -138,6 +138,8 @@ def forward_completed_source_emails(
 
     for fe in fe_q:
         scanned += 1
+        # Choose the account's Gmail service
+        service = service_by_account.get(fe.account_label)
 
         # Gather all parsed listings for this email
         listings: List[ParsedListing] = list(ParsedListing.objects(source_email=fe))
@@ -175,14 +177,24 @@ def forward_completed_source_emails(
             lines.append(f"- {addr_line}")
         preface_text = "\n".join(lines)
 
-        # Choose the account's Gmail service
-        service = service_by_account.get(fe.account_label)
         if not service:
             fe.update(
                 set__forward_status="skipped",
                 set__forward_error=f"no_gmail_service_for_account:{fe.account_label}",
                 set__updated_at=datetime.utcnow(),
             )
+
+            try:
+                no_deals_label_id = _get_or_create_label(service, "Ai No Deals Found")
+                _star_and_label_original(
+                    service,
+                    getattr(fe, "gmail_message_id", None),
+                    no_deals_label_id,
+                    keep_in_inbox=True  # keeps existing INBOX label; just appends the new one
+                )
+            except Exception as lab_err:
+                print(f"Warning: could not label original {getattr(fe, 'gmail_message_id', None)}: {lab_err}")
+                
             skipped += 1
             continue
 
