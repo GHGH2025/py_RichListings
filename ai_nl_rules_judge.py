@@ -115,7 +115,7 @@ Respond ONLY with the JSON object matching the schema. Do not include any text, 
 """.strip()
 
     # === CALL LLM (model name can come from env; default matches your test) ===
-    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4"), temperature=0)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4.1"), temperature=0.3)
 
     # resp = llm([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
 
