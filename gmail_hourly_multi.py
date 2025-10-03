@@ -50,7 +50,8 @@ ACCOUNTS = [
             "oviedomike@oviedomike.robly.com",
             "dispositionsynergy-gmail.com@shared1.ccsend.com",
             "dispositions@maxofferproperties.com",
-            "ryan@floridahomeownersolutions.com"
+            "ryan@floridahomeownersolutions.com",
+            "sharonr-32westrealty.com@shared1.ccsend.com"
 
 
     #         # "agent@broker.com",            # exact email
