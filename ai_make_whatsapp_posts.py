@@ -194,11 +194,11 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
             # NEW: best-effort webhook (does not affect flow)
             _post_listing_to_webhook(pl.id)
 
-            # try:
-            #     if TEAM_NUMBERS:
-            #         send_listing_to_whatsapp(pl.id, TEAM_NUMBERS)
-            # except Exception as we:
-            #     print(f"[warn] WhatsApp send failed for {pl.id}: {we}")
+            try:
+                if TEAM_NUMBERS:
+                    send_listing_to_whatsapp(pl.id, TEAM_NUMBERS)
+            except Exception as we:
+                print(f"[warn] WhatsApp send failed for {pl.id}: {we}")
 
             done += 1
         except Exception as e:
