@@ -51,7 +51,9 @@ ACCOUNTS = [
             "dispositionsynergy-gmail.com@shared1.ccsend.com",
             "dispositions@maxofferproperties.com",
             "ryan@floridahomeownersolutions.com",
-            "sharonr-32westrealty.com@shared1.ccsend.com"
+            "sharonr-32westrealty.com@shared1.ccsend.com",
+            "sunny9444-hotmail.com@shared1.ccsend.com",
+            "sunny9444@hotmail.com"
 
 
     #         # "agent@broker.com",            # exact email
