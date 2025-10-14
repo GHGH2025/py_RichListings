@@ -148,6 +148,7 @@ def process_listings_ready_for_image_processing(limit: int = 100) -> Dict[str, i
             print("Exception",e)
             pl.update(
                 set__rules_ai_reason=f"image_curation_failed: {e}",
+                set__status="ready_to_post",
                 set__updated_at=now,
             )
             failed += 1
