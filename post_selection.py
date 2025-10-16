@@ -19,7 +19,7 @@ ALLOWED_REGIONS = {
 
 # Reason strings
 REASON_BAD_REGION = "unsupported_region_for_posting"
-REASON_OVER_CAP   = "rest_of_florida_cap_exceeded_20_percent_policy"
+REASON_OVER_CAP   = "rest_of_florida_cap_exceeded_35_percent_policy"
 
 def _get_region(pl: ParsedListing) -> Optional[str]:
     # Prefer extracted blob, fallback to any top-level field if you later add one
@@ -54,7 +54,7 @@ def select_passed_listings_for_post(
     mark_ready_status: Optional[str] = None,  # e.g., "image_processed" or None to leave "passed"
 ) -> Dict[str, any]:
     """
-    Pull 'passed' listings, filter to allowed regions, enforce 20% cap for rest_of_florida,
+    Pull 'passed' listings, filter to allowed regions, enforce 35% cap for rest_of_florida,
     skip overflow with reason, and (optionally) advance the kept ones to next status.
 
     Returns summary dict with IDs of kept and skipped.
@@ -109,9 +109,9 @@ def select_passed_listings_for_post(
         pl.update(**updates)
         skipped_ids.append(str(pl.id))
 
-    # 3) enforce 20% cap for rest_of_florida relative to NON-REST
+    # 3) enforce 35% cap for rest_of_florida relative to NON-REST
     base_count = len(non_rest)
-    rest_cap = math.floor(0.20 * base_count)  # allowed count from rest_of_florida
+    rest_cap = math.floor(0.35 * base_count)  # allowed count from rest_of_florida
     rest_keep = rest[:rest_cap]
     rest_overflow = rest[rest_cap:]
 
@@ -119,7 +119,7 @@ def select_passed_listings_for_post(
     for pl in rest_overflow:
         updates = {
             "set__status": "skipped",
-            "set__rules_ai_rule_id": "POST_POLICY_20PC",
+            "set__rules_ai_rule_id": "POST_POLICY_35PC",
             "set__rules_ai_version": "v1",
             "set__rules_ai_reason": f"{REASON_OVER_CAP}: allowed={rest_cap}, base_non_rest={base_count}",
             "set__updated_at": now,
