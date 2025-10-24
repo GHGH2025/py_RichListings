@@ -55,7 +55,9 @@ ACCOUNTS = [
             "sunny9444-hotmail.com@shared1.ccsend.com",
             "sunny9444@hotmail.com",
             "southfloridadispo@joehomebuyer.com",
-            "branden@prop-hunters.com"
+            "branden@prop-hunters.com",
+            "erniethetitleguy-gmail.com@shared1.ccsend.com",
+            "deals@aoinvestments.ccsend.com"
 
 
     #         # "agent@broker.com",            # exact email
