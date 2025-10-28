@@ -57,7 +57,9 @@ ACCOUNTS = [
             "southfloridadispo@joehomebuyer.com",
             "branden@prop-hunters.com",
             "erniethetitleguy-gmail.com@shared1.ccsend.com",
-            "deals@aoinvestments.ccsend.com"
+            "deals@aoinvestments.ccsend.com",
+            "ffassioli@peakregroup.ccsend.com",
+            "jc@stellarholdingsllc.ccsend.com"
 
 
     #         # "agent@broker.com",            # exact email

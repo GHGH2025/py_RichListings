@@ -50,6 +50,7 @@ def _within_et_window(dt_local: datetime) -> bool:
 SENDER_LISTING_SLICES = {
     "acct1": [
         {"pattern": "jc-quickturnproperties.com@shared1.ccsend.com", "range": "1-1"},
+        {"pattern": "jc@stellarholdingsllc.ccsend.com", "range": "1-1"},
     ],
     "acct2": [],
 }
