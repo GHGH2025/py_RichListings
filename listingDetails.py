@@ -268,7 +268,7 @@ def _response_format() -> Dict[str, Any]:
 # PROMPT UTILS
 # -------------------------
 _SYSTEM_PROMPT = """\
-You extract structured data from EMAIL HTML containing MULTIPLE property listings, Process and return ALL listings addresses.
+You extract structured data from EMAIL Markdown Content containing MULTIPLE property listings, Process and return ALL listings addresses.
 Don't skip any address to process. 
 Make sure if listing have images include in images.
 VERY IMPORTANT: Use the field names EXACTLY as defined in the JSON schema.

@@ -1,5 +1,6 @@
 import base64, re
 from typing import Dict, List, Tuple
+import html2text
 
 def _decode_part_data(data: str) -> str:
     try:
@@ -196,154 +197,157 @@ def _choose_largest(parts: List[str]) -> str:
 #         return h.strip()
 
 
-def _strip_for_ai(html: str, *, keep_gallery_links: bool = True, max_chars: int = 160_000) -> str:
-    """
-    Use a robust sanitizer (BeautifulSoup) as the main path, preserving DOM structure and links:
-      - Remove script/style/template/noscript + stylesheet <link>
-      - Remove inline style/class and JS event attributes (onclick, onload, etc.)
-      - Optionally drop obvious tracking pixels (1x1/spacers)
-      - Keep <a href> and <img src> as-is (do not unwrap)
-      - Keep tables/divs/sections (do NOT flatten)
-      - Then compact whitespace a bit and cap output length.
+# def _strip_for_ai(html: str, *, keep_gallery_links: bool = True, max_chars: int = 160_000) -> str:
+#     """
+#     Use a robust sanitizer (BeautifulSoup) as the main path, preserving DOM structure and links:
+#       - Remove script/style/template/noscript + stylesheet <link>
+#       - Remove inline style/class and JS event attributes (onclick, onload, etc.)
+#       - Optionally drop obvious tracking pixels (1x1/spacers)
+#       - Keep <a href> and <img src> as-is (do not unwrap)
+#       - Keep tables/divs/sections (do NOT flatten)
+#       - Then compact whitespace a bit and cap output length.
 
-    Fallback: regex cleaner that preserves anchors (previous implementation).
-    """
-    if not html:
-        return ""
+#     Fallback: regex cleaner that preserves anchors (previous implementation).
+#     """
+#     if not html:
+#         return ""
 
-    try:
-        from bs4 import BeautifulSoup, Comment
-        import re
-        from bs4.element import Tag
+#     try:
+#         from bs4 import BeautifulSoup, Comment
+#         import re
+#         from bs4.element import Tag
 
-        # ---------- Your working sanitizer logic (as-is) ----------
-        DROP_TAGS = {"script", "style", "template", "noscript"}
+#         # ---------- Your working sanitizer logic (as-is) ----------
+#         DROP_TAGS = {"script", "style", "template", "noscript"}
 
-        def _is_stylesheet_link(tag) -> bool:
-            return tag.name == "link" and tag.get("rel") and any(r.lower() == "stylesheet" for r in tag["rel"])
+#         def _is_stylesheet_link(tag) -> bool:
+#             return tag.name == "link" and tag.get("rel") and any(r.lower() == "stylesheet" for r in tag["rel"])
 
-        def _is_tracking_pixel(img) -> bool:
-            w = (img.get("width") or "").strip()
-            h = (img.get("height") or "").strip()
-            style = (img.get("style") or "").lower()
-            src = (img.get("src") or "").lower()
-            if w.isdigit() and h.isdigit() and w == "1" and h == "1":
-                return True
-            if re.search(r"(?:^|;)\s*height\s*:\s*1px", style) and re.search(r"(?:^|;)\s*width\s*:\s*1px", style):
-                return True
-            if "spacer.gif" in src or "letters/images/1101116784221/s.gif" in src:
-                return True
-            return False
+#         def _is_tracking_pixel(img) -> bool:
+#             w = (img.get("width") or "").strip()
+#             h = (img.get("height") or "").strip()
+#             style = (img.get("style") or "").lower()
+#             src = (img.get("src") or "").lower()
+#             if w.isdigit() and h.isdigit() and w == "1" and h == "1":
+#                 return True
+#             if re.search(r"(?:^|;)\s*height\s*:\s*1px", style) and re.search(r"(?:^|;)\s*width\s*:\s*1px", style):
+#                 return True
+#             if "spacer.gif" in src or "letters/images/1101116784221/s.gif" in src:
+#                 return True
+#             return False
 
-        # def _hidden_inline(el) -> bool:
-        #     style = (el.get("style") or "").lower()
-        #     return any(k in style for k in ["display:none", "visibility:hidden", "opacity:0", "max-height:0", "height:0"])
+#         # def _hidden_inline(el) -> bool:
+#         #     style = (el.get("style") or "").lower()
+#         #     return any(k in style for k in ["display:none", "visibility:hidden", "opacity:0", "max-height:0", "height:0"])
 
-        def _hidden_inline(el) -> bool:
-            # Only process if it's a Tag with attributes
-            if not isinstance(el, Tag):
-                return False
-            if not hasattr(el, "attrs") or not isinstance(el.attrs, dict):
-                return False
+#         def _hidden_inline(el) -> bool:
+#             # Only process if it's a Tag with attributes
+#             if not isinstance(el, Tag):
+#                 return False
+#             if not hasattr(el, "attrs") or not isinstance(el.attrs, dict):
+#                 return False
 
-            style = (el.attrs.get("style") or "").lower()
-            return any(k in style for k in [
-                "display:none",
-                "visibility:hidden",
-                "opacity:0",
-                "max-height:0",
-                "height:0"
-            ])
+#             style = (el.attrs.get("style") or "").lower()
+#             return any(k in style for k in [
+#                 "display:none",
+#                 "visibility:hidden",
+#                 "opacity:0",
+#                 "max-height:0",
+#                 "height:0"
+#             ])
 
-        EVENT_ATTR_RE = re.compile(r"^on[a-z]+$", re.I)
-        DROP_ATTRS = {"style", "class"}  # keep ids by default
+#         EVENT_ATTR_RE = re.compile(r"^on[a-z]+$", re.I)
+#         DROP_ATTRS = {"style", "class"}  # keep ids by default
 
-        soup = BeautifulSoup(html, "lxml")
+#         soup = BeautifulSoup(html, "lxml")
 
-        # 1) Remove comments
-        for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
-            c.extract()
+#         # 1) Remove comments
+#         for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
+#             c.extract()
 
-        # 2) Drop stylesheet links
-        for link in list(soup.find_all("link")):
-            if _is_stylesheet_link(link):
-                link.decompose()
+#         # 2) Drop stylesheet links
+#         for link in list(soup.find_all("link")):
+#             if _is_stylesheet_link(link):
+#                 link.decompose()
 
-        # 3) Remove script/style/template/noscript tags entirely
-        for t in soup.find_all(DROP_TAGS):
-            t.decompose()
+#         # 3) Remove script/style/template/noscript tags entirely
+#         for t in soup.find_all(DROP_TAGS):
+#             t.decompose()
 
-        # 4) Remove nodes hidden purely via inline CSS
-        for el in list(soup.find_all(attrs={"style": True})):
-            if _hidden_inline(el):
-                el.decompose()
+#         # 4) Remove nodes hidden purely via inline CSS
+#         for el in list(soup.find_all(attrs={"style": True})):
+#             if _hidden_inline(el):
+#                 el.decompose()
 
-        # 5) Optionally remove tracking pixel imgs
-        if True:  # keep default behavior
-            for img in list(soup.find_all("img")):
-                if _is_tracking_pixel(img):
-                    img.decompose()
+#         # 5) Optionally remove tracking pixel imgs
+#         if True:  # keep default behavior
+#             for img in list(soup.find_all("img")):
+#                 if _is_tracking_pixel(img):
+#                     img.decompose()
 
-        # 6) Strip styling & risky attrs but keep structure and href/src
-        def clean_attrs(tag):
-            for attr in list(tag.attrs.keys()):
-                if attr in DROP_ATTRS or EVENT_ATTR_RE.match(attr):
-                    del tag.attrs[attr]
+#         # 6) Strip styling & risky attrs but keep structure and href/src
+#         def clean_attrs(tag):
+#             for attr in list(tag.attrs.keys()):
+#                 if attr in DROP_ATTRS or EVENT_ATTR_RE.match(attr):
+#                     del tag.attrs[attr]
 
-        for tag in soup.find_all(True):
-            clean_attrs(tag)
+#         for tag in soup.find_all(True):
+#             clean_attrs(tag)
 
-        # 7) Serialize body (preserve layout & anchors/images)
-        body = soup.body or soup
-        html_min = str(body if soup.body else soup)
+#         # 7) Serialize body (preserve layout & anchors/images)
+#         body = soup.body or soup
+#         html_min = str(body if soup.body else soup)
 
-        # 8) Light compaction + hard cap
-        html_min = re.sub(r"[ \t\f\r\v]+", " ", html_min)
-        html_min = re.sub(r"\n{2,}", "\n", html_min)
-        html_min = re.sub(r">\s+<", "><", html_min)
+#         # 8) Light compaction + hard cap
+#         html_min = re.sub(r"[ \t\f\r\v]+", " ", html_min)
+#         html_min = re.sub(r"\n{2,}", "\n", html_min)
+#         html_min = re.sub(r">\s+<", "><", html_min)
 
-        if len(html_min) > max_chars:
-            html_min = html_min[:max_chars] + "\n<!-- TRUNCATED -->"
+#         if len(html_min) > max_chars:
+#             html_min = html_min[:max_chars] + "\n<!-- TRUNCATED -->"
 
-        return html_min.strip()
+#         return html_min.strip()
 
-    except Exception:
-        # Regex fallback that PRESERVES anchors:
-        h = html
-        # remove junk blocks
-        h = re.sub(r"(?is)<(script|style|head|meta|link|svg|iframe|object|embed|noscript)[^>]*>.*?</\1>", "", h)
-        h = re.sub(r"(?is)<!--.*?-->", "", h)
+#     except Exception:
+#         # Regex fallback that PRESERVES anchors:
+#         h = html
+#         # remove junk blocks
+#         h = re.sub(r"(?is)<(script|style|head|meta|link|svg|iframe|object|embed|noscript)[^>]*>.*?</\1>", "", h)
+#         h = re.sub(r"(?is)<!--.*?-->", "", h)
 
-        # Normalize anchors to <a href="...">inner</a>
-        def _anchor_keep(m):
-            url = m.group(2)
-            inner = re.sub(r"<[^>]+>", " ", m.group(3))
-            inner = re.sub(r"\s+", " ", inner).strip()
-            return f'<a href="{url}">{inner}</a>'
+#         # Normalize anchors to <a href="...">inner</a>
+#         def _anchor_keep(m):
+#             url = m.group(2)
+#             inner = re.sub(r"<[^>]+>", " ", m.group(3))
+#             inner = re.sub(r"\s+", " ", inner).strip()
+#             return f'<a href="{url}">{inner}</a>'
 
-        # keep anchors with href
-        h = re.sub(r'(?is)<a\b[^>]*href=(["\'])(.*?)\1[^>]*>(.*?)</a>', _anchor_keep, h)
-        # unwrap anchors without href
-        h = re.sub(r'(?is)<a\b(?![^>]*href=)[^>]*>(.*?)</a>', r'\1', h)
+#         # keep anchors with href
+#         h = re.sub(r'(?is)<a\b[^>]*href=(["\'])(.*?)\1[^>]*>(.*?)</a>', _anchor_keep, h)
+#         # unwrap anchors without href
+#         h = re.sub(r'(?is)<a\b(?![^>]*href=)[^>]*>(.*?)</a>', r'\1', h)
 
-        # drop noisy attributes but NOT href
-        h = re.sub(r'\s(?:class|style|id|width|height|onclick|on\w+|data-[\w-]+)="[^"]*"', "", h)
-        h = re.sub(r"\s(?:class|style|id|width|height|onclick|on\w+|data-[\w-]+)='[^']*'", "", h)
+#         # drop noisy attributes but NOT href
+#         h = re.sub(r'\s(?:class|style|id|width|height|onclick|on\w+|data-[\w-]+)="[^"]*"', "", h)
+#         h = re.sub(r"\s(?:class|style|id|width|height|onclick|on\w+|data-[\w-]+)='[^']*'", "", h)
 
-        # remove obvious tracking/logo images
-        h = re.sub(r'(?is)<img[^>]*?(pixel|track|qr|logo|icon|facebook|instagram|twitter|youtube|linkedin)[^>]*>', "", h)
+#         # remove obvious tracking/logo images
+#         h = re.sub(r'(?is)<img[^>]*?(pixel|track|qr|logo|icon|facebook|instagram|twitter|youtube|linkedin)[^>]*>', "", h)
 
-        # flatten tables
-        h = re.sub(r"(?i)</?(table|thead|tbody|tfoot|tr|th|td)\b[^>]*>", "<div>", h)
+#         # flatten tables
+#         h = re.sub(r"(?i)</?(table|thead|tbody|tfoot|tr|th|td)\b[^>]*>", "<div>", h)
 
-        # compact + cap
-        h = re.sub(r"[ \t\f\r\v]+", " ", h)
-        h = re.sub(r"\n{2,}", "\n", h)
-        h = re.sub(r">\s+<", "><", h)
-        if len(h) > max_chars:
-            h = h[:max_chars] + "\n<!-- TRUNCATED -->"
-        return h.strip()
+#         # compact + cap
+#         h = re.sub(r"[ \t\f\r\v]+", " ", h)
+#         h = re.sub(r"\n{2,}", "\n", h)
+#         h = re.sub(r">\s+<", "><", h)
+#         if len(h) > max_chars:
+#             h = h[:max_chars] + "\n<!-- TRUNCATED -->"
+#         return h.strip()
 
+def _strip_for_ai(html: str) -> str:
+    markdown_content = html2text.html2text(html)
+    return markdown_content
 
      
 def extract_email_body_simple(msg: dict) -> Dict[str, str]:
