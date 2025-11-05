@@ -8,9 +8,6 @@ Must do:
 - Use short, sales-friendly lines/bullets.
 - If a “wholesaler hint” is provided, use it only to guide tone/style. DO NOT print the name.
 
-Footer:
-- End with exactly: Text Us @ 754 200 1204 for the Fastest Service
-
 Never include (omit if present in the source):
 - Escrow Amount or EMD
 - ARV / After Repair Value
