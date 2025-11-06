@@ -345,9 +345,34 @@ def _choose_largest(parts: List[str]) -> str:
 #             h = h[:max_chars] + "\n<!-- TRUNCATED -->"
 #         return h.strip()
 
+def merge_address_like_links(md: str) -> str:
+    """
+    Merge runs of 2+ consecutive markdown links (even with different URLs)
+    into one combined link. Keeps the first URL, concatenates the link texts.
+    Works across newlines.
+    """
+    run_pattern = re.compile(r'(?:\[[^\]]+\]\([^)]+\)\s*){2,}', flags=re.DOTALL)
+
+    def repl(m):
+        chunk = m.group(0)
+        parts = re.findall(r'\[([^\]]+)\]\(([^)]+)\)', chunk, flags=re.DOTALL)
+        if not parts:
+            return chunk
+        first_url = parts[0][1].strip()
+        merged_text = ' '.join(t.strip() for t, _ in parts)
+        merged_text = re.sub(r'\s+', ' ', merged_text).strip()
+        return f'[{merged_text}]({first_url})'
+
+    return run_pattern.sub(repl, md)
+
+
 def _strip_for_ai(html: str) -> str:
     markdown_content = html2text.html2text(html)
+    # return markdown_content
+    # Apply your merging pass to collapse address-like back-to-back links
+    markdown_content = merge_address_like_links(markdown_content)
     return markdown_content
+
 
      
 def extract_email_body_simple(msg: dict) -> Dict[str, str]:

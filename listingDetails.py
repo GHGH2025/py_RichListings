@@ -16,7 +16,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # client = OpenAI(api_key=OPENAI_API_KEY)
 client = OpenAI(
     api_key=OPENAI_API_KEY,
-    timeout=600.0,        # 30s hard timeout for network+read
+    timeout=800.0,        # 30s hard timeout for network+read
     max_retries=0        # keep low; you can set 0 or 1
 )
 
