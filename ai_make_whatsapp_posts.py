@@ -107,7 +107,6 @@ TASK:
 - Produce a WhatsApp-friendly post:
   - Bold address and price using *asterisks* (WhatsApp style).
   - Short, sales-friendly lines/bullets.
-  - End with the exact footer from the rules.
 - Do NOT include any disallowed items from the rules (strip them if present in the source).
 - Use US dollar formatting for price (commas, no cents).
 - Return ONLY JSON: {{"post_content": "..."}}

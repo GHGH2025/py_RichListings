@@ -26,3 +26,4 @@ Formatting notes:
 - Use US dollar formatting for price (no cents, with commas).
 - Only include fields that are present (do NOT invent).
 - If a field is unknown or missing, simply skip it (no “N/A”).
+- Do NOT include any footer or contact info
