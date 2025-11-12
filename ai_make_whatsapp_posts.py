@@ -185,6 +185,7 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
             pl.update(
                 set__post_content=post_text,
                 set__status="posted",
+                set__wp_status="ready_to_process",
                 set__skipped_or_posted_at=datetime.utcnow(),
                 set__updated_at=datetime.utcnow(),
                 set__rules_ai_reason=None,

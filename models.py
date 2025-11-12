@@ -115,6 +115,18 @@ class ParsedListing(Document):
 
     post_content = StringField()
 
+    wp_property_description = StringField()
+
+    wp_parsed_data = DictField()
+
+    wp_status = StringField(
+        choices=("ready_to_process", "keys_generated", "description_generated")
+    )
+
+    post_id = IntField() 
+
+    address_search_keys = ListField(StringField())
+
     rules_ai_rule_id            = StringField()   # e.g., "R3"
     rules_ai_version            = StringField()   # store YAML version as string (flexible)
     rules_ai_reason             = StringField()   # short reason when Skipped
