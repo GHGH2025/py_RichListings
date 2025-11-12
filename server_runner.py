@@ -10,6 +10,9 @@ from process_dup30days import process_not_processed_with_duplicate_rule
 from ai_nl_rules_runner import apply_ai_english_rules
 from post_selection import select_passed_listings_for_post
 from ai_make_whatsapp_posts import make_whatsapp_posts_from_ready_to_post
+from wp_ai_mapper_catalog_first import ai_build_wp_payload_for_posted
+from wp_ai_property_description import ai_build_wp_property_description_for_posted
+from wp_sync_poster import sync_wp_for_descriptions
 
 from gmail_hourly_multi import build_service_by_account
 from forward_completed_sources import forward_completed_source_emails
@@ -84,6 +87,21 @@ def run_make_whatsapp_posts_from_ready_to_post():
     logging.info("make_whatsapp_posts_from_ready_to_post")
     make_whatsapp_posts_from_ready_to_post("ad_post_rules.txt", limit=5)
 
+@repeat(every(3).minutes)
+def run_ai_build_wp_payload_for_posted():
+    logging.info("ai_build_wp_payload_for_posted")
+    ai_build_wp_payload_for_posted(limit=5)
+
+
+@repeat(every(3).minutes)
+def run_ai_build_wp_property_description_for_posted():
+    logging.info("ai_build_wp_property_description_for_posted")
+    ai_build_wp_property_description_for_posted(limit=5, batch_size=10, per_item_sleep_s=0.2)
+
+@repeat(every(5).minutes)
+def run_sync_wp_for_descriptions():
+    logging.info("sync_wp_for_descriptions")
+    sync_wp_for_descriptions(limit=5, per_item_sleep_s=0.2)
 
 @repeat(every(15).minutes)
 def run_forward_email():

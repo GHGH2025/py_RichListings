@@ -5,6 +5,10 @@ from typing import Dict, Any, List, Optional
 from openai import OpenAI
 from dotenv import load_dotenv
 from models import ParsedListing, FilteredListingEmail
+from ai_address_search_keys import update_parsed_listing_address_keys
+
+from concurrent.futures import ThreadPoolExecutor
+import logging
 # -------------------------
 # CONFIG
 # -------------------------
@@ -19,6 +23,19 @@ client = OpenAI(
     timeout=800.0,        # 30s hard timeout for network+read
     max_retries=0        # keep low; you can set 0 or 1
 )
+
+
+ADDRESS_KEYS_POOL = ThreadPoolExecutor(max_workers=6)  # tune as you like
+
+def _update_keys_async(listing_id: str, addr: str, city: str) -> None:
+    try:
+        from ai_address_search_keys import update_parsed_listing_address_keys
+        ok = update_parsed_listing_address_keys(listing_id, addr, city)
+        if not ok:
+            logging.warning("address_search_keys update returned False for %s", listing_id)
+    except Exception as e:
+        logging.exception("address_search_keys async failed for %s: %s", listing_id, e)
+
 
 
 # -------------------------
@@ -482,6 +499,11 @@ def upsert_parsed_listings_from_html(
             saved = q.only("id").first()
             if saved:
                 saved_ids.append(str(saved.id))
+                if addr and city:
+                    try:
+                        ADDRESS_KEYS_POOL.submit(_update_keys_async, str(saved.id), addr, city)
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"[parsed_listings] upsert error @idx {idx}: {e}")
 
