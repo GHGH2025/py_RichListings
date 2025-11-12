@@ -124,6 +124,10 @@ def _build_post_body(pl: ParsedListing) -> Dict[str, Any]:
         except Exception:
             pass
 
+    zip_code= getattr(pl, "zip", None)
+    if desc:
+        body["zip_code"] = zip_code
+
     # taxonomy keys from wp_parsed_data
     wp_pd = getattr(pl, "wp_parsed_data", None) or {}
     # country_deals (prefer exact; else proposed)
