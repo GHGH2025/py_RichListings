@@ -276,19 +276,25 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
             else:
                 # create
                 body = _build_post_body(pl)
-                post_id = _wp_post_create(body)
-                if post_id:
-                    pl.update(
-                        set__wp_status="posted",
-                        set__post_id=post_id,
-                        set__updated_at=datetime.utcnow(),
-                    )
-                    results.append({"id": str(pl.id), "ok": True, "status": "posted", "post_id": post_id})
-                    processed += 1
-                    posted += 1
-                else:
-                    results.append({"id": str(pl.id), "ok": False, "reason": "post_failed"})
-                    errors += 1
+                pl.update(
+                    set__wp_status="posted_temp",
+                    set__updated_at=datetime.utcnow(),
+                )
+                processed += 1
+                posted += 1
+                # post_id = _wp_post_create(body)
+                # if post_id:
+                #     pl.update(
+                #         set__wp_status="posted",
+                #         set__post_id=post_id,
+                #         set__updated_at=datetime.utcnow(),
+                #     )
+                #     results.append({"id": str(pl.id), "ok": True, "status": "posted", "post_id": post_id})
+                #     processed += 1
+                #     posted += 1
+                # else:
+                #     results.append({"id": str(pl.id), "ok": False, "reason": "post_failed"})
+                #     errors += 1
 
         except Exception as e:
             results.append({"id": str(pl.id), "ok": False, "error": f"{type(e).__name__}: {e}"})
