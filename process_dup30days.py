@@ -92,7 +92,7 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
     checked = processed = skipped = missing_addr = 0
 
     candidates = (
-        ParsedListing.objects(status="not_processed")
+        ParsedListing.objects(status="verified")
         .only("address", "city", "zip", "price", "complete_info", "skipped_or_posted_at")
         .limit(limit)
     )
