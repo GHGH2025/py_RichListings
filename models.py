@@ -109,7 +109,7 @@ class ParsedListing(Document):
     complete_info     = DictField()  # full JSON blob returned for this listing
 
     status            = StringField(
-        choices=("not_processed","ready_to_post", "processed", "passed", "posted", "skipped","ready_for_image_processing"),
+        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","ready_for_image_processing"),
         default="not_processed"
     )
 

@@ -13,6 +13,7 @@ from ai_make_whatsapp_posts import make_whatsapp_posts_from_ready_to_post
 from wp_ai_mapper_catalog_first import ai_build_wp_payload_for_posted
 from wp_ai_property_description import ai_build_wp_property_description_for_posted
 from wp_sync_poster import sync_wp_for_descriptions
+from ai_media_verify import verify_and_fill_missing_media_for_not_processed
 
 from gmail_hourly_multi import build_service_by_account
 from forward_completed_sources import forward_completed_source_emails
@@ -56,6 +57,11 @@ def run_gmail_job():
 def run_process_email():
     logging.info("run_process_email")
     process_pending()
+
+@repeat(every(3).minutes)
+def run_verify_and_fill_missing_media_for_not_processed():
+    logging.info("verify_and_fill_missing_media_for_not_processed")
+    verify_and_fill_missing_media_for_not_processed(limit=35, max_workers=8)
 
 # schedule parse email to create listing every 5 minute
 @repeat(every(1).minutes)
