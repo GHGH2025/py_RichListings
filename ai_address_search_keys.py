@@ -6,7 +6,7 @@ from bson import ObjectId
 from models import ParsedListing
 import logging
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def _response_format():

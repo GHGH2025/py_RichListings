@@ -6,6 +6,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from models import ParsedListing, FilteredListingEmail
 from ai_address_search_keys import update_parsed_listing_address_keys
+from google_formatter import get_street_and_city
 
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -437,6 +438,10 @@ def _clean_images(arr):
                 out.append(u2)
     return out[:12]  # cap to 12
 
+def _compose_raw_for_google(addr: str, city: str, state: str, zip_: str) -> str:
+    parts = [p.strip() for p in [addr, city, state, zip_] if p and str(p).strip()]
+    return ", ".join(parts + ["USA"]) if parts else ""
+
 def upsert_parsed_listings_from_html(
     email_html: str,
     account_label: str,
@@ -469,6 +474,17 @@ def upsert_parsed_listings_from_html(
             city  = (lst.get("city") or "").strip()
             state = (lst.get("state") or "").strip()
             zip_  = (lst.get("zip") or "").strip()
+            # ✨ NEW: try to normalize with Google
+            try:
+                raw_line = _compose_raw_for_google(addr, city, state, zip_)
+                if raw_line:
+                    fa, fc = get_street_and_city(raw_line)  # returns (street, city) or (None, None)
+                    if fa and fc:
+                        addr, city = fa, fc   # overwrite with formatted values
+            except Exception:
+                # fail-open: keep original addr/city
+                pass
+
             price_val = None
             if lst.get("list_price_usd") is not None:
                 try:
