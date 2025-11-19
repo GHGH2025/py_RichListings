@@ -7,7 +7,7 @@ from mongoengine.queryset.visitor import Q
 from models import ParsedListing
 
 NEXT_STATUS_ON_PASS = "processed"                 # what to set on pass
-HISTORICAL_STATUSES = ("skipped", "posted", "ready_to_post", "passed","processed")
+HISTORICAL_STATUSES = ("skipped", "posted", "ready_to_post", "passed","processed","ready_for_image_processing")
 PRICE_DROP_THRESHOLD = 0.06                       # 6%
 
 
@@ -48,6 +48,34 @@ def _price(pl: ParsedListing) -> Optional[float]:
 def _reason(prefix: str, extra: str) -> str:
     return f"[dup-30d] {prefix}: {extra}"
 
+
+def _addr_candidates(pl) -> list[tuple[str, str | None, str | None]]:
+    """
+    Return up to two (addr, city, zip) candidates:
+    1) formatted/top-level fields (address, city, zip)
+    2) raw/complete_info fields (complete_info.address, complete_info.city, complete_info.zip)
+    Dedupes if both are identical/blank.
+    """
+    def _t(x): 
+        return (x or "").strip()
+
+    top_addr  = _t(getattr(pl, "address", None))
+    top_city  = _t(getattr(pl, "city", None))
+    top_zip   = _t(getattr(pl, "zip", None))
+
+    ci        = getattr(pl, "complete_info", {}) or {}
+    raw_addr  = _t(ci.get("address"))
+    raw_city  = _t(ci.get("city"))
+    raw_zip   = _t(ci.get("zip"))
+
+    cands = []
+    if top_addr:
+        cands.append((top_addr, top_city or None, top_zip or None))
+    if raw_addr:
+        tup = (raw_addr, raw_city or None, raw_zip or None)
+        if not cands or tup != cands[0]:
+            cands.append(tup)
+    return cands
 
 def _find_recent_prior(addr: str, city: Optional[str], zip_: Optional[str],
                        since: datetime, exclude_id) -> Optional[ParsedListing]:
@@ -101,9 +129,9 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
 
         checked += 1
 
-        addr, city, zip_ = _best_addr_city_zip(pl)
-        if not addr:
-            # No address => cannot dedupe reliably; conservative skip
+        cand_list = _addr_candidates(pl)
+        if not cand_list:
+            # No usable address in either formatted or raw → skip conservatively
             pl.update(
                 set__status="skipped",
                 set__rules_ai_reason=_reason("no address available to match", "cannot dedupe"),
@@ -114,7 +142,29 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
             missing_addr += 1
             continue
 
-        prior = _find_recent_prior(addr, city, zip_, since, pl.id)
+        # addr, city, zip_ = _best_addr_city_zip(pl)
+        # if not addr:
+        #     # No address => cannot dedupe reliably; conservative skip
+        #     pl.update(
+        #         set__status="skipped",
+        #         set__rules_ai_reason=_reason("no address available to match", "cannot dedupe"),
+        #         set__skipped_or_posted_at=_now(),
+        #         set__updated_at=_now(),
+        #     )
+        #     skipped += 1
+        #     missing_addr += 1
+        #     continue
+
+            # try both: (formatted first, then raw complete_info)
+        prior = None
+        for (addr, city, zip_) in cand_list:
+            prior = _find_recent_prior(addr, city, zip_, since, pl.id)
+            if prior:
+                break
+
+        print("prior",prior)
+
+        # prior = _find_recent_prior(addr, city, zip_, since, pl.id)
 
         if not prior:
             # No recent duplicate -> pass
