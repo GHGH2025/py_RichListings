@@ -3,7 +3,7 @@ from datetime import datetime
 from mongoengine import (
     Document, EmbeddedDocument,
     StringField, IntField, DateTimeField,FloatField,ListField,DictField,
-    EmbeddedDocumentField,ReferenceField
+    EmbeddedDocumentField,ReferenceField,BooleanField
 )
 
 class WindowRange(EmbeddedDocument):
@@ -122,6 +122,15 @@ class ParsedListing(Document):
     wp_status = StringField(
         choices=("ready_to_process", "keys_generated", "description_generated")
     )
+
+    wp_check = StringField(
+        choices=("pending", "processed")
+    )
+
+    wp_check_post_id = IntField() 
+
+    wp_check_reduced = StringField()
+
 
     post_id = IntField() 
 

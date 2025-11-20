@@ -281,6 +281,7 @@ def verify_and_fill_missing_media_for_not_processed(
             if has_imgs and has_other:
                 ParsedListing.objects(id=pl.id).update_one(
                     set__status="verified",
+                    set__wp_check="pending",
                     set__updated_at=_now(),
                 )
                 verified_direct += 1
