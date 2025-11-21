@@ -265,7 +265,7 @@ Respond ONLY with the JSON object matching the schema. Do not include any text, 
 """.strip()
 
 
-    model_name = os.getenv("OPENAI_MODEL", "gpt-5.1")
+    model_name = os.getenv("OPENAI_MODEL", "gpt-5")
 
     # --- Direct OpenAI call (no LangChain) ---
     resp = client.chat.completions.create(

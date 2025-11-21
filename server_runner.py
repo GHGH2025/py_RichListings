@@ -28,8 +28,43 @@ from image_curation import process_listings_ready_for_image_processing
 import os
 from dotenv import load_dotenv
 load_dotenv()
+import json
+import threading
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+START_TIME = time.time()  # for uptime calculation
+
+
+class StatusHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Support both /server-sattus (as you requested) and /server-status (correct spelling)
+        if self.path in ("/server-sattus", "/server-status"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+
+            response = {
+                "status": "working",
+                "uptime_seconds": int(time.time() - START_TIME),
+            }
+
+            self.wfile.write(json.dumps(response).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    # Avoid default noisy logging to stderr
+    def log_message(self, format, *args):
+        logging.info("StatusHandler: " + format % args)
+
+
+def start_status_server(port: int = 8000):
+    server = HTTPServer(("0.0.0.0", port), StatusHandler)
+    logging.info("Status server listening on 0.0.0.0:%s", port)
+    server.serve_forever()
 
 def gmail_fetch_all():
     logging.info("gmail_fetch_all: start")
@@ -157,6 +192,18 @@ if __name__ == "__main__":
         # gmail_fetch_all()
     except Exception:
         logging.exception("ensure_indexes failed")
+
+    # Start status HTTP server in background
+    status_port = int(os.getenv("STATUS_PORT", "8000"))
+    status_thread = threading.Thread(
+        target=start_status_server,
+        kwargs={"port": status_port},
+        daemon=True,
+    )
+    status_thread.start()
+
+    logging.info("Status endpoint available at /server-sattus (and /server-status) on port %s", status_port)
+
 
     # Loop forever
     while True:
