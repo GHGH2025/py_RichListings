@@ -84,7 +84,8 @@ ACCOUNTS = [
             "iwantacheaphousenow-gmail.com@shared1.ccsend.com",
             "craig@nowhomebuyers.com",
             "ctorres@spectrumpropertygroup.com",
-            "ryan@floridahomeownersolutions.com"
+            "ryan@floridahomeownersolutions.com",
+            "ffassioli@peakregroup.ccsend.com"
             # or: "*@oasispropertyinvestments.ccsend.com",
         ],
         "skip_senders": [
