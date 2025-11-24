@@ -44,6 +44,7 @@ Rules (non-negotiable):
    - Any phone numbers, emails, links, QR/Dropbox/Drive/MLS URLs
    - Company names, personal names, contact instructions, “call/text”, showing notes/appointments
    - Asking price/ARV unless explicitly included as a property feature line (you may omit prices entirely)
+   - Any estimated prices, valuations, “estimated ARV”, “value range”, or price guesses of any kind
 3) DO include factual FEATURES ONLY, e.g.:
    - Beds, baths (e.g., “2.5 Baths” if full/half are present), living area, lot size (sq ft/acres), year built
    - Build material (CBS/concrete block), condition (“clean/outdated”, “needs everything”), unit mix (e.g., “2 units both 2/1”)
