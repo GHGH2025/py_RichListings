@@ -59,8 +59,12 @@ ACCOUNTS = [
             "erniethetitleguy-gmail.com@shared1.ccsend.com",
             "deals@aoinvestments.ccsend.com",
             "ffassioli@peakregroup.ccsend.com",
-            "jc@stellarholdingsllc.ccsend.com"
-
+            "jc@stellarholdingsllc.ccsend.com",
+            "offmarketdeals@encorehomeoffer.com",
+            "npabon34@gmail.com.send.mailchimpapp.com",
+            "thesimplehomebuyers@95925329.mailchimpapp.com",
+            "michaelzalkind@safetynetinv.com",
+            "mitch.conyers@poplarhomebuyers.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
@@ -85,7 +89,16 @@ ACCOUNTS = [
             "craig@nowhomebuyers.com",
             "ctorres@spectrumpropertygroup.com",
             "ryan@floridahomeownersolutions.com",
-            "ffassioli@peakregroup.ccsend.com"
+            "ffassioli@peakregroup.ccsend.com",
+            "sguerrero-housingig.com@shared1.ccsend.com",
+            "erniethetitleguy-gmail.com@shared1.ccsend.com",
+            "info-rushproperties.net@shared1.ccsend.com",
+            "cody@graystoneig.com",
+            "deals@aoinvestments.ccsend.com",
+            "info+hoodsyhomes.com@ec1.msgsndr.org",
+            "lenny-riverwalkproperties.net@shared1.ccsend.com"
+
+
             # or: "*@oasispropertyinvestments.ccsend.com",
         ],
         "skip_senders": [
