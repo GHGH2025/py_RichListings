@@ -308,6 +308,7 @@ def verify_and_fill_missing_media_for_not_processed(
 
             # Mark verified (and apply any updates)
             updates["set__status"] = "verified"
+            updates["set__wp_check"] = "pending"
             updates["set__updated_at"] = _now()
 
             ParsedListing.objects(id=pl.id).update_one(**updates)
