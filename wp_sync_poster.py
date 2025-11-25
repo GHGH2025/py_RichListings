@@ -158,8 +158,8 @@ def _build_post_body(pl: ParsedListing) -> Dict[str, Any]:
     if other_src:
         body["picture_button_url"] = other_src
 
-    # static
-    body.setdefault("deal_type", ["MLS Deals"])
+    # # static
+    # body.setdefault("deal_type", ["MLS Deals"])
     body.setdefault("newest_deals", ["Daily Deal Email"])
 
     return body
