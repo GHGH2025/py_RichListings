@@ -8,6 +8,7 @@ import shutil
 from dropbox.files import WriteMode
 from scrape_images import extract_image_links
 from checkDirectImageLink import safe_filename_from_url,is_direct_image_url
+from dropbox.exceptions import ApiError
 
 load_dotenv()
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
@@ -200,14 +201,98 @@ def get_drive_folder_files(drive_folder_link):
     return files
 
 
-def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUploads"):
-    """Download files from a public Google Drive folder and upload to Dropbox."""
+# def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUploads"):
+#     """Download files from a public Google Drive folder and upload to Dropbox."""
+#     os.makedirs("downloads", exist_ok=True)
+#     files = get_drive_folder_files(drive_folder_link)
+
+#     for file in files:
+#         file_id = file["id"]
+#         file_name = file["name"]
+#         download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+#         print(f"Downloading {file_name}...")
+#         with requests.get(download_url, stream=True) as r:
+#             if r.status_code != 200:
+#                 print(f"Failed to download {file_name}, skipping...")
+#                 continue
+
+#             # Detect MIME type and add extension if missing
+#             content_type = r.headers.get("Content-Type")
+#             extension = mimetypes.guess_extension(content_type)
+#             if extension and not file_name.endswith(extension):
+#                 file_name += extension
+
+#             local_path = os.path.join("downloads", file_name)
+#             with open(local_path, "wb") as f:
+#                 for chunk in r.iter_content(1024):
+#                     f.write(chunk)
+
+#         # Upload to Dropbox
+#         with open(local_path, "rb") as f:
+#             dropbox_path = f"{dropbox_folder}/{file_name}"
+#             dbx.files_upload(f.read(), dropbox_path, mode=WriteMode("overwrite"))
+#             print(f"Uploaded {file_name} to Dropbox: {dropbox_path}")
+
+#         #delete locally
+#         os.remove(local_path)
+#     # Return shared Dropbox folder link
+#     return create_folder_shared_link(dropbox_folder)
+
+def ensure_dropbox_folder(path: str):
+    """Create a folder in Dropbox if it doesn't already exist."""
+    try:
+        dbx.files_create_folder_v2(path, autorename=False)
+    except ApiError:
+        # Ignore if it already exists or other non-fatal path conflicts
+        pass
+
+def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUploads", seen_ids=None):
+    """Download files from a public Google Drive folder (including nested subfolders)
+    and upload them to Dropbox, preserving folder structure."""
+    
+    if seen_ids is None:
+        seen_ids = set()
+
+    ensure_dropbox_folder(dropbox_folder)
+
     os.makedirs("downloads", exist_ok=True)
     files = get_drive_folder_files(drive_folder_link)
 
     for file in files:
         file_id = file["id"]
         file_name = file["name"]
+        
+
+        #NEW LOGIC ADDED TO HANDLE NESTED FILE #
+        if file_id in seen_ids:
+            print(f"Skipping already processed item: {file_name} ({file_id})")
+            continue
+        seen_ids.add(file_id)
+
+        if "Shared folder" in file_name:
+            print(f"Found nested Drive folder '{file_name}', descending...")
+
+            safe_folder_name = re.sub(r"[\\/]+", " ", file_name).strip()
+
+            child_dropbox_folder = f"{dropbox_folder}/{safe_folder_name}"
+
+            ensure_dropbox_folder(child_dropbox_folder)
+
+            subfolder_link = f"https://drive.google.com/drive/folders/{file_id}"
+            try:
+               
+                upload_drive_folder_to_dropbox(subfolder_link, child_dropbox_folder, seen_ids)
+            except Exception as e:
+                print(f"Failed to process subfolder {file_name}: {e}")
+            continue
+
+        if file_name.strip() == "Shared":
+            print("Skipping generic 'Shared' preview entry")
+            continue
+
+           #NEW LOGIC ADDED TO HANDLE NESTED FILE END
+
         download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
         print(f"Downloading {file_name}...")
@@ -216,7 +301,6 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
                 print(f"Failed to download {file_name}, skipping...")
                 continue
 
-            # Detect MIME type and add extension if missing
             content_type = r.headers.get("Content-Type")
             extension = mimetypes.guess_extension(content_type)
             if extension and not file_name.endswith(extension):
@@ -227,15 +311,13 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
                 for chunk in r.iter_content(1024):
                     f.write(chunk)
 
-        # Upload to Dropbox
         with open(local_path, "rb") as f:
             dropbox_path = f"{dropbox_folder}/{file_name}"
             dbx.files_upload(f.read(), dropbox_path, mode=WriteMode("overwrite"))
             print(f"Uploaded {file_name} to Dropbox: {dropbox_path}")
 
-        #delete locally
         os.remove(local_path)
-    # Return shared Dropbox folder link
+
     return create_folder_shared_link(dropbox_folder)
 
 def handle_Link(links, folder = ""):

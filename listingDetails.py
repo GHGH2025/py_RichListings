@@ -475,12 +475,15 @@ def upsert_parsed_listings_from_html(
             state = (lst.get("state") or "").strip()
             zip_  = (lst.get("zip") or "").strip()
             # ✨ NEW: try to normalize with Google
+            geo_js = None
             try:
                 raw_line = _compose_raw_for_google(addr, city, state, zip_)
                 if raw_line:
                     fa, fc = get_street_and_city(raw_line)  # returns (street, city) or (None, None)
                     if fa and fc:
                         addr, city = fa, fc   # overwrite with formatted values
+                    # geocode full result (non-blocking/fail-open)
+                    geo_js = geocode_response(raw_line)
             except Exception:
                 # fail-open: keep original addr/city
                 pass
@@ -498,19 +501,36 @@ def upsert_parsed_listings_from_html(
                 list_index=idx,  
             )
 
-            q.update_one(
-                upsert=True,
-                set__source_email=source_email_doc,
-                set__address=addr,
-                set__city=city,
-                set__state=state,
-                set__zip=zip_,
-                set__price=price_val,
-                set__images=_clean_images(lst.get("images")),
-                set__other_images_source=(lst.get("other_images_source") or "").strip() or None,
-                set__complete_info=lst,
-                set_on_insert__status="not_processed",  # brand-new only
-            )
+            # q.update_one(
+            #     upsert=True,
+            #     set__source_email=source_email_doc,
+            #     set__address=addr,
+            #     set__city=city,
+            #     set__state=state,
+            #     set__zip=zip_,
+            #     set__price=price_val,
+            #     set__images=_clean_images(lst.get("images")),
+            #     set__other_images_source=(lst.get("other_images_source") or "").strip() or None,
+            #     set__complete_info=lst,
+            #     set_on_insert__status="not_processed",  # brand-new only
+            # )
+            updates = {
+                "upsert": True,
+                "set__source_email": source_email_doc,
+                "set__address": addr,
+                "set__city": city,
+                "set__state": state,
+                "set__zip": zip_,
+                "set__price": price_val,
+                "set__images": _clean_images(lst.get("images")),
+                "set__other_images_source": (lst.get("other_images_source") or "").strip() or None,
+                "set__complete_info": lst,
+                "set_on_insert__status": "not_processed",  # brand-new only
+            }
+            if geo_js is not None:
+                updates["set__geo_code_response"] = geo_js
+
+            q.update_one(**updates)
 
             saved = q.only("id").first()
             if saved:

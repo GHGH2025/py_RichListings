@@ -106,6 +106,125 @@ def _find_recent_prior(addr: str, city: Optional[str], zip_: Optional[str],
     print("addr>>",addr,">>",qs.first())
     return qs.first()
 
+def _compose_raw_for_google(addr: str, city: str, state: str, zip_: str) -> str:
+    parts = [p.strip() for p in [addr, city, state, zip_] if p and str(p).strip()]
+    return ", ".join(parts + ["USA"]) if parts else ""
+
+def _geo_extract(geo: dict) -> dict:
+    """
+    Pulls the bits we need from a standard Google Geocoding result object.
+    Returns keys: pid, fa, postal, route, is_full.
+    """
+    if not isinstance(geo, dict):
+        return {}
+    fa   = geo.get("formatted_address")
+    pid  = geo.get("place_id")
+    types = geo.get("types", []) or []
+    comps = geo.get("address_components", []) or []
+
+    postal = route = None
+    for c in comps:
+        ts = c.get("types", []) or []
+        if "postal_code" in ts:
+            postal = c.get("long_name") or c.get("short_name")
+        elif "route" in ts:
+            route = c.get("short_name") or c.get("long_name")
+
+    is_full = ("premise" in types) or ("street_address" in types)
+    return {"pid": pid, "fa": fa, "postal": postal, "route": route, "is_full": is_full}
+
+
+def _ensure_geo(pl) -> Optional[dict]:
+    """
+    Ensure the current ParsedListing has geo_code_response.
+    If missing, try to geocode from complete_info (fail-open).
+    Persist if obtained.
+    """
+    geo = getattr(pl, "geo_code_response", None)
+    if isinstance(geo, dict) and geo:
+        return geo
+
+    # lazy-populate from complete_info if possible
+    ci = getattr(pl, "complete_info", {}) or {}
+    raw = _compose_raw_for_google(
+        (ci.get("address") or "").strip(),
+        (ci.get("city") or "").strip(),
+        (ci.get("state") or "").strip(),
+        (ci.get("zip") or "").strip(),
+    )
+    if not raw:
+        return None
+
+    try:
+        # import from your google_formatter module
+        from google_formatter import geocode_response
+        geo = geocode_response(raw)
+        if isinstance(geo, dict) and geo:
+            ParsedListing.objects(id=pl.id).update_one(
+                set__geo_code_response=geo,
+                set__updated_at=_now(),
+            )
+            return geo
+    except Exception:
+        pass
+    return None
+
+def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
+    """
+    Fallback search for recent prior using stored (or freshly-fetched) geo_code_response.
+    Priority: place_id → formatted_address → postal+route substring match.
+    """
+    geo = _ensure_geo(pl)
+    if not geo:
+        return None
+
+    x = _geo_extract(geo)
+    base_q = (
+        Q(status__in=HISTORICAL_STATUSES)
+        & Q(skipped_or_posted_at__gte=since)
+        & Q(id__ne=pl.id)
+    )
+
+    # 1) exact place_id
+    if x.get("pid"):
+        qs = (
+            ParsedListing.objects(base_q & Q(geo_code_response__place_id=x["pid"]))
+            .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status")
+            .order_by("-skipped_or_posted_at")
+        )
+        hit = qs.first()
+        if hit:
+            return hit
+
+    # 2) exact formatted_address (case-insensitive)
+    if x.get("fa"):
+        qs = (
+            ParsedListing.objects(base_q & Q(geo_code_response__formatted_address__iexact=x["fa"]))
+            .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status")
+            .order_by("-skipped_or_posted_at")
+        )
+        hit = qs.first()
+        if hit:
+            return hit
+
+    # 3) partial: formatted_address contains both postal and route (broad but useful)
+    postal = x.get("postal")
+    route  = x.get("route")
+    if postal and route:
+        qs = (
+            ParsedListing.objects(
+                base_q
+                & Q(geo_code_response__formatted_address__icontains=postal)
+                & Q(geo_code_response__formatted_address__icontains=route)
+            )
+            .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status")
+            .order_by("-skipped_or_posted_at")
+        )
+        hit = qs.first()
+        if hit:
+            return hit
+
+    return None
 
 def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
     """
@@ -162,7 +281,11 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
             if prior:
                 break
 
-        print("prior",prior)
+
+        # NEW: geo fallback if not found by address/city
+        if not prior:
+            prior = _find_recent_prior_geo(pl, since)
+
 
         # prior = _find_recent_prior(addr, city, zip_, since, pl.id)
 
