@@ -136,6 +136,8 @@ class ParsedListing(Document):
 
     address_search_keys = ListField(StringField())
 
+    geo_code_response = DictField()
+
     rules_ai_rule_id            = StringField()   # e.g., "R3"
     rules_ai_version            = StringField()   # store YAML version as string (flexible)
     rules_ai_reason             = StringField()   # short reason when Skipped
