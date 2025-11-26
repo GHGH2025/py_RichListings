@@ -285,7 +285,100 @@ def _response_format() -> Dict[str, Any]:
 # -------------------------
 # PROMPT UTILS
 # -------------------------
-_SYSTEM_PROMPT = """\
+# _SYSTEM_PROMPT = """\
+# You extract structured data from EMAIL Markdown Content containing MULTIPLE property listings, Process and return ALL listings addresses.
+# Don't skip any address to process. 
+# Make sure if listing have images include in images.
+# VERY IMPORTANT: Use the field names EXACTLY as defined in the JSON schema.
+
+# OUTPUT CONTRACT (must follow exactly):
+# - Use the field names EXACTLY as in the JSON schema. No aliases, no renames, no extra fields.
+# - Every field in the schema MUST be present in every listing. If unknown, put null (or "unknown" for enums).
+# - Do not invent fields like "address_line", "property_address", "price", "price_usd", etc. The only valid keys are in the schema. Valid keys for locations are "address", "city", "state", "county", "zip" and for property price its should be "list_price_usd" only.
+
+# Rules:
+# - DO NOT GUESS. Only return values explicitly present in the HTML (or safe numeric conversions/derivations described below).
+# - If a field is missing/unclear, return null or "unknown" (for enums).
+# - Normalize numbers: strip $ and commas. Convert acres->sqft (1 acre = 43560 sqft) when only acres given.
+# - Compute `hoa_total_monthly_usd` = fee + assessments (if both present).
+# - Compute convenience booleans (is_condo, is_land_only, under_900_sqft, land_under_5000_sqft, has_hoa, water_exception_applicable).
+# - Water exception applies only for water_feature in {oceanfront, ocean_access, intracoastal}.
+# - Classify `region_bucket`:
+#   • south_florida_tri_county if county is Miami-Dade, Broward, or Palm Beach (set tri_county_name accordingly)
+#   • st_lucie if county=St. Lucie
+#   • fort_pierce if city=Fort Pierce (also in St. Lucie County)
+#   • rest_of_florida if state=FL but not any above
+#   • outside_florida if state != FL
+#   • unknown if cannot determine
+# - County inference policy (Florida only):
+#   • If county is missing but state="FL" and either ZIP or city is present, infer the county using general US geographic knowledge (no external lookups).
+#   • Prefer ZIP→county; if ZIP is absent, use city→county.
+#   • If the city spans multiple counties, pick the most common/central county for that city (e.g., Miami→Miami-Dade; Fort Lauderdale→Broward; West Palm Beach→Palm Beach; Fort Pierce→St. Lucie).
+#   • If you cannot infer with high confidence, leave county=null.
+#   • After inferring county, update region_bucket/tri_county_name accordingly using the rules above.
+# - Map "CBS" or "concrete block structure" → build_material = concrete_block.
+# - Accept listings anywhere in the HTML; there may be separators or repeated blocks.
+# - For each listing, also include "complete_info":
+#   • Copy/paste the VERBATIM text content for that listing only (strip HTML tags, keep line breaks and punctuation).
+#   • Do NOT paraphrase or normalize wording; preserve numbers, currency symbols, and units as written.
+#   • If extremely long, keep the first ~1800–2000 characters and append an ellipsis (…) at the end.
+#   • Do not mix content from different listings.
+
+#   Agent / Wholesaler/ Sender Contact Details handling (important), Make sure to include:
+# - First, scan the email for a single GLOBAL contact block (often in the header or footer) that contains any of: name, phone, email of the sender/agent/wholesaler.
+# - Extract at most one global triple: agent_name, agent_phone, agent_email. If multiple candidates exist, pick the one that appears to be the primary sender/contact for the blast (e.g., signature or “Contact us” section).
+# - For each listing:
+#   • If that listing already has its own agent_name/agent_phone/agent_email, KEEP those (do not overwrite).
+#   • If any of those three fields are missing/null for the listing, fill the missing ones from the GLOBAL contact (if available).
+# - Formatting:
+#   • agent_email: lower-case; must look like a valid email address; otherwise leave null.
+#   • agent_phone: keep as a readable string (digits with punctuation ok). If multiple phones exist, prefer the one labeled sales/primary; otherwise the first plausible US phone.
+#   • agent_name: keep as written (person or team name).
+  
+#   Property-type classification (very important; use these exact enum values):
+# - "multi_family" if the text clearly indicates MULTIPLE UNITS/DOORS: e.g., "multi-family", "multifamily", "duplex", "triplex", "fourplex/quadplex", "multiple units", "2 units", "3 doors", "4plex", or lists several units.
+# - "single_family" if it mentions "single family", "SFR", "home", or "house" referring to the subject property.
+# - "land" if it says "land", "vacant land/lot", "tear down", "teardown", "knockdown", or "development opportunity". (When property_type="land", also set is_land_only=true if no structure is being sold.)
+# - "condo" if it says "condo". (Also set is_condo=true.)
+# - "townhouse" if it says "townhouse", "townhome", "TH".
+# - "mobile_home" or "manufactured" if it explicitly says "mobile home", "manufactured", "MH". Prefer "mobile_home" if unsure between the two.
+# - If none of the above are explicitly indicated, return property_type=null (do NOT guess).
+# - These keywords may appear in subject, title blocks, body text, bullets, image captions, or buttons.
+
+# - For each listing, populate image fields:
+#   • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
+#     - If URLs are relative, include them as-is.
+#     - Cap to the first 12 unique URLs per listing.
+#   • "other_images_source": if the listing includes a link to more photos (e.g., “View more photos”, "Click Here For Pictures", “Gallery”, Google Drive, Dropbox, MLS), return that single URL; otherwise null.
+# Output MUST strictly match the provided JSON schema.
+# """
+
+IMAGE_RULES_DEFAULT = """
+- For each listing, populate image fields:
+  • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
+    - If URLs are relative, include them as-is.
+    - Cap to the first 12 unique URLs per listing.
+  • "other_images_source": if the listing includes a link to more photos (e.g., “View more photos”, "Click Here For Pictures", “Gallery”, Google Drive, Dropbox, MLS), return that single URL; otherwise null.
+""".strip()
+
+IMAGE_RULES_NEAREST = """
+- For each listing, populate image fields:
+  • "images": collect direct image URLs (http/https) that visually depict the property for that listing.
+    - Look for images both just BEFORE and just AFTER the listing’s address/price/ARV lines.
+    - An image that appears immediately BEFORE the address (with no other property address in between)
+      belongs to that listing, not to the next one.
+    - In general, within the same section (between county/header text and the next property address/header),
+      attach each image to the NEAREST property address in that section.
+    - Ignore obvious non-property images (logos, social icons, tiny spacer GIFs, generic dividers/banners).
+    - Cap to the first 12 unique URLs per listing.
+  • "other_images_source": if the listing includes a link whose purpose is clearly “more photos”
+    (e.g. gallery, drive/dropbox/MLS photo link), return that single URL; otherwise null.
+""".strip()
+
+
+def build_system_prompt(use_nearest_image_rules: bool = False) -> str:
+    image_block = IMAGE_RULES_NEAREST if use_nearest_image_rules else IMAGE_RULES_DEFAULT
+    return f"""\
 You extract structured data from EMAIL Markdown Content containing MULTIPLE property listings, Process and return ALL listings addresses.
 Don't skip any address to process. 
 Make sure if listing have images include in images.
@@ -302,7 +395,7 @@ Rules:
 - Normalize numbers: strip $ and commas. Convert acres->sqft (1 acre = 43560 sqft) when only acres given.
 - Compute `hoa_total_monthly_usd` = fee + assessments (if both present).
 - Compute convenience booleans (is_condo, is_land_only, under_900_sqft, land_under_5000_sqft, has_hoa, water_exception_applicable).
-- Water exception applies only for water_feature in {oceanfront, ocean_access, intracoastal}.
+- Water exception applies only for water_feature in {{"oceanfront", "ocean_access", "intracoastal"}}.
 - Classify `region_bucket`:
   • south_florida_tri_county if county is Miami-Dade, Broward, or Palm Beach (set tri_county_name accordingly)
   • st_lucie if county=St. Lucie
@@ -345,13 +438,9 @@ Rules:
 - If none of the above are explicitly indicated, return property_type=null (do NOT guess).
 - These keywords may appear in subject, title blocks, body text, bullets, image captions, or buttons.
 
-- For each listing, populate image fields:
-  • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
-    - If URLs are relative, include them as-is.
-    - Cap to the first 12 unique URLs per listing.
-  • "other_images_source": if the listing includes a link to more photos (e.g., “View more photos”, "Click Here For Pictures", “Gallery”, Google Drive, Dropbox, MLS), return that single URL; otherwise null.
+{image_block}
 Output MUST strictly match the provided JSON schema.
-"""
+""".strip()
 
 _USER_INSTRUCTIONS_TEMPLATE = """\
 EMAIL_HTML:
@@ -369,7 +458,8 @@ Extract ALL listings present. Return an object with:
 # -------------------------
 def extract_listings_from_email_html(email_html: str,
                                      model: Optional[str] = None,
-                                     temperature: float = 0.0) -> Dict[str, Any]:
+                                     temperature: float = 0.0,
+                                     use_nearest_image_rules: bool = False) -> Dict[str, Any]:
     """
     Parse a raw email HTML (no scripts/styles/comments) containing multiple property ads,
     and return structured listings using OpenAI Structured Outputs (strict JSON schema).
@@ -385,8 +475,10 @@ def extract_listings_from_email_html(email_html: str,
     # Optional: tiny cleanup to reduce obvious noise that sometimes slips through.
     compact_html = re.sub(r"\s+\n", "\n", email_html).strip()
 
+    system_prompt = build_system_prompt(use_nearest_image_rules=use_nearest_image_rules)
+
     messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": _USER_INSTRUCTIONS_TEMPLATE.format(email_html=compact_html)}
     ]
 
@@ -442,6 +534,22 @@ def _compose_raw_for_google(addr: str, city: str, state: str, zip_: str) -> str:
     parts = [p.strip() for p in [addr, city, state, zip_] if p and str(p).strip()]
     return ", ".join(parts + ["USA"]) if parts else ""
 
+def _sender_email_safe(source_email_doc) -> str:
+    """
+    Safely get the sender email from FilteredListingEmail.
+    Supports both attribute and dict-like access for from_info.
+    """
+    if not source_email_doc:
+        return ""
+    fi = getattr(source_email_doc, "from_info", None)
+    if not fi:
+        return ""
+    # mongoengine EmbeddedDocument vs dict
+    email = getattr(fi, "email", None)
+    if not email and isinstance(fi, dict):
+        email = fi.get("email")
+    return (email or "").strip().lower()
+
 def upsert_parsed_listings_from_html(
     email_html: str,
     account_label: str,
@@ -453,7 +561,15 @@ def upsert_parsed_listings_from_html(
     Run extraction on given HTML, then upsert rows into parsed_listings.
     Returns: {"count": N, "ids": [...], "notes": [...]}
     """
-    result = extract_listings_from_email_html(email_html)
+    # result = extract_listings_from_email_html(email_html)
+    # NEW: choose image-rule mode based on sender
+    sender = _sender_email_safe(source_email_doc)
+    use_nearest = (sender == "deals@aoinvestments.ccsend.com")
+
+    result = extract_listings_from_email_html(
+        email_html,
+        use_nearest_image_rules=use_nearest,  # default False unless AO sender
+    )
     listings = result.get("listings", []) or []
     saved_ids: List[str] = []
     
