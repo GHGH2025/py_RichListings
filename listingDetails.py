@@ -568,7 +568,7 @@ def upsert_parsed_listings_from_html(
 
     result = extract_listings_from_email_html(
         email_html,
-        use_nearest_image_rules=use_nearest,  # default False unless AO sender
+        use_nearest_image_rules=True,  # default False unless AO sender
     )
     listings = result.get("listings", []) or []
     saved_ids: List[str] = []
