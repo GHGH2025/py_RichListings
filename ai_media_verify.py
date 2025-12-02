@@ -13,6 +13,122 @@ import os
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
+import io, mimetypes, os, uuid, requests, boto3, tempfile
+from urllib.parse import urlparse
+
+AWS_REGION   = os.getenv("AWS_REGION", "us-east-1")
+S3_BUCKET    = os.getenv("LISTINGS_S3_BUCKET", "")       # required
+S3_PREFIX    = (os.getenv("LISTINGS_S3_PREFIX", "images/") or "").lstrip("/")
+
+UA_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+# ---------- S3 helpers (your tested pattern) ----------
+def get_s3_client(region: str):
+    return boto3.client("s3", region_name=region)
+
+def upload_to_s3(local_path: str, bucket: str, key: str, region: str) -> str:
+    """Upload local file to S3 and return public URL."""
+    s3 = get_s3_client(region)
+
+    # Try to detect proper Content-Type
+    content_type, _ = mimetypes.guess_type(local_path)
+    extra_args = {}
+    if content_type:
+        extra_args["ContentType"] = content_type
+
+    print(f"Uploading {local_path} to s3://{bucket}/{key}")
+    if extra_args:
+        s3.upload_file(local_path, bucket, key, ExtraArgs=extra_args)
+    else:
+        s3.upload_file(local_path, bucket, key)
+
+    # region-aware public URL
+    return f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+
+# ---------- image fetch + upload wiring ----------
+def _guess_ext(content_type: str, url: str) -> str:
+    if content_type:
+        ext = mimetypes.guess_extension(content_type.split(";")[0].strip())
+        if ext:
+            return ext
+    path = urlparse(url).path.lower()
+    for e in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+        if path.endswith(e):
+            return e
+    return ".jpg"
+
+def _build_s3_key(ext: str) -> str:
+    # S3 key = <prefix>/<uuid><ext>
+    name = uuid.uuid4().hex + (ext or "")
+    return f"{S3_PREFIX}/{name}" if S3_PREFIX else name
+
+def _fetch_forbidden_then_upload(url: str) -> str:
+    """
+    Try GET (no headers). If 200 -> keep original.
+    If not 200, retry with UA; if success, upload to S3 and return S3 URL.
+    If still not accessible, return original URL.
+    """
+    # quick sanity
+    if not S3_BUCKET:
+        raise RuntimeError("LISTINGS_S3_BUCKET is not set")
+
+    try:
+        r0 = requests.get(url, timeout=15, allow_redirects=True)
+        if r0.status_code == 200:
+            return url
+        # fall through to UA attempt
+    except requests.RequestException:
+        pass
+
+    try:
+        r1 = requests.get(url, headers=UA_HEADERS, timeout=25, allow_redirects=True)
+        if r1.status_code == 200 and r1.content:
+            ctype = r1.headers.get("Content-Type", "image/jpeg")
+            ext   = _guess_ext(ctype, url)
+            s3key = _build_s3_key(ext)
+
+            # Write bytes to a temp file then upload (matches your tested approach)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tf:
+                tf.write(r1.content)
+                tmp_path = tf.name
+
+            try:
+                public_url = upload_to_s3(tmp_path, S3_BUCKET, s3key, AWS_REGION)
+                return public_url
+            finally:
+                # best-effort cleanup
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+    except requests.RequestException:
+        pass
+
+    # Could not fetch → keep original (better than dropping)
+    return url
+
+def _fix_forbidden_images(urls: list[str]) -> list[str]:
+    """
+    For each URL, if plain request fails but UA fetch works,
+    upload to S3 and replace with the S3 URL. Otherwise keep original.
+    """
+    out = []
+    for u in urls or []:
+        if not isinstance(u, str) or not u.strip():
+            continue
+        try:
+            new_u = _fetch_forbidden_then_upload(u.strip())
+            out.append(new_u)
+        except Exception:
+            out.append(u.strip())
+    return out
+
 
 # ---------- utils ----------
 def _now():
@@ -279,6 +395,15 @@ def verify_and_fill_missing_media_for_not_processed(
 
             # If both present → no AI, just verify
             if has_imgs and has_other:
+
+                # 🔽 fix any 403 images in place
+                fixed = _fix_forbidden_images(pl.images)
+                if fixed != pl.images:
+                    ParsedListing.objects(id=pl.id).update_one(
+                        set__images=fixed,
+                        set__updated_at=_now(),
+                    )
+
                 ParsedListing.objects(id=pl.id).update_one(
                     set__status="verified",
                     set__wp_check="pending",
@@ -302,9 +427,19 @@ def verify_and_fill_missing_media_for_not_processed(
 
             updates = {}
             if (not has_imgs) and ai_images:
-                updates["set__images"] = ai_images
+                # updates["set__images"] = ai_images
+                            # 🔽 pre-fix 403s before saving
+                safe_imgs = _fix_forbidden_images(ai_images)
+                updates["set__images"] = safe_imgs
             if (not has_other) and ai_other:
                 updates["set__other_images_source"] = ai_other
+
+             # If we already had images originally, still fix them now
+            if has_imgs and not updates.get("set__images"):
+                fixed_existing = _fix_forbidden_images(pl.images)
+                print("fixed_existing",fixed_existing)
+                if fixed_existing != pl.images:
+                    updates["set__images"] = fixed_existing
 
             # Mark verified (and apply any updates)
             updates["set__status"] = "verified"
