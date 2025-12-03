@@ -139,7 +139,7 @@ class ParsedListing(Document):
     geo_code_response = DictField()
 
     whatsapp_status = StringField(
-        choices=("pending", "failed")
+        choices=("pending", "failed","sent")
     )
 
 
