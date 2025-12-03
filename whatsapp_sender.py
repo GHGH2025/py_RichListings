@@ -102,10 +102,10 @@ def _parse_sent(resp: requests.Response) -> Tuple[bool, str]:
         if st == "sent":
             return (True, "status=sent")
         # array under result
-        res = data.get("result")
+        res = data.get("results")
         if isinstance(res, list) and res:
             st2 = str((res[0] or {}).get("status", "")).lower()
-            return (st2 == "sent", f"result[0].status={st2}")
+            return (st2 == "sent", f"results[0].status={st2}")
     return (False, f"unrecognized_payload:{data}")
 
 def _send_dm(pl: ParsedListing, to_numbers: List[str]) -> bool:
