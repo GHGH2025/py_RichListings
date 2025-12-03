@@ -231,10 +231,10 @@ def process_whatsapp_queue(limit: int = 100, dm_sleep_range: Tuple[float, float]
         ParsedListing.objects(id=pl.id).update_one(
             set__whatsapp_status=("sent" if ok else "failed")
         )
-
-        if mode == "dm" and to_numbers:
-            # honor your earlier pacing: 10–15s between *listings*
-            time.sleep(random.uniform(*dm_sleep_range))
+        time.sleep(random.uniform(*dm_sleep_range))
+        # if mode == "dm" and to_numbers:
+        #     # honor your earlier pacing: 10–15s between *listings*
+        #     time.sleep(random.uniform(*dm_sleep_range))
 
         sent += int(ok)
         failed += int(not ok)
