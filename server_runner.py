@@ -17,7 +17,7 @@ from ai_media_verify import verify_and_fill_missing_media_for_not_processed
 from wp_price_red_pic_links import process_wp_price_and_media_updates
 from gmail_hourly_multi import build_service_by_account
 from forward_completed_sources import forward_completed_source_emails
-
+from whatsapp_sender import process_whatsapp_queue
 from mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing
 
@@ -32,39 +32,64 @@ import json
 import threading
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+from config_runtime import get_whatsapp_send_mode
 
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import uvicorn  # NEW: FastAPI server
+
+# from http.server import BaseHTTPRequestHandler, HTTPServer
 
 START_TIME = time.time()  # for uptime calculation
+os.environ["APP_START_TIME"] = str(START_TIME)  # used by api_app for consistent uptime
 
 
-class StatusHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        # Support both /server-sattus (as you requested) and /server-status (correct spelling)
-        if self.path in ("/server-sattus", "/server-status"):
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
+# class StatusHandler(BaseHTTPRequestHandler):
+#     def do_GET(self):
+#         # Support both /server-sattus (as you requested) and /server-status (correct spelling)
+#         if self.path in ("/server-sattus", "/server-status"):
+#             self.send_response(200)
+#             self.send_header("Content-Type", "application/json")
+#             self.end_headers()
 
-            response = {
-                "status": "working",
-                "uptime_seconds": int(time.time() - START_TIME),
-            }
+#             response = {
+#                 "status": "working",
+#                 "uptime_seconds": int(time.time() - START_TIME),
+#             }
 
-            self.wfile.write(json.dumps(response).encode("utf-8"))
-        else:
-            self.send_response(404)
-            self.end_headers()
+#             self.wfile.write(json.dumps(response).encode("utf-8"))
+#         else:
+#             self.send_response(404)
+#             self.end_headers()
 
-    # Avoid default noisy logging to stderr
-    def log_message(self, format, *args):
-        logging.info("StatusHandler: " + format % args)
+#     def do_POST(self):
+#         if self.path == "/config/whatsapp-mode":
+#             length = int(self.headers.get("Content-Length", "0") or 0)
+#             body = self.rfile.read(length).decode("utf-8") if length else "{}"
+#             try:
+#                 data = json.loads(body or "{}")
+#                 mode = (data.get("mode") or "").strip().lower()
+#                 set_whatsapp_send_mode(mode)   # validates + persists
+#                 self.send_response(200)
+#                 self.send_header("Content-Type", "application/json")
+#                 self.end_headers()
+#                 self.wfile.write(json.dumps({"ok": True, "mode": get_whatsapp_send_mode()}).encode("utf-8"))
+#             except ValueError as ve:
+#                 self.send_response(400)
+#                 self.send_header("Content-Type", "application/json")
+#                 self.end_headers()
+#                 self.wfile.write(json.dumps({"ok": False, "error": str(ve)}).encode("utf-8"))
+#             except Exception as e:
+#                 self.send_response(500)
+#                 self.send_header("Content-Type", "application/json")
+#                 self.end_headers()
+#                 self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+#         else:
+#             self.send_response(404)
+#             self.end_headers()
 
+#     # Avoid default noisy logging to stderr
+#     def log_message(self, format, *args):
+#         logging.info("StatusHandler: " + format % args)
 
-def start_status_server(port: int = 8000):
-    server = HTTPServer(("0.0.0.0", port), StatusHandler)
-    logging.info("Status server listening on 0.0.0.0:%s", port)
-    server.serve_forever()
 
 def gmail_fetch_all():
     logging.info("gmail_fetch_all: start")
@@ -133,6 +158,11 @@ def run_make_whatsapp_posts_from_ready_to_post():
     logging.info("make_whatsapp_posts_from_ready_to_post")
     make_whatsapp_posts_from_ready_to_post("ad_post_rules.txt", limit=5)
 
+@repeat(every(1).minutes)
+def run_process_whatsapp_queue():
+    logging.info("process_whatsapp_queue")
+    process_whatsapp_queue(limit=5)
+
 @repeat(every(3).minutes)
 def run_ai_build_wp_payload_for_posted():
     logging.info("ai_build_wp_payload_for_posted")
@@ -181,6 +211,10 @@ def run_forward_email():
 # def run_other_job():
 #     placeholder_other_job()
 
+def start_api_server(host: str = "0.0.0.0", port: int = 8000):
+    # Serve FastAPI app in this thread
+    uvicorn.run("api_app:app", host=host, port=port, log_level="info")
+
 if __name__ == "__main__":
     logging.info("Scheduler loop started")
 
@@ -195,17 +229,15 @@ if __name__ == "__main__":
 
     # Start status HTTP server in background
     status_port = int(os.getenv("STATUS_PORT", "8000"))
-    status_thread = threading.Thread(
-        target=start_status_server,
-        kwargs={"port": status_port},
+    api_thread = threading.Thread(
+        target=start_api_server,
+        kwargs={"host": "0.0.0.0", "port": status_port},
         daemon=True,
     )
-    status_thread.start()
+    api_thread.start()
+    logging.info("FastAPI status available at http://0.0.0.0:%s/server-status", status_port)
 
-    logging.info("Status endpoint available at /server-sattus (and /server-status) on port %s", status_port)
-
-
-    # Loop forever
+    # Main scheduler loop
     while True:
         run_pending()
         time.sleep(1)
