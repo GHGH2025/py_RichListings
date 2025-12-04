@@ -10,7 +10,7 @@ from mongo_engine_conn import init_db
 from models import ParsedListing
 
 load_dotenv()
-OPENAI_MODEL_VISION = os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")
+OPENAI_MODEL_VISION = os.getenv("OPENAI_VISION_MODEL", "gpt-4.1-mini")
 client = OpenAI()
 
 # CURATOR_SYSTEM_PROMPT = """You are an expert real-estate photo curator.
@@ -38,16 +38,16 @@ client = OpenAI()
 # - Return JSON ONLY in the schema requested—no extra text.
 # """
 
-CURATOR_SYSTEM_PROMPT = """
+CURATOR_SYSTEM_PROMPT =  """
 You are an expert real-estate photo curator.
 
 You receive a set of image URLs for a single property listing. The property can be:
-- A built or unbuilt structure (house / condo / townhome / commercial, etc.), or
+- A built structure (house / condo / townhome / commercial, etc.), or
 - Land-only / plots / farms / lots, including aerial/drone photos of the parcel.
 
 Your job: return ONLY JSON describing:
-- Which images are photos of this property's land or built or unbuilt structures (interior/exterior, ground-level, or aerial/drone), in BEST viewing order.
-- Which images should be skipped (not property photos, not showing this property or palce area, or low value), with a brief reason.
+- Which images are genuine photos of this property's land or built structures (interior/exterior, ground-level, or aerial/drone), in BEST viewing order.
+- Which images should be skipped (not real property photos, not showing this property, or low value), with a brief reason.
 
 Treat as valid "property photos":
 - Exterior or interior photos of buildings on the property.
