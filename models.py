@@ -3,7 +3,7 @@ from datetime import datetime
 from mongoengine import (
     Document, EmbeddedDocument,
     StringField, IntField, DateTimeField,FloatField,ListField,DictField,
-    EmbeddedDocumentField,ReferenceField,BooleanField
+    EmbeddedDocumentField,ReferenceField,BooleanField,DynamicField,
 )
 
 class WindowRange(EmbeddedDocument):
@@ -79,6 +79,7 @@ class FilteredListingEmail(Document):
 class ParsedListing(Document):
     meta = {
         "collection": "parsed_listings",
+        # "strict": False,
         "indexes": [
             # one row per listing within an email
             {"fields": ["account_label", "gmail_message_id", "list_index"], "unique": True, "name": "uniq_email_list_index"},
@@ -107,6 +108,18 @@ class ParsedListing(Document):
     other_images_dropbox_link  = StringField()
 
     complete_info     = DictField()  # full JSON blob returned for this listing
+
+    addr_city_fmt_done = DynamicField()
+
+
+    # NEW: direct_wholeseller flag
+    direct_wholeseller = StringField(
+        choices=("not_found", "not_processed", "processed", "no_agent_email")
+    )
+
+    FoundInPodioViaSearch= StringField(
+        choices=("not_found", "found")
+    )
 
     status            = StringField(
         choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","ready_for_image_processing"),

@@ -10,11 +10,55 @@ from google_formatter import get_street_and_city
 
 from concurrent.futures import ThreadPoolExecutor
 import logging
+
+
 # -------------------------
 # CONFIG
 # -------------------------
 # Load environment variables
 load_dotenv()
+
+# Path + loader for direct wholeseller config
+DIRECT_WHOLESELLER_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "direct_wholeseller.json",
+)
+
+def _load_direct_wholeseller_map() -> Dict[str, Any]:
+    """
+    Load direct_wholeseller.json as:
+    {
+      "email1@example.com": { "name": "...", "phone": "...", "email": "...", "updateFlagForPodio" :"true/false" },
+      ...
+    }
+    Keys are normalized to lowercase for robust matching.
+    """
+    try:
+        with open(DIRECT_WHOLESELLER_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+        if not isinstance(raw, dict):
+            logging.warning("direct_wholeseller.json is not a dict; ignoring.")
+            return {}
+
+        out: Dict[str, Any] = {}
+        for k, v in raw.items():
+            if not isinstance(k, str):
+                continue
+            email_key = k.strip().lower()
+            if not email_key:
+                continue
+            out[email_key] = v
+        return out
+    except FileNotFoundError:
+        logging.info("direct_wholeseller.json not found at %s; skipping wholeseller overrides.", DIRECT_WHOLESELLER_PATH)
+    except Exception as e:
+        logging.exception("Failed to load direct_wholeseller.json: %s", e)
+    return {}
+
+# Loaded once at import
+DIRECT_WHOLESELLER_MAP: Dict[str, Any] = _load_direct_wholeseller_map()
+
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # supports structured outputs
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -38,126 +82,6 @@ def _update_keys_async(listing_id: str, addr: str, city: str) -> None:
         logging.exception("address_search_keys async failed for %s: %s", listing_id, e)
 
 
-
-# -------------------------
-# JSON-SCHEMA (STRICT)
-# -------------------------
-# def _listing_schema() -> Dict[str, Any]:
-#     # Schema matches the keys we agreed on; nullables are allowed to avoid hallucination.
-#     return {
-#         "type": "object",
-#         "additionalProperties": False,
-#         "properties": {
-#             "complete_info": {
-#                 "type": ["string", "null"],
-#                 # Verbose description helps the model obey
-#                 "description": "Verbatim text for this listing exactly as written in the email. Strip HTML tags but keep original wording, numbers, symbols, and line breaks. Do not paraphrase. If very long, truncate to ~2000 chars."
-#             },
-#             # 1) Identification
-#             "source_title": {"type": ["string", "null"]},
-#             "listing_url": {"type": ["string", "null"]},
-#             "mls_id": {"type": ["string", "null"]},
-#             "agent_name": {"type": ["string", "null"]},
-#             "agent_phone": {"type": ["string", "null"]},
-#             "agent_email": {"type": ["string", "null"]},
-
-#             # 2) Location
-#             "address_line": {"type": ["string", "null"]},
-#             "city": {"type": ["string", "null"]},
-#             "county": {"type": ["string", "null"]},
-#             "state": {"type": ["string", "null"]},
-#             "zip": {"type": ["string", "null"]},
-#             "latitude": {"type": ["number", "null"]},
-#             "longitude": {"type": ["number", "null"]},
-
-#             # 3) Price & Fees
-#             "list_price_usd": {"type": ["number", "null"]},
-#             "hoa_fee_monthly_usd": {"type": ["number", "null"]},
-#             "hoa_assessment_monthly_usd": {"type": ["number", "null"]},
-#             "hoa_total_monthly_usd": {"type": ["number", "null"]},
-#             "taxes_annual_usd": {"type": ["number", "null"]},
-
-#             # 4) Property Type & Basics
-#             "property_type": {
-#                 "type": ["string", "null"],
-#                 "enum": [
-#                     "single_family", "condo", "townhouse", "multi_family",
-#                     "land", "mobile_home", "manufactured", "other", None
-#                 ]
-#             },
-#             "bedrooms": {"type": ["number", "null"]},
-#             "bathrooms_full": {"type": ["number", "null"]},
-#             "bathrooms_half": {"type": ["number", "null"]},
-#             "living_area_sqft": {"type": ["number", "null"]},
-#             "year_built": {"type": ["number", "null"]},
-#             "is_condo": {"type": ["boolean", "null"]},
-
-#             # 5) Lot / Land
-#             "lot_size_sqft": {"type": ["number", "null"]},
-#             "lot_size_acres": {"type": ["number", "null"]},
-#             "is_land_only": {"type": ["boolean", "null"]},
-
-#             # 6) Waterfront / Water Access
-#             "water_feature": {
-#                 "type": ["string", "null"],
-#                 "enum": [
-#                     "oceanfront", "ocean_access", "intracoastal",
-#                     "bayfront", "canal", "lakefront", "riverfront",
-#                     "water_view_only", "none", "unknown", None
-#                 ]
-#             },
-#             "is_on_water": {"type": ["boolean", "null"]},
-#             "water_notes": {"type": ["string", "null"]},
-
-#             # 7) Structure / Build
-#             "build_material": {
-#                 "type": ["string", "null"],
-#                 "enum": ["frame", "wood", "concrete_block", "brick", "stucco", "mixed", "unknown", None]
-#             },
-#             "is_frame_or_wood": {"type": ["boolean", "null"]},
-
-#             # 8) Keywords & Exceptional Flags
-#             "is_teardown_or_redevelopment": {"type": ["boolean", "null"]},
-#             "marketing_tags": {"type": "array", "items": {"type": "string"}},
-#             "raw_description_excerpt": {"type": ["string", "null"]},
-
-#             # 9) Region Classification
-#             "region_bucket": {
-#                 "type": ["string", "null"],
-#                 "enum": [
-#                     "south_florida_tri_county", "st_lucie", "fort_pierce",
-#                     "rest_of_florida", "outside_florida", "unknown", None
-#                 ]
-#             },
-#             "tri_county_name": {
-#                 "type": ["string", "null"],
-#                 "enum": ["miami_dade", "broward", "palm_beach", None]
-#             },
-
-#             # 10) Mobile Home
-#             "is_mobile_home": {"type": ["boolean", "null"]},
-
-#             # 11) Derived convenience flags
-#             "bath_combo_label": {"type": ["string", "null"]},
-#             "has_hoa": {"type": ["boolean", "null"]},
-#             "under_900_sqft": {"type": ["boolean", "null"]},
-#             "land_under_5000_sqft": {"type": ["boolean", "null"]},
-#             "water_exception_applicable": {"type": ["boolean", "null"]},
-
-#             # NEW: Images found in the email for this listing
-#             "images": {
-#                 "type": "array",
-#                 "items": {"type": "string"},
-#                 "description": "Direct image URLs (http/https) that appear in the email for this listing. Exclude logos, agent headshots, social icons, QR codes, and tracking pixels."
-#             },
-
-#             # NEW: External gallery link (if any)
-#             "other_images_source": {
-#                 "type": ["string", "null"],
-#                 "description": "Single external link to additional photos (e.g., Google Drive, Dropbox, MLS gallery) found in the listing block."
-#             },
-#         }
-#     }
 
 
 def _listing_schema() -> Dict[str, Any]:
@@ -282,76 +206,6 @@ def _response_format() -> Dict[str, Any]:
     }
 
 
-# -------------------------
-# PROMPT UTILS
-# -------------------------
-# _SYSTEM_PROMPT = """\
-# You extract structured data from EMAIL Markdown Content containing MULTIPLE property listings, Process and return ALL listings addresses.
-# Don't skip any address to process. 
-# Make sure if listing have images include in images.
-# VERY IMPORTANT: Use the field names EXACTLY as defined in the JSON schema.
-
-# OUTPUT CONTRACT (must follow exactly):
-# - Use the field names EXACTLY as in the JSON schema. No aliases, no renames, no extra fields.
-# - Every field in the schema MUST be present in every listing. If unknown, put null (or "unknown" for enums).
-# - Do not invent fields like "address_line", "property_address", "price", "price_usd", etc. The only valid keys are in the schema. Valid keys for locations are "address", "city", "state", "county", "zip" and for property price its should be "list_price_usd" only.
-
-# Rules:
-# - DO NOT GUESS. Only return values explicitly present in the HTML (or safe numeric conversions/derivations described below).
-# - If a field is missing/unclear, return null or "unknown" (for enums).
-# - Normalize numbers: strip $ and commas. Convert acres->sqft (1 acre = 43560 sqft) when only acres given.
-# - Compute `hoa_total_monthly_usd` = fee + assessments (if both present).
-# - Compute convenience booleans (is_condo, is_land_only, under_900_sqft, land_under_5000_sqft, has_hoa, water_exception_applicable).
-# - Water exception applies only for water_feature in {oceanfront, ocean_access, intracoastal}.
-# - Classify `region_bucket`:
-#   • south_florida_tri_county if county is Miami-Dade, Broward, or Palm Beach (set tri_county_name accordingly)
-#   • st_lucie if county=St. Lucie
-#   • fort_pierce if city=Fort Pierce (also in St. Lucie County)
-#   • rest_of_florida if state=FL but not any above
-#   • outside_florida if state != FL
-#   • unknown if cannot determine
-# - County inference policy (Florida only):
-#   • If county is missing but state="FL" and either ZIP or city is present, infer the county using general US geographic knowledge (no external lookups).
-#   • Prefer ZIP→county; if ZIP is absent, use city→county.
-#   • If the city spans multiple counties, pick the most common/central county for that city (e.g., Miami→Miami-Dade; Fort Lauderdale→Broward; West Palm Beach→Palm Beach; Fort Pierce→St. Lucie).
-#   • If you cannot infer with high confidence, leave county=null.
-#   • After inferring county, update region_bucket/tri_county_name accordingly using the rules above.
-# - Map "CBS" or "concrete block structure" → build_material = concrete_block.
-# - Accept listings anywhere in the HTML; there may be separators or repeated blocks.
-# - For each listing, also include "complete_info":
-#   • Copy/paste the VERBATIM text content for that listing only (strip HTML tags, keep line breaks and punctuation).
-#   • Do NOT paraphrase or normalize wording; preserve numbers, currency symbols, and units as written.
-#   • If extremely long, keep the first ~1800–2000 characters and append an ellipsis (…) at the end.
-#   • Do not mix content from different listings.
-
-#   Agent / Wholesaler/ Sender Contact Details handling (important), Make sure to include:
-# - First, scan the email for a single GLOBAL contact block (often in the header or footer) that contains any of: name, phone, email of the sender/agent/wholesaler.
-# - Extract at most one global triple: agent_name, agent_phone, agent_email. If multiple candidates exist, pick the one that appears to be the primary sender/contact for the blast (e.g., signature or “Contact us” section).
-# - For each listing:
-#   • If that listing already has its own agent_name/agent_phone/agent_email, KEEP those (do not overwrite).
-#   • If any of those three fields are missing/null for the listing, fill the missing ones from the GLOBAL contact (if available).
-# - Formatting:
-#   • agent_email: lower-case; must look like a valid email address; otherwise leave null.
-#   • agent_phone: keep as a readable string (digits with punctuation ok). If multiple phones exist, prefer the one labeled sales/primary; otherwise the first plausible US phone.
-#   • agent_name: keep as written (person or team name).
-  
-#   Property-type classification (very important; use these exact enum values):
-# - "multi_family" if the text clearly indicates MULTIPLE UNITS/DOORS: e.g., "multi-family", "multifamily", "duplex", "triplex", "fourplex/quadplex", "multiple units", "2 units", "3 doors", "4plex", or lists several units.
-# - "single_family" if it mentions "single family", "SFR", "home", or "house" referring to the subject property.
-# - "land" if it says "land", "vacant land/lot", "tear down", "teardown", "knockdown", or "development opportunity". (When property_type="land", also set is_land_only=true if no structure is being sold.)
-# - "condo" if it says "condo". (Also set is_condo=true.)
-# - "townhouse" if it says "townhouse", "townhome", "TH".
-# - "mobile_home" or "manufactured" if it explicitly says "mobile home", "manufactured", "MH". Prefer "mobile_home" if unsure between the two.
-# - If none of the above are explicitly indicated, return property_type=null (do NOT guess).
-# - These keywords may appear in subject, title blocks, body text, bullets, image captions, or buttons.
-
-# - For each listing, populate image fields:
-#   • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
-#     - If URLs are relative, include them as-is.
-#     - Cap to the first 12 unique URLs per listing.
-#   • "other_images_source": if the listing includes a link to more photos (e.g., “View more photos”, "Click Here For Pictures", “Gallery”, Google Drive, Dropbox, MLS), return that single URL; otherwise null.
-# Output MUST strictly match the provided JSON schema.
-# """
 
 IMAGE_RULES_DEFAULT = """
 - For each listing, populate image fields:
@@ -630,19 +484,45 @@ def upsert_parsed_listings_from_html(
                 list_index=idx,  
             )
 
-            # q.update_one(
-            #     upsert=True,
-            #     set__source_email=source_email_doc,
-            #     set__address=addr,
-            #     set__city=city,
-            #     set__state=state,
-            #     set__zip=zip_,
-            #     set__price=price_val,
-            #     set__images=_clean_images(lst.get("images")),
-            #     set__other_images_source=(lst.get("other_images_source") or "").strip() or None,
-            #     set__complete_info=lst,
-            #     set_on_insert__status="not_processed",  # brand-new only
-            # )
+            # -------------------------------
+            # NEW: direct_wholeseller logic
+            # -------------------------------
+            direct_wholeseller_flag = "not_found"
+            dw_info = None
+            if sender:
+                # sender is already lowercased by _sender_email_safe
+                dw_info = DIRECT_WHOLESELLER_MAP.get(sender)
+
+            if dw_info and isinstance(dw_info, dict):
+                # Mark as not_processed for further handling elsewhere
+                direct_wholeseller_flag = "not_processed"
+
+                # Overwrite agent contact inside the listing blob (complete_info)
+                try:
+                    name = dw_info.get("name")
+                    phone = dw_info.get("phone")
+                    email = dw_info.get("email")
+                    updateFlagForPodio= dw_info.get("updateFlagForPodio")
+
+                    if name:
+                        lst["agent_name"] = name
+                    if phone is not None:
+                        # ensure string, but keep formatting flexible
+                        lst["agent_phone"] = str(phone)
+                    if email:
+                        lst["agent_email"] = email
+                    if updateFlagForPodio:
+                        # ensure string, but keep formatting flexible
+                        lst["updateFlagForPodio"] = updateFlagForPodio
+
+                    
+                except Exception as e:
+                    # If anything goes wrong, we log and keep the original listing intact
+                    logging.exception("Failed to apply direct_wholeseller override for sender %s: %s", sender, e)
+            # If no match, flag stays "not_found"
+
+
+    
             updates = {
                 "upsert": True,
                 "set__source_email": source_email_doc,
@@ -655,6 +535,7 @@ def upsert_parsed_listings_from_html(
                 "set__other_images_source": (lst.get("other_images_source") or "").strip() or None,
                 "set__complete_info": lst,
                 "set_on_insert__status": "not_processed",  # brand-new only
+                "set__direct_wholeseller": direct_wholeseller_flag,
             }
             if geo_js is not None:
                 updates["set__geo_code_response"] = geo_js
