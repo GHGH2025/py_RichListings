@@ -518,7 +518,19 @@ def extract_listings_from_email_html(email_html: str,
             return {"listings": [], "notes": [f"extraction_failed: {e}", f"fallback_failed: {e2}"]}
 
 
+def _normalize_city_for_google(city: str) -> str:
+    """
+    Replace any standalone 'bch' (any casing) with 'Beach'.
+    Examples:
+      'Pompano Bch'      -> 'Pompano Beach'
+      'POMPANO BCH'      -> 'POMPANO Beach'
+      'bch'              -> 'Beach'
+    """
+    if not city:
+        return city
 
+    # \b = word boundary, re.I = case-insensitive
+    return re.sub(r"\bbch\b", "Beach", city, flags=re.IGNORECASE)
 
 
 def _clean_images(arr):
@@ -593,7 +605,8 @@ def upsert_parsed_listings_from_html(
             # ✨ NEW: try to normalize with Google
             geo_js = None
             try:
-                raw_line = _compose_raw_for_google(addr, city, state, zip_)
+                norm_city = _normalize_city_for_google(city)
+                raw_line = _compose_raw_for_google(addr, norm_city, state, zip_)
                 if raw_line:
                     fa, fc = get_street_and_city(raw_line)  # returns (street, city) or (None, None)
                     if fa and fc:
