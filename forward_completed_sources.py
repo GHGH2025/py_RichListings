@@ -1,4 +1,7 @@
 # forward_completed_sources.py
+
+import os
+import json
 from datetime import datetime
 from typing import Dict, List, Optional
 from mongoengine.queryset.visitor import Q
@@ -16,6 +19,64 @@ from forwardInline import forward_inline_html  # wherever you put your function
 #     forward_error        = StringField()
 
 ALLOWED_FINALS = {"posted", "skipped"}
+
+# ------------ Direct Wholeseller config ------------
+DIRECT_WHOLESELLER_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "direct_wholeseller.json"
+)
+
+# email (lowercased) -> config dict
+DIRECT_WHOLESELLER_MAP: Dict[str, dict] = {}
+
+try:
+    with open(DIRECT_WHOLESELLER_PATH, "r", encoding="utf-8") as f:
+        raw = json.load(f) or {}
+        if isinstance(raw, dict):
+            # normalize keys to lowercase emails
+            DIRECT_WHOLESELLER_MAP = {
+                str(k).strip().lower(): (v or {})
+                for k, v in raw.items()
+            }
+        else:
+            print("Warning: direct_wholeseller.json root is not an object; ignoring.")
+except FileNotFoundError:
+    print("Info: direct_wholeseller.json not found; Ai Direct Wholesaler Finder labeling disabled.")
+except Exception as e:
+    print(f"Warning: could not load direct_wholeseller.json: {e}")
+
+
+def _get_sender_email(fe: FilteredListingEmail) -> Optional[str]:
+    """
+    Safely extract the sender email from fe.from_info.email (if present).
+    Returns lowercase email or None.
+    """
+    try:
+        from_info = getattr(fe, "from_info", None)
+        if not from_info:
+            return None
+        email = getattr(from_info, "email", None)
+        if not email:
+            return None
+        email = str(email).strip()
+        return email.lower() or None
+    except Exception:
+        return None
+
+
+def _is_direct_wholeseller_sender(from_email: Optional[str]) -> bool:
+    """
+    Check if this sender is configured as Direct Wholeseller with updateFlagForPodio == 'true'.
+    """
+    if not from_email:
+        return False
+    cfg = DIRECT_WHOLESELLER_MAP.get(from_email.strip().lower())
+    if not cfg or not isinstance(cfg, dict):
+        return False
+    flag = str(cfg.get("updateFlagForPodio", "")).strip().lower()
+    # JSON spec: 'true' is a string
+    return flag == "true"
+
 
 def _fmt_addr(pl: ParsedListing) -> str:
     # Build a single-line address; fall back to complete_info if needed
@@ -77,9 +138,16 @@ def _label_message(service, gmail_message_id: str, label_ids: List[str]) -> None
     ).execute()
 
 
-def _star_and_label_original(service, gmail_message_id: str, ai_label_id: Optional[str], keep_in_inbox: bool = True) -> None:
+def _star_and_label_original(
+    service,
+    gmail_message_id: str,
+    ai_label_id: Optional[str],
+    keep_in_inbox: bool = True,
+    extra_label_ids: Optional[List[str]] = None,  # NEW
+) -> None:
     """
-    Adds STARRED, optional INBOX, and AI_Agent to the original Gmail message.
+    Adds STARRED, optional INBOX, AI_Agent (or any main label),
+    and optional extra labels to the original Gmail message.
     """
     if not gmail_message_id:
         return
@@ -88,11 +156,35 @@ def _star_and_label_original(service, gmail_message_id: str, ai_label_id: Option
         add_labels.append("INBOX")
     if ai_label_id:
         add_labels.append(ai_label_id)
+    if extra_label_ids:
+        for lid in extra_label_ids:
+            if lid and lid not in add_labels:
+                add_labels.append(lid)
+
     service.users().messages().modify(
         userId="me",
         id=gmail_message_id,
         body={"addLabelIds": add_labels, "removeLabelIds": []},
     ).execute()
+
+
+
+# def _star_and_label_original(service, gmail_message_id: str, ai_label_id: Optional[str], keep_in_inbox: bool = True) -> None:
+#     """
+#     Adds STARRED, optional INBOX, and AI_Agent to the original Gmail message.
+#     """
+#     if not gmail_message_id:
+#         return
+#     add_labels = ["STARRED"]
+#     if keep_in_inbox:
+#         add_labels.append("INBOX")
+#     if ai_label_id:
+#         add_labels.append(ai_label_id)
+#     service.users().messages().modify(
+#         userId="me",
+#         id=gmail_message_id,
+#         body={"addLabelIds": add_labels, "removeLabelIds": []},
+#     ).execute()
 
 
 def _star_original_message(service, gmail_message_id: str, keep_in_inbox: bool = True) -> None:
@@ -141,6 +233,14 @@ def forward_completed_source_emails(
         # Choose the account's Gmail service
         service = service_by_account.get(fe.account_label)
 
+        # Determine if this email's sender is a Direct Wholeseller (from JSON config)
+        sender_email = _get_sender_email(fe)
+        is_direct_wholeseller = _is_direct_wholeseller_sender(sender_email)
+
+        direct_wholeseller_label_id: Optional[str] = None
+        if is_direct_wholeseller and service:
+            direct_wholeseller_label_id = _get_or_create_label(service, "AI Direct Wholesaler Finder")
+
         # Gather all parsed listings for this email
         listings: List[ParsedListing] = list(ParsedListing.objects(source_email=fe))
         if not listings:
@@ -167,14 +267,39 @@ def forward_completed_source_emails(
                 set__forward_error="no_posted_listings",
                 set__updated_at=datetime.utcnow(),
             )
+            # try:
+
+
+
+
+            #     no_deals_label_id = _get_or_create_label(service, "Ai No Deals Found")
+            #     _star_and_label_original(
+            #         service,
+            #         getattr(fe, "gmail_message_id", None),
+            #         no_deals_label_id,
+            #         keep_in_inbox=True  # keeps existing INBOX label; just appends the new one
+            #     )
+
+            #     # here add label here for direct wholeseller
+
+            # except Exception as lab_err:
+            #     print(f"Warning: could not label original {getattr(fe, 'gmail_message_id', None)}: {lab_err}")
+
             try:
                 no_deals_label_id = _get_or_create_label(service, "Ai No Deals Found")
+
+                extra_labels: List[str] = []
+                if direct_wholeseller_label_id:
+                    extra_labels.append(direct_wholeseller_label_id)
+
                 _star_and_label_original(
                     service,
                     getattr(fe, "gmail_message_id", None),
                     no_deals_label_id,
-                    keep_in_inbox=True  # keeps existing INBOX label; just appends the new one
+                    keep_in_inbox=True,  # keeps existing INBOX; just appends new ones
+                    extra_label_ids=extra_labels or None,
                 )
+
             except Exception as lab_err:
                 print(f"Warning: could not label original {getattr(fe, 'gmail_message_id', None)}: {lab_err}")
             skipped += 1
@@ -201,6 +326,9 @@ def forward_completed_source_emails(
         # Ensure AI_Agent label exists (or create)
         ai_label_id = _get_or_create_label(service, "AI_Agent")
 
+        # here add label here for direct wholeseller
+
+
         # Original subject + HTML body (prefer full HTML)
         subj = getattr(fe, "subject", "") or ""
         html = ""
@@ -226,22 +354,53 @@ def forward_completed_source_emails(
             )
             
             # ⭐ Star the original message and keep it in Inbox
+            # try:
+            #     # _star_original_message(service, getattr(fe, "gmail_message_id", None), keep_in_inbox=True)
+            #     _star_and_label_original(
+            #         service,
+            #         getattr(fe, "gmail_message_id", None),
+            #         ai_label_id,
+            #         keep_in_inbox=True
+            #     )
+            # except Exception as star_err:
+            #     # Non-fatal: log it but don't fail the forward flow
+            #     print(f"Warning: could not star original message {getattr(fe, 'gmail_message_id', None)}: {star_err}")
+
             try:
-                # _star_original_message(service, getattr(fe, "gmail_message_id", None), keep_in_inbox=True)
+                extra_labels: List[str] = []
+                if direct_wholeseller_label_id:
+                    extra_labels.append(direct_wholeseller_label_id)
+
                 _star_and_label_original(
                     service,
                     getattr(fe, "gmail_message_id", None),
                     ai_label_id,
-                    keep_in_inbox=True
+                    keep_in_inbox=True,
+                    extra_label_ids=extra_labels or None,
                 )
             except Exception as star_err:
                 # Non-fatal: log it but don't fail the forward flow
                 print(f"Warning: could not star original message {getattr(fe, 'gmail_message_id', None)}: {star_err}")
 
-            # Label the SENT/forwarded message with AI_Agent (if we got its id)
+
+            # # Label the SENT/forwarded message with AI_Agent (if we got its id)
+            # try:
+            #     if ai_label_id and sent_id:
+            #         _label_message(service, sent_id, [ai_label_id])
+            # except Exception as lab_err:
+            #     print(f"Warning: could not label sent message {sent_id}: {lab_err}")
+
+            # Label the SENT/forwarded message with AI_Agent and optionally Direct Wholeseller
             try:
-                if ai_label_id and sent_id:
-                    _label_message(service, sent_id, [ai_label_id])
+                if sent_id:
+                    labels_for_sent: List[str] = []
+                    if ai_label_id:
+                        labels_for_sent.append(ai_label_id)
+                    if direct_wholeseller_label_id:
+                        labels_for_sent.append(direct_wholeseller_label_id)
+
+                    if labels_for_sent:
+                        _label_message(service, sent_id, labels_for_sent)
             except Exception as lab_err:
                 print(f"Warning: could not label sent message {sent_id}: {lab_err}")
 
