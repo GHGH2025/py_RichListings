@@ -53,6 +53,8 @@ Treat as valid "property photos":
 - Exterior or interior photos of buildings on the property.
 - Ground-level photos of the land / parcel / lot (fields, plots, vacant land).
 - Aerial / drone / satellite-style images that clearly show the actual property/parcel (not just a generic area map).
+- Driveways, garages, carports, and **dedicated parking areas/parking bays/covered parking clearly associated with this property or its building**, even if the main building is not fully visible.
+
 
 What to SKIP:
 - Company logos, QR codes, headshots/people/selfies, agent cards, signatures.
@@ -77,7 +79,7 @@ Rules:
 - Prefer higher clarity, less obstruction, and good lighting.
 - If multiple similar shots exist, keep only the best one.
 - If no valid property images exist, keep none.
-- Only keep images that visually show the property land or structures; skip anything that is just text, paperwork, maps, or meta/reference material.
+- Only keep images that visually show the property land, structures, **or its dedicated parking/driveway/garage areas**; skip anything that is just text, paperwork, maps, or meta/reference material.
 - Return JSON ONLY in the schema requested—no extra text.
 """
 
