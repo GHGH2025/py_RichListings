@@ -60,14 +60,9 @@ def get_podio_access_token(force_refresh: bool = False) -> str:
         and _PODIO_ACCESS_TOKEN
         and now < _PODIO_ACCESS_TOKEN_EXPIRES_AT - 60
     ):
-        # logging.debug(
-        #     "Using cached Podio access token (expires_at=%s, now=%s)",
-        #     _PODIO_ACCESS_TOKEN_EXPIRES_AT,
-        #     now,
-        # )
+      
         return _PODIO_ACCESS_TOKEN
 
-    # logging.info("Requesting new Podio access token (force_refresh=%s)", force_refresh)
 
     if not all(
         [PODIO_CLIENT_ID, PODIO_CLIENT_SECRET, PODIO_USERNAME, PODIO_PASSWORD, PODIO_REDIRECT_URI]
@@ -85,7 +80,6 @@ def get_podio_access_token(force_refresh: bool = False) -> str:
         "redirect_uri": PODIO_REDIRECT_URI,
     }
 
-    # logging.debug("Podio auth URL: %s", auth_url)
 
     resp = requests.post(auth_url, json=payload, timeout=20)
 
@@ -104,7 +98,6 @@ def get_podio_access_token(force_refresh: bool = False) -> str:
     _PODIO_ACCESS_TOKEN = token
     _PODIO_ACCESS_TOKEN_EXPIRES_AT = now + expires_in
 
-    # logging.info("Obtained new Podio access token, expires in %s seconds", expires_in)
     return token
 
 
@@ -125,7 +118,6 @@ def _podio_request(
     - On 204 or empty body returns {} so callers can treat it as success
     """
     if token is None:
-        # logging.debug("No Podio token provided to _podio_request, obtaining one")
         token = get_podio_access_token()
 
     headers = kwargs.pop("headers", {})
@@ -133,47 +125,28 @@ def _podio_request(
     headers.setdefault("Content-Type", "application/json")
 
     url = f"{PODIO_BASE_URL}{path}"
-    # logging.debug(
-    #     "Making Podio request: %s %s (kwargs keys: %s)",
-    #     method,
-    #     path,
-    #     list(kwargs.keys()),
-    # )
+ 
 
     resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
 
-    # logging.debug(
-    #     "Podio response: %s %s -> status=%s, content_length=%s",
-    #     method,
-    #     path,
-    #     resp.status_code,
-    #     len(resp.text or ""),
-    # )
+
 
     if resp.status_code == 401 and retry_on_401:
         logging.warning("Podio 401 on %s %s, refreshing token and retrying once", method, path)
         token = get_podio_access_token(force_refresh=True)
         headers["Authorization"] = f"Bearer {token}"
         resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
-        # logging.debug(
-        #     "Podio retry response: %s %s -> status=%s",
-        #     method,
-        #     path,
-        #     resp.status_code,
-        # )
+    
 
     if not resp.ok:
-        # logging.error("Podio error %s %s: %s %s", method, path, resp.status_code, resp.text)
         return None
 
     # 204 or no content -> treat as success with empty payload
     if resp.status_code == 204 or not resp.text.strip():
-        # logging.debug("Podio %s %s returned no content (status=%s)", method, path, resp.status_code)
         return {}
 
     try:
         data = resp.json()
-        # logging.debug("Podio %s %s JSON decoded successfully", method, path)
         return data
     except ValueError:
         logging.warning("Podio %s %s returned non-JSON response", method, path)
@@ -250,12 +223,10 @@ def _search_app_for_items(
 
 
 def _get_item(token: str, item_id: int) -> Optional[Dict[str, Any]]:
-    # logging.debug("Fetching Podio item %s", item_id)
     data = _podio_request("GET", f"/item/{item_id}", token=token)
     if not isinstance(data, dict):
         logging.warning("Unexpected get item response for %s: %r", item_id, data)
         return None
-    # logging.debug("Fetched Podio item %s successfully", item_id)
     return data
 
 
@@ -265,12 +236,7 @@ def _find_field(
     field_id: Optional[int] = None,
     external_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    # logging.debug(
-    #     "Searching for field (field_id=%s, external_id=%s) in %d fields",
-    #     field_id,
-    #     external_id,
-    #     len(fields or []),
-    # )
+  
     for f in fields:
         if field_id is not None and f.get("field_id") == field_id:
             logging.debug("Matched field_id=%s", field_id)
@@ -278,7 +244,6 @@ def _find_field(
         if external_id is not None and f.get("external_id") == external_id:
             logging.debug("Matched external_id=%s", external_id)
             return f
-    # logging.debug("Field not found (field_id=%s, external_id=%s)", field_id, external_id)
     return None
 
 
@@ -289,18 +254,15 @@ def _get_property_status(item: Dict[str, Any]) -> Optional[str]:
     fields = item.get("fields") or []
     field = _find_field(fields, field_id=PROPERTY_STATUS_FIELD_ID, external_id="status")
     if not field:
-        # logging.debug("Status field not found on property item")
         return None
     values = field.get("values") or []
     if not values:
-        # logging.debug("Status field has no values")
         return None
     first_val = values[0].get("value") or {}
     if isinstance(first_val, dict):
         status_text = first_val.get("text")
         logging.debug("Property status extracted: %s", status_text)
         return status_text
-    # logging.debug("Status field had unexpected value structure")
     return None
 
 
@@ -311,19 +273,15 @@ def _get_wholeseller_reference_item_id(item: Dict[str, Any]) -> Optional[int]:
     fields = item.get("fields") or []
     field = _find_field(fields, field_id=WHOLESELLER_REF_FIELD_ID, external_id="wholeseller")
     if not field:
-        # logging.debug("Wholeseller reference field not found on property item")
         return None
     values = field.get("values") or []
     if not values:
-        # logging.debug("Wholeseller reference field has no values (no wholeseller set)")
         return None
     first_val = values[0].get("value") or {}
     if isinstance(first_val, dict):
         item_id = first_val.get("item_id")
         if isinstance(item_id, int):
-            # logging.debug("Existing Wholeseller reference item_id=%s", item_id)
             return item_id
-    # logging.debug("Wholeseller reference had unexpected value structure")
     return None
 
 
@@ -334,11 +292,9 @@ def _get_wholeseller_email_from_item(item: Dict[str, Any]) -> Optional[str]:
     fields = item.get("fields") or []
     field = _find_field(fields, field_id=WHOLESELLER_EMAIL_FIELD_ID, external_id="cash-buyer-emal")
     if not field:
-        # logging.debug("Wholeseller Email field not found on wholeseller item")
         return None
     values = field.get("values") or []
     if not values:
-        # logging.debug("Wholeseller Email field has no values")
         return None
     raw_value = values[0].get("value")
     if isinstance(raw_value, dict):
@@ -346,7 +302,6 @@ def _get_wholeseller_email_from_item(item: Dict[str, Any]) -> Optional[str]:
     else:
         email = raw_value
     if not isinstance(email, str):
-        # logging.debug("Wholeseller Email value is not a string: %r", raw_value)
         return None
     normalized = email.strip().lower()
     logging.debug("Wholeseller Email extracted: %s", normalized)
@@ -362,10 +317,8 @@ def find_wholeseller_item_by_email(token: str, email: str) -> Optional[int]:
     Search Wholesellers app by email, confirm via the Email field, and return the correct item_id.
     """
     if not email:
-        # logging.warning("find_wholeseller_item_by_email called with empty email")
         return None
     normalized = email.strip().lower()
-    # logging.info("Searching wholesalers app for email '%s'", normalized)
 
     candidate_ids = _search_app_for_items(
         WHOLESELLERS_APP_ID,
@@ -375,23 +328,13 @@ def find_wholeseller_item_by_email(token: str, email: str) -> Optional[int]:
         limit=10,
     )
 
-    # logging.info(
-    #     "Wholesellers search for '%s' returned candidate_ids=%s",
-    #     normalized,
-    #     candidate_ids,
-    # )
 
     for item_id in candidate_ids:
         item = _get_item(token, item_id)
         if not item:
             continue
         wh_email = _get_wholeseller_email_from_item(item)
-        # logging.debug(
-        #     "Checking wholeseller item %s with email '%s' against '%s'",
-        #     item_id,
-        #     wh_email,
-        #     normalized,
-        # )
+  
         if wh_email and wh_email == normalized:
             # logging.info("Matched wholeseller item %s for email '%s'", item_id, normalized)
             return item_id
@@ -856,17 +799,9 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
     update_flag_raw = str(complete.get("updateFlagForPodio", "")).strip().lower()
     allow_podio_update = (update_flag_raw == "true")
 
-    # logging.debug(
-    #     "Listing %s complete_info.agent_email='%s'",
-    #     listing.id,
-    #     agent_email,
-    # )
 
     if not agent_email:
-        # logging.warning(
-        #     "Listing %s has direct_wholeseller='not_processed' but no agent_email in complete_info; skipping",
-        #     listing.id,
-        # )
+   
         # Mark it so it won't be picked again in the batch query
         # Update only the flag, bypassing full document validation
         ParsedListing.objects(id=listing.id).update_one(
@@ -876,18 +811,20 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
 # revert after test
     property_item_id = search_properties_app_for_listing(token, listing)
     if not property_item_id:
-        # Keep direct_wholeseller as-is so it can be retried later
-        # logging.warning(
-        #     "Listing %s: no matching ACTIVE property item found in Podio; leaving as not_processed",
-        #     listing.id,
-        # )
+        # We tried to find a matching property but couldn't.
+        # Mark this as not_found so it doesn't block future batches.
+        ParsedListing.objects(id=listing.id).update_one(
+            set__FoundInPodioViaSearch="not_found",
+            set__direct_wholeseller="property_not_found",
+        )
+        logging.info(
+            "Listing %s: no matching property found in Podio; "
+            "marking direct_wholeseller='not_found'",
+            listing.id,
+        )
+ 
         return False
 
-    # logging.info(
-    #     "Listing %s matched to Podio property item %s",
-    #     listing.id,
-    #     property_item_id,
-    # )
 # revert after test
 
 # # comment after test
@@ -933,11 +870,7 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
 
     property_item = _get_item(token, property_item_id)
     if not property_item:
-        # logging.error(
-        #     "Listing %s: failed to fetch property item %s; aborting",
-        #     listing.id,
-        #     property_item_id,
-        # )
+  
         return False
 
     existing_wholeseller_item_id = _get_wholeseller_reference_item_id(property_item)
@@ -956,14 +889,6 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
         else:
             current_email = None
 
-        # logging.info(
-        #     "Listing %s property %s current wholeseller email='%s', target agent_email='%s'",
-        #     listing.id,
-        #     property_item_id,
-        #     current_email,
-        #     agent_email,
-        # )
-
         if current_email and current_email.lower() == agent_email:
             logging.info(
                 "Property %s already has correct Wholeseller (email %s); marking listing %s as processed",
@@ -972,25 +897,14 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
                 listing.id,
             )
             ParsedListing.objects(id=listing.id).update_one(
-        set__direct_wholeseller="processed"
-    )
+            set__direct_wholeseller="processed"
+            )
             return True
 
-        # logging.info(
-        #     "Property %s has Wholeseller email '%s', listing email is '%s'; will attempt reassignment",
-        #     property_item_id,
-        #     current_email,
-        #     agent_email,
-        # )
-
+        
     # Case 2: No wholeseller or mismatched -> find the right one by email
     target_wholeseller_item_id = find_wholeseller_item_by_email(token, agent_email)
-    # logging.debug(
-    #     "Listing %s: target_wholeseller_item_id resolved to %s",
-    #     listing.id,
-    #     target_wholeseller_item_id,
-    # )
-
+   
     if not target_wholeseller_item_id:
         # We couldn't find a matching wholeseller record; leave as 'not_processed'
         logging.warning(
@@ -999,7 +913,8 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
             agent_email,
         )
         ParsedListing.objects(id=listing.id).update_one(
-            set__direct_wholeseller="processed"
+            set__direct_wholeseller="wholeseller_not_found",
+            
         )
         return False
 
@@ -1028,10 +943,7 @@ def process_direct_wholeseller_batch(batch_limit: int = 3) -> None:
 
     Default batch_limit=3 (you can safely increase to 5 if desired).
     """
-    # logging.info(
-    #     "Starting process_direct_wholeseller_batch with batch_limit=%s",
-    #     batch_limit,
-    # )
+ 
 
     # Clamp to [1, 5] as per your "3-5 items" requirement
     limit = max(1, min(batch_limit, 5))
@@ -1060,12 +972,7 @@ def process_direct_wholeseller_batch(batch_limit: int = 3) -> None:
         try:
             logging.info("Beginning processing for listing %s", listing.id)
             success = process_single_listing_direct_wholeseller(listing, token)
-            # logging.info(
-            #     "Processed listing %s for direct_wholeseller: success=%s, new flag=%s",
-            #     listing.id,
-            #     success,
-            #     listing.direct_wholeseller,
-            # )
+           
         except Exception:
             logging.exception(
                 "Unexpected error while processing direct_wholeseller for listing %s",
