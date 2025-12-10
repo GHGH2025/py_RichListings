@@ -277,7 +277,7 @@ def process_wp_price_and_media_updates(limit: int = 200) -> Dict[str, Any]:
                         "address": wp_address,
                         "asking_price": str(int(parsed_price)) if float(parsed_price).is_integer()
                                        else str(float(parsed_price)),
-                        "newest_deals": ["Daily Deal Email"],
+                        "newest_deals": ["Daily Deal Email","Today's Deal"],
                         "token": WP_TOKEN,
                         "custom_title": f"<strong><span style='color: #ff6600;'>REDUCED!!</span> </strong> {wp_address}",
                     }

@@ -38,49 +38,94 @@ client = OpenAI()
 # - Return JSON ONLY in the schema requested—no extra text.
 # """
 
-CURATOR_SYSTEM_PROMPT =  """
-You are an expert real-estate photo curator.
+# CURATOR_SYSTEM_PROMPT =  """
+# You are an expert real-estate photo curator.
 
-You receive a set of image URLs for a single property listing. The property can be:
-- A built structure (house / condo / townhome / commercial, etc.), or
+# You receive a set of image URLs for a single property listing. The property can be:
+# - A built structure (house / condo / townhome / commercial, etc.), or
+# - Land-only / plots / farms / lots, including aerial/drone photos of the parcel.
+
+# Your job: return ONLY JSON describing:
+# - Which images are genuine photos of this property's land or built structures (interior/exterior, ground-level, or aerial/drone), in BEST viewing order.
+# - Which images should be skipped (not real property photos, not showing this property, or low value), with a brief reason.
+
+# Treat as valid "property photos":
+# - Exterior or interior photos of buildings on the property.
+# - Ground-level photos of the land / parcel / lot (fields, plots, vacant land).
+# - Aerial / drone / satellite-style images that clearly show the actual property/parcel (not just a generic area map).
+# - Driveways, garages, carports, and **dedicated parking areas/parking bays/covered parking clearly associated with this property or its building**, even if the main building is not fully visible.
+
+
+# What to SKIP (must NOT appear in "kept_ordered"):
+# - Company logos, QR codes, headshots/people/selfies, agent cards, signatures.
+# - Screenshots of text, watermarked ads/flyers, memes, heavy text tiles, price/terms graphics.
+# - **Any image that is primarily a marketing tile, flyer, banner, or logo, EVEN IF
+#   there is a property photo in the background. If the logo/text/branding covers a
+#   large part of the image or is the main focus, SKIP it and mark the reason as
+#   "logo/text tile".**   
+
+# Ordering for KEPT images (best-first):
+# 1) Clear main view of the property:
+#    - For built properties: front exterior / main elevation (daytime, unobstructed).
+#    - For land-only: the best wide view of the parcel (ground-level or aerial/drone).
+# 2) Other strong exterior views (front/side/back, additional angles, good aerial overviews of the parcel).
+# 3) High-value interiors (if buildings exist): kitchen, living/dining, primary bedroom, bathrooms.
+# 4) Other useful rooms/spaces or close-up land features (entrance, access road, notable features on the land).
+# 5) Backyard/patio/garage/driveway, additional land context views.
+# 6) Street/area/context shots if helpful and clearly related to the property.
+
+# Rules:
+# - Prefer higher clarity, less obstruction, and good lighting.
+# - If multiple similar shots exist, keep only the best one.
+# - If no valid property images exist, keep none.
+# - Only keep images that visually show the property land, structures, **or its dedicated parking/driveway/garage areas**; skip anything that is just text, paperwork, maps, or meta/reference material.
+# - Return JSON ONLY in the schema requested—no extra text.
+# """
+
+CURATOR_CLASSIFIER_PROMPT = """
+You are classifying ONE image for a real estate listing.
+
+The property can be:
+- A built structure (house / condo / townhome / commercial / mixed-use, etc.), or
 - Land-only / plots / farms / lots, including aerial/drone photos of the parcel.
 
-Your job: return ONLY JSON describing:
-- Which images are genuine photos of this property's land or built structures (interior/exterior, ground-level, or aerial/drone), in BEST viewing order.
-- Which images should be skipped (not real property photos, not showing this property, or low value), with a brief reason.
+Your job: decide if THIS SINGLE IMAGE is a valid PROPERTY PHOTO for this listing,
+or if it must be SKIPPED.
 
-Treat as valid "property photos":
+Treat as valid "property photos" (KEEP = true) when the image clearly shows:
 - Exterior or interior photos of buildings on the property.
 - Ground-level photos of the land / parcel / lot (fields, plots, vacant land).
-- Aerial / drone / satellite-style images that clearly show the actual property/parcel (not just a generic area map).
-- Driveways, garages, carports, and **dedicated parking areas/parking bays/covered parking clearly associated with this property or its building**, even if the main building is not fully visible.
+- Aerial / drone / satellite-style images that clearly show the actual property/parcel
+  (not just a generic area map or diagram).
+- Driveways, garages, carports, and dedicated parking areas/parking bays/covered parking
+  clearly associated with this property or its building, even if the main building is
+  not fully visible.
 
-
-What to SKIP:
-- Company logos, QR codes, headshots/people/selfies, agent cards, signatures.
+What to SKIP (KEEP = false; image must NOT be treated as a property photo):
+- Company logos, QR codes, headshots/people/selfies, agent cards, business cards, signatures.
 - Screenshots of text, watermarked ads/flyers, memes, heavy text tiles, price/terms graphics.
-- Website/app listing screenshots that only reference the listing (portal pages, app UIs, search results, etc.).
-- Generic maps (e.g., Google Maps with a pin), location diagrams, zoning diagrams, parcel drawings that are not actual photos.
+- Any image that is primarily a marketing tile, flyer, banner, or logo, EVEN IF there is
+  a property photo in the background. If the logo/text/branding covers a large part of
+  the image or is the main focus, SKIP it and use a reason like "logo", "text tile",
+  or "marketing banner".
+- Website/app listing screenshots (portal pages, app UIs, search results, etc.).
+- Generic maps (e.g., Google Maps with a pin), location diagrams, zoning diagrams,
+  parcel drawings that are not actual photos.
 - Floor plans, appraisal docs, spreadsheets, closing statements, or other documents.
-- Any image that does NOT directly show this property’s land or structures (e.g., unrelated stock photos, random interiors, other properties).
-- Duplicates or near-duplicates (keep the clearest one).
+- Any image that does NOT directly show this property's land or structures
+  (e.g., unrelated stock photos, random interiors, other properties).
 
-Ordering for KEPT images (best-first):
-1) Clear main view of the property:
-   - For built properties: front exterior / main elevation (daytime, unobstructed).
-   - For land-only: the best wide view of the parcel (ground-level or aerial/drone).
-2) Other strong exterior views (front/side/back, additional angles, good aerial overviews of the parcel).
-3) High-value interiors (if buildings exist): kitchen, living/dining, primary bedroom, bathrooms.
-4) Other useful rooms/spaces or close-up land features (entrance, access road, notable features on the land).
-5) Backyard/patio/garage/driveway, additional land context views.
-6) Street/area/context shots if helpful and clearly related to the property.
+IMPORTANT:
+- Only mark KEEP = true if the image is a genuine property photo as defined above.
+- If there is any doubt and the image looks like branding, a flyer, a text tile,
+  a document, a map, or a UI screenshot, SKIP it.
 
-Rules:
-- Prefer higher clarity, less obstruction, and good lighting.
-- If multiple similar shots exist, keep only the best one.
-- If no valid property images exist, keep none.
-- Only keep images that visually show the property land, structures, **or its dedicated parking/driveway/garage areas**; skip anything that is just text, paperwork, maps, or meta/reference material.
-- Return JSON ONLY in the schema requested—no extra text.
+Return ONLY JSON with this exact structure:
+{
+  "url": "<same URL as given>",
+  "keep": true or false,
+  "reason": "short reason like 'property exterior', 'kitchen', 'vacant land', 'logo', 'text tile', 'document', etc."
+}
 """
 
 
@@ -101,29 +146,164 @@ def _build_user_prompt(images: List[str]) -> str:
           "Do not include any keys other than the three above."
     )
 
-def _invoke_vision_model(image_urls: List[str]) -> Dict[str, Any]:
-    # Build a single multimodal message with all images; the model can reason across them.
-    print("image_urls",image_urls)
-    content: List[Dict[str, Any]] = [{"type": "text", "text": _build_user_prompt(image_urls)}]
+def classify_single_image(url: str) -> Dict[str, Any]:
+    content = [
+        {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
+        {"type": "text", "text": f"URL: {url}"},
+        {"type": "image_url", "image_url": {"url": url}},
+    ]
+
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL_VISION,
+        messages=[{"role": "user", "content": content}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+
+    raw = resp.choices[0].message.content
+    data = json.loads(raw)
+
+    # --- basic schema validation ---
+    # Ensure url is present and correct-ish
+    if "url" not in data or not isinstance(data["url"], str):
+        data["url"] = url
+
+    # Ensure keep is a proper bool; if not, force skip
+    keep_val = data.get("keep")
+    if not isinstance(keep_val, bool):
+        return {
+            "url": data["url"],
+            "keep": False,
+            "reason": f"invalid_keep_value: {keep_val!r}",
+        }
+
+    # Ensure reason is a string
+    if not isinstance(data.get("reason"), str):
+        data["reason"] = ""
+
+    return data
+
+
+def _filter_property_images(image_urls: List[str]):
+    kept_urls: List[str] = []
+    skipped: List[Dict[str, str]] = []
+
     for u in image_urls:
+        try:
+            result = classify_single_image(u)
+        except Exception as e:
+            # Any API / HTTP / invalid_image_url / JSON error ⇒ skip this image
+            skipped.append({
+                "url": u,
+                "reason": f"vision_error: {e}"
+            })
+            continue
+
+        if result.get("keep") is True:  # strictly True, not just truthy
+            kept_urls.append(result.get("url", u))
+        else:
+            skipped.append({
+                "url": result.get("url", u),
+                "reason": (result.get("reason") or "").strip()
+            })
+
+    return kept_urls, skipped
+
+CURATOR_ORDERING_PROMPT = """
+You will see ONLY valid property photos (no logos, no documents, no text tiles).
+Each image belongs to the same property listing.
+
+Order these images from BEST cover photo to least important, using this priority:
+
+1) Clear main view of the property:
+   - For built properties: front exterior / main elevation (daytime, unobstructed).
+   - For land-only: the best wide view of the parcel (ground-level or aerial/drone).
+2) Other strong exterior views (front/side/back, additional angles, good aerials).
+3) High-value interiors: kitchen, living/dining, primary bedroom, bathrooms.
+4) Other useful rooms/spaces or close-up land features.
+5) Backyard/patio/garage/driveway, additional land context views.
+6) Street/area/context shots if helpful and clearly related.
+
+Prefer:
+- Higher clarity, less obstruction, good lighting.
+- If multiple similar shots exist, put the best one earlier.
+
+Return ONLY JSON:
+{
+  "kept_ordered": ["url1", "url2", ...],
+  "primary": "url1"  // best image or null if none
+}
+Use ONLY URLs that I provide, do not invent new ones.
+"""
+
+
+
+def order_property_images(kept_urls: List[str]) -> Dict[str, Any]:
+    if not kept_urls:
+        return {"kept_ordered": [], "primary": None}
+
+    content = [{"type": "text", "text": CURATOR_ORDERING_PROMPT}]
+
+    for u in kept_urls:
+        content.append({"type": "text", "text": f"URL: {u}"})
         content.append({"type": "image_url", "image_url": {"url": u}})
 
     resp = client.chat.completions.create(
         model=OPENAI_MODEL_VISION,
-        messages=[
-            {"role": "system", "content": CURATOR_SYSTEM_PROMPT},
-            {"role": "user", "content": content},
-        ],
+        messages=[{"role": "user", "content": content}],
         temperature=0.2,
-        response_format=_response_format(),
+        response_format={"type": "json_object"},
     )
-    try:
-        print("resp.choices[0].message.content",resp.choices[0].message.content)
-        return json.loads(resp.choices[0].message.content)
-    except Exception:
-        print("Exception",Exception)
-        # Fallback: keep original order, skip nothing
-        return {"kept_ordered": image_urls, "skipped": [], "primary": image_urls[0] if image_urls else None}
+
+    return json.loads(resp.choices[0].message.content)
+
+def _invoke_vision_model(image_urls: List[str]) -> Dict[str, Any]:
+    # 1) Per-image classification (uses full valid+skip rules)
+    kept_raw, skipped = _filter_property_images(image_urls)
+
+    if not kept_raw:
+        return {
+            "kept_ordered": [],
+            "skipped": skipped,
+            "primary": None,
+        }
+
+    # 2) Ordering among valid property photos only
+    ordered = order_property_images(kept_raw)
+    kept_ordered = ordered.get("kept_ordered") or kept_raw
+    primary = ordered.get("primary") or (kept_ordered[0] if kept_ordered else None)
+
+    return {
+        "kept_ordered": kept_ordered,
+        "skipped": skipped,
+        "primary": primary,
+    }
+
+
+
+# def _invoke_vision_model(image_urls: List[str]) -> Dict[str, Any]:
+#     # Build a single multimodal message with all images; the model can reason across them.
+#     print("image_urls",image_urls)
+#     content: List[Dict[str, Any]] = [{"type": "text", "text": _build_user_prompt(image_urls)}]
+#     for u in image_urls:
+#         content.append({"type": "image_url", "image_url": {"url": u}})
+
+#     resp = client.chat.completions.create(
+#         model=OPENAI_MODEL_VISION,
+#         messages=[
+#             {"role": "system", "content": CURATOR_SYSTEM_PROMPT},
+#             {"role": "user", "content": content},
+#         ],
+#         temperature=0.2,
+#         response_format=_response_format(),
+#     )
+#     try:
+#         print("resp.choices[0].message.content",resp.choices[0].message.content)
+#         return json.loads(resp.choices[0].message.content)
+#     except Exception:
+#         print("Exception",Exception)
+#         # Fallback: keep original order, skip nothing
+#         return {"kept_ordered": image_urls, "skipped": [], "primary": image_urls[0] if image_urls else None}
 
 def _dedupe_preserve_order(urls: List[str]) -> List[str]:
     seen = set()
@@ -194,7 +374,7 @@ def process_listings_ready_for_image_processing(limit: int = 100) -> Dict[str, i
             print("Exception",e)
             pl.update(
                 set__rules_ai_reason=f"image_curation_failed: {e}",
-                set__status="ready_to_post",
+                set__status="image_curation_failed",
                 set__updated_at=now,
             )
             failed += 1

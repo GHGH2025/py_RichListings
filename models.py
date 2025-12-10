@@ -122,7 +122,7 @@ class ParsedListing(Document):
     )
 
     status            = StringField(
-        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","ready_for_image_processing"),
+        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","ready_for_image_processing","image_curation_failed"),
         default="not_processed"
     )
 
