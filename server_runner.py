@@ -23,7 +23,7 @@ from models import FilteredListingEmail, ParsedListing
 from podio_direct_wholeseller import process_direct_wholeseller_batch,initialize_direct_wholeseller_flag
 from whatsapp_keepalive import send_keepalive_template, parse_recipients_env
 
-from image_curation import process_listings_ready_for_image_processing
+from image_curation import process_listings_ready_for_image_processing, process_primary_image_verification
 
 import os
 from dotenv import load_dotenv
@@ -151,6 +151,11 @@ def run_select_passed_listings_for_post():
 def run_process_listings_ready_for_image_processing():
     logging.info("process_listings_ready_for_image_processing")
     process_listings_ready_for_image_processing(limit=5)
+
+@repeat(every(2).minutes)
+def run_process_primary_image_verification():
+    logging.info("process_primary_image_verification")
+    process_primary_image_verification(limit=5, model="gpt-5.1")
 
 
 @repeat(every(2).minutes)
