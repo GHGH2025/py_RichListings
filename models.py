@@ -161,8 +161,36 @@ class ParsedListing(Document):
     rules_ai_reason             = StringField()   # short reason when Skipped
     skipped_or_posted_at        = DateTimeField(null=True)
 
+     # NEW: flags for your new logic
+    over_35_percent = StringField(
+        choices=("found", "not_found")
+    )
+    do_not_post_city = StringField(
+        choices=("found", "not_found")
+    )
+
     created_at        = DateTimeField(default=datetime.utcnow)
     updated_at        = DateTimeField(default=datetime.utcnow)
 
     def touch(self):
         self.updated_at = datetime.utcnow()
+
+
+class DailyBaseCount(Document):
+    meta = {
+        "collection": "daily base count",  # as requested
+        "indexes": [
+            {
+                "fields": ["current_date"],
+                "unique": True,
+                "name": "uniq_daily_current_date"
+            },
+        ],
+    }
+
+    # Date bucket for the counts (we treat this as per-day, UTC)
+    current_date = DateTimeField(required=True)
+
+    # Rolling "base" count (non_rest listings) for that day
+    daily_base_count = IntField(required=True, default=0)
+
