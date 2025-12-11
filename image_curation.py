@@ -1,7 +1,7 @@
 # image_curation.py
 import json
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -12,6 +12,10 @@ from models import ParsedListing
 load_dotenv()
 OPENAI_MODEL_VISION = os.getenv("OPENAI_VISION_MODEL", "gpt-4.1-mini")
 client = OpenAI()
+
+MIDDLEWARE_STATUS_PRIMARY = "ready_for_primary_image_check"
+PRIMARY_FAIL_STATUS = "primary_image_failed"
+PRIMARY_PASS_STATUS = "ready_to_post"
 
 # CURATOR_SYSTEM_PROMPT = """You are an expert real-estate photo curator.
 # Given a set of image URLs for one property listing, return ONLY JSON describing:
@@ -146,6 +150,60 @@ def _build_user_prompt(images: List[str]) -> str:
           "Do not include any keys other than the three above."
     )
 
+def classify_primary_image(url: str, model: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Stricter re-check for the PRIMARY image (images[0]) of a listing.
+
+    Uses the same CURATOR_CLASSIFIER_PROMPT rules:
+    - keep=True only if it's clearly a property photo (exterior/interior/land/aerial)
+    - keep=False for logos, flyers, documents, maps, UI screenshots, etc.
+    """
+    content = [
+        {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
+        {"type": "text", "text": f"PRIMARY_CHECK_URL: {url}"},
+        {"type": "image_url", "image_url": {"url": url}},
+    ]
+
+    # Build kwargs so we can conditionally include temperature
+    kwargs = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "response_format": {"type": "json_object"},
+    }
+    # Only include temperature if model is NOT gpt-5-mini
+    if model != "gpt-5-mini":
+        kwargs["temperature"] = 0
+
+    # resp = client.chat.completions.create(
+    #     model=model,
+    #     messages=[{"role": "user", "content": content}],
+    #     temperature=0,
+    #     response_format={"type": "json_object"},
+    # )
+    resp = client.chat.completions.create(**kwargs)
+
+    raw = resp.choices[0].message.content
+    data = json.loads(raw)
+
+    # normalize output
+    if "url" not in data or not isinstance(data["url"], str):
+        data["url"] = url
+
+    keep_val = data.get("keep")
+    if not isinstance(keep_val, bool):
+        # force fail if the model gives something weird
+        return {
+            "url": data["url"],
+            "keep": False,
+            "reason": f"invalid_keep_value: {keep_val!r}",
+        }
+
+    if not isinstance(data.get("reason"), str):
+        data["reason"] = ""
+
+    return data
+
+
 def classify_single_image(url: str) -> Dict[str, Any]:
     content = [
         {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
@@ -257,6 +315,144 @@ def order_property_images(kept_urls: List[str]) -> Dict[str, Any]:
 
     return json.loads(resp.choices[0].message.content)
 
+def process_primary_image_verification(
+    limit: int = 100,
+    model: Optional[str] = None,
+) -> Dict[str, int]:
+    """
+    Middleware step between image curation and posting.
+
+    Flow:
+      - Pull listings with status == 'ready_for_primary_image_check'.
+      - For each listing:
+          * Take images[0] as the intended primary image.
+          * Run a stricter vision check via classify_primary_image().
+          * If keep=True => status -> 'ready_to_post'.
+          * If keep=False or any error => status -> 'primary_image_failed'.
+      - Store the full check result in 'primary_image_check' for debugging/audit.
+
+    Returns stats about how many passed/failed.
+    """
+    now = datetime.utcnow()
+
+    qs = ParsedListing.objects(status=MIDDLEWARE_STATUS_PRIMARY) \
+        .only("id", "images", "primary_image_check") \
+        .limit(limit)
+
+    total = checked = passed = failed = no_image = 0
+    errors: List[str] = []
+
+    primary_model = model
+    secondary_model = "gpt-5-mini"
+
+    for pl in qs:
+        total += 1
+
+        images = list(pl.images or [])
+        images = [u.strip() for u in images if isinstance(u, str) and u.strip()]
+
+        if not images:
+            # No primary image to verify – mark as failed & note reason
+            pl.update(
+                set__primary_image_check={
+                    "url": None,
+                    "keep": False,
+                    "reason": "no_images_available_for_primary_check",
+                },
+                set__status=PRIMARY_PASS_STATUS,
+                set__updated_at=now,
+            )
+            no_image += 1
+            failed += 1
+            continue
+
+        primary_url = images[0]
+        checked += 1
+
+
+        try:
+            # 1st pass: main model (gpt-5.1)
+            result_1 = classify_primary_image(primary_url, model=primary_model)
+            keep_1 = bool(result_1.get("keep", False))
+            reason_1 = (result_1.get("reason") or "").strip()
+
+            # 2nd pass: mini model (gpt-5-mini)
+            result_2 = classify_primary_image(primary_url, model=secondary_model)
+            keep_2 = bool(result_2.get("keep", False))
+            reason_2 = (result_2.get("reason") or "").strip()
+
+            both_keep = keep_1 and keep_2
+
+            if both_keep:
+                # Accept: move to ready_to_post
+                pl.update(
+                    set__primary_image_check={
+                        "url": primary_url,
+                        "keep": True,
+                        "reason": "both_models_keep_true",
+                        "model_primary": {
+                            "name": primary_model,
+                            "keep": keep_1,
+                            "reason": reason_1
+                        },
+                        "model_secondary": {
+                            "name": secondary_model,
+                            "keep": keep_2,
+                            "reason": reason_2
+                        },
+                    },
+                    set__status=PRIMARY_PASS_STATUS,
+                    set__updated_at=now,
+                )
+                passed += 1
+            else:
+                # Reject: at least one model said keep=False (or both)
+                pl.update(
+                    set__primary_image_check={
+                        "url": primary_url,
+                        "keep": False,
+                        "reason": "one_or_both_models_rejected",
+                        "model_primary": {
+                            "name": primary_model,
+                            "keep": keep_1,
+                            "reason": reason_1
+                        },
+                        "model_secondary": {
+                            "name": secondary_model,
+                            "keep": keep_2,
+                            "reason": reason_2
+                        },
+                    },
+                    set__status=PRIMARY_FAIL_STATUS,
+                    set__updated_at=now,
+                )
+                failed += 1
+
+        except Exception as e:
+            msg = f"{pl.id}: {type(e).__name__}: {e}"
+            errors.append(msg)
+            # Treat as failure but keep URL + reason for debugging
+            pl.update(
+                set__primary_image_check={
+                    "url": primary_url,
+                    "keep": False,
+                    "reason": f"primary_check_exception: {e}",
+                },
+                set__status=PRIMARY_FAIL_STATUS,
+                set__updated_at=now,
+            )
+            failed += 1
+
+    return {
+        "total": total,
+        "checked": checked,
+        "passed": passed,
+        "failed": failed,
+        "no_image": no_image,
+        "errors": errors[:20],
+    }
+
+
 def _invoke_vision_model(image_urls: List[str]) -> Dict[str, Any]:
     # 1) Per-image classification (uses full valid+skip rules)
     kept_raw, skipped = _filter_property_images(image_urls)
@@ -365,7 +561,7 @@ def process_listings_ready_for_image_processing(limit: int = 100) -> Dict[str, i
             pl.update(
                 set__images=kept,
                 set__skipped_images=norm_skipped,   # <-- new array to hold filtered out ones
-                set__status="ready_to_post",
+                set__status=MIDDLEWARE_STATUS_PRIMARY,
                 set__updated_at=now,
             )
             done += 1

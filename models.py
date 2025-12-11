@@ -155,6 +155,8 @@ class ParsedListing(Document):
         choices=("pending", "failed","sent")
     )
 
+    primary_image_check = DictField(null=True)
+
 
     rules_ai_rule_id            = StringField()   # e.g., "R3"
     rules_ai_version            = StringField()   # store YAML version as string (flexible)
