@@ -205,7 +205,7 @@ def process_whatsapp_queue(limit: int = 100, dm_sleep_range: Tuple[float, float]
     to_numbers = TEAM_NUMBERS if mode == "dm" else []
 
     qs = ParsedListing.objects(
-        Q(whatsapp_status__in=["pending"])
+        Q(whatsapp_status__in=["pending", "failed"])
     ).only("id", "post_content", "images", "whatsapp_status").limit(limit)
 
     total = sent = failed = 0
