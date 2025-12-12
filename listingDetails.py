@@ -6,7 +6,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from models import ParsedListing, FilteredListingEmail
 from ai_address_search_keys import update_parsed_listing_address_keys
-from google_formatter import get_street_and_city
+from google_formatter import get_street_and_city, geocode_response
 
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -467,7 +467,8 @@ def upsert_parsed_listings_from_html(
                         addr, city = fa, fc   # overwrite with formatted values
                     # geocode full result (non-blocking/fail-open)
                     geo_js = geocode_response(raw_line)
-            except Exception:
+            except Exception as e:
+                print(f"Exception in listing geo format: {e}")
                 # fail-open: keep original addr/city
                 pass
 
