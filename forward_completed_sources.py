@@ -662,31 +662,71 @@ def forward_completed_source_emails(
             skipped += 1
             continue
 
-        # Build preface text:
-        # - posted block (as before)
+        # # Build preface text:
+        # # - posted block (as before)
+        # # - skipped due to Over 35% block
+        # # - skipped due to Do Not Post City block
+        # lines: List[str] = []
+
+        # if posted:
+        #     lines.append(" >> ")
+        #     for pl in posted:
+        #         addr_line = _fmt_addr(pl)
+        #         lines.append(f"- {addr_line}")
+
+        # if skipped_over_35:
+        #     lines.append(">>(Skipped due to Non-Rest Quota Limit)")
+        #     for pl in skipped_over_35:
+        #         addr_line = _fmt_addr(pl)
+        #         lines.append(f"- {addr_line}")
+
+        # if skipped_do_not_post_city:
+        #     lines.append(">>(Skipped due to Do Not Post City rule)")
+        #     for pl in skipped_do_not_post_city:
+        #         addr_line = _fmt_addr(pl)
+        #         lines.append(f"- {addr_line}")
+
+        # preface_text = "\n".join(lines) if lines else ""
+
+
+        # Build preface text as HTML-friendly sections:
+        # - posted block
         # - skipped due to Over 35% block
         # - skipped due to Do Not Post City block
-        lines: List[str] = []
+        sections: List[str] = []
 
         if posted:
-            lines.append(" >> ")
+            block_lines: List[str] = []
+            # Header for posted listings
+            block_lines.append(">>")
             for pl in posted:
                 addr_line = _fmt_addr(pl)
-                lines.append(f"- {addr_line}")
+                block_lines.append(f"- {addr_line}")
+            # Join this block with <br> so it renders as separate lines
+            sections.append("<br>".join(block_lines))
 
         if skipped_over_35:
-            lines.append(">>(Skipped due to Non-Rest Quota Limit)")
+            block_lines = []
+            # Header for Non-Rest quota skipped listings
+            block_lines.append(">>(Skipped due to Non-Rest Quota Limit)")
             for pl in skipped_over_35:
                 addr_line = _fmt_addr(pl)
-                lines.append(f"- {addr_line}")
+                block_lines.append(f"- {addr_line}")
+            sections.append("<br>".join(block_lines))
 
         if skipped_do_not_post_city:
-            lines.append(">>(Skipped due to Do Not Post City rule)")
+            block_lines = []
+            # Header for Do Not Post City skipped listings
+            block_lines.append(">>(Skipped due to Do Not Post City rule)")
             for pl in skipped_do_not_post_city:
                 addr_line = _fmt_addr(pl)
-                lines.append(f"- {addr_line}")
+                block_lines.append(f"- {addr_line}")
+            sections.append("<br>".join(block_lines))
 
-        preface_text = "\n".join(lines) if lines else ""
+        # Blank line (double <br>) between sections
+        preface_text = "<br><br>".join(sections) if sections else ""
+
+
 
         if not service:
             fe.update(
