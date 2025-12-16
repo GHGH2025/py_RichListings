@@ -494,7 +494,7 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
         raise HTTPException(404, f"No messages for conversation {conv_id}")
     recent = last_k(thread, k=10)
 
-    print("recent========10 messages=======",recent)
+    # print("recent========10 messages=======",recent)
     dialog = as_ai_dialog(recent)
 
     last_time_iso = recent[-1].creation_time if recent else ""
@@ -544,7 +544,7 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
 
 
 
-    print("ai url====",url,"  street==", street,"  address==",addr)
+    # print("ai url====",url,"  street==", street,"  address==",addr)
 
     # Minimal gating: (street OR address_with_streetnum) AND url
     if not url:
@@ -590,7 +590,7 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     # 3) find WP listing
     wp_item, search_debug = resolve_wp_listing(street, addr)
 
-    print("wp_item=======",wp_item,"   search_debug======",search_debug)
+    # # print("wp_item=======",wp_item,"   search_debug======",search_debug)
     if not wp_item:
         _safe_log_run(
         conversation_id=conv_id, status="not_found_in_wp",
@@ -611,7 +611,7 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     picture_button_url = (wp_item.get("picture_button_url") or "").strip()
     posttitle = wp_item.get("posttitle")
 
-    print("wp_address====",wp_address,"  picture_button_url=====", picture_button_url,"  posttitle=====",posttitle)
+    # # # print("wp_address====",wp_address,"  picture_button_url=====", picture_button_url,"  posttitle=====",posttitle)
 
 
     # 4) if already has link → stop
@@ -634,10 +634,10 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     # 5) upload/normalize to Dropbox (folder from address if possible; else street or conversation id)
     folder_hint = wp_address or addr or (street or f"conv_{conv_id}")
 
-    print("folder_hint========",folder_hint)
+    # # print("folder_hint========",folder_hint)
     try:
         final_link = ensure_dropbox_link(url, folder_hint=folder_hint)
-        print("final_link========",final_link)
+        # # print("final_link========",final_link)
 
     except Exception as e:
         _safe_log_run(
@@ -675,12 +675,12 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     last_message_time_iso=last_time_iso,
     new_picture_button_url=final_link,
 )
-    print("final body to update WP========",body)
+    # # print("final body to update WP========",body)
 
     # return body
     post_id = wp_post_update(body)
 
-    print("post_id after wp post logic==========",post_id)
+    # # print("post_id after wp post logic==========",post_id)
     if not post_id:
         _safe_log_run(
     conversation_id=conv_id, status="wp_update_failed",  # <-- change this
