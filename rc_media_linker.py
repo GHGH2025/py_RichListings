@@ -10,6 +10,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from openai import OpenAI
 
+from models import RCMediaLinkLog  # NEW
+
 # at top of rc_media_linker.py imports
 from datetime import datetime, timedelta, timezone
 
@@ -423,6 +425,54 @@ def extract_latest_url_addr_pair(messages: List[RCMsg]) -> Optional[Tuple[int, s
     return latest
 
 
+# helpers for logging in mongo
+def _safe_log_run(
+    *,
+    conversation_id: str,
+    status: str,
+    reason: str = "",
+    error: str = "",
+    url: str = "",
+    street: str = "",
+    addr: str = "",
+    wp_item: Optional[Dict[str, Any]] = None,
+    ai_extract: Optional[Dict[str, Any]] = None,
+    search_debug: Optional[Dict[str, Any]] = None,
+    recent_dialog: Optional[List[Dict[str, str]]] = None,
+    message_count_considered: Optional[int] = None,
+    last_message_time_iso: Optional[str] = None,
+    new_picture_button_url: Optional[str] = None,
+) -> None:
+    """
+    Fire-and-forget log writer. Never raises.
+    """
+    try:
+        doc = RCMediaLinkLog(
+            conversation_id=conversation_id,
+            last_message_time_iso=last_message_time_iso,
+            message_count_considered=message_count_considered or 0,
+            selected_url=url or None,
+            selected_street_number=street or None,
+            selected_address=addr or None,
+            status=status,
+            reason=(reason or None),
+            error=(error or None),
+            ai_extract=ai_extract or None,
+            search_debug=search_debug or None,
+            recent_dialog=recent_dialog or None,
+        )
+        if wp_item:
+            doc.wp_post_id            = wp_item.get("post_id")
+            doc.wp_address            = (wp_item.get("address") or "").strip() or None
+            doc.wp_old_picture_button = (wp_item.get("picture_button_url") or "").strip() or None
+        if new_picture_button_url:
+            doc.wp_new_picture_button = new_picture_button_url
+        doc.save()  # don't re-raise on failure
+    except Exception as e:
+        # keep absolutely silent to avoid breaking the endpoint
+        print(f"[RCMediaLinkLog] save failed: {type(e).__name__}: {e}")
+ 
+
 # ---------- Endpoint ----------
 @router.post("/webhook/media-link")
 async def rc_media_linker(request: Request) -> Dict[str, Any]:
@@ -444,8 +494,11 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
         raise HTTPException(404, f"No messages for conversation {conv_id}")
     recent = last_k(thread, k=10)
 
-    print("recent========10 messages=======",recent)
+    # print("recent========10 messages=======",recent)
     dialog = as_ai_dialog(recent)
+
+    last_time_iso = recent[-1].creation_time if recent else ""
+
 
     # 2) AI extract
     extract = ai_extract(dialog)
@@ -491,10 +544,18 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
 
 
 
-    print("ai url====",url,"  street==", street,"  address==",addr)
+    # print("ai url====",url,"  street==", street,"  address==",addr)
 
     # Minimal gating: (street OR address_with_streetnum) AND url
     if not url:
+        _safe_log_run(
+        conversation_id=conv_id, status="no_action",
+        reason="No URL found by AI",
+        url=url, street=street, addr=addr,
+        ai_extract=extract, recent_dialog=dialog,
+        message_count_considered=len(recent),
+        last_message_time_iso=last_time_iso,
+    )
         return {
             "conversation_id": conv_id,
             "status": "no_action",
@@ -510,6 +571,14 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
             street = m.group(1)
 
     if not (street or addr):
+        _safe_log_run(
+        conversation_id=conv_id, status="no_action",
+        reason="No street number or address found",
+        url=url, street=street, addr=addr,
+        ai_extract=extract, recent_dialog=dialog,
+        message_count_considered=len(recent),
+        last_message_time_iso=last_time_iso,
+    )
         return {
             "conversation_id": conv_id,
             "status": "no_action",
@@ -521,8 +590,16 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     # 3) find WP listing
     wp_item, search_debug = resolve_wp_listing(street, addr)
 
-    print("wp_item=======",wp_item,"   search_debug======",search_debug)
+    # # print("wp_item=======",wp_item,"   search_debug======",search_debug)
     if not wp_item:
+        _safe_log_run(
+        conversation_id=conv_id, status="not_found_in_wp",
+        url=url, street=street, addr=addr,
+        ai_extract=extract, search_debug=search_debug,
+        recent_dialog=dialog,
+        message_count_considered=len(recent),
+        last_message_time_iso=last_time_iso,
+    )
         return {
             "conversation_id": conv_id,
             "status": "not_found_in_wp",
@@ -534,11 +611,19 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     picture_button_url = (wp_item.get("picture_button_url") or "").strip()
     posttitle = wp_item.get("posttitle")
 
-    print("wp_address====",wp_address,"  picture_button_url=====", picture_button_url,"  posttitle=====",posttitle)
+    # # # print("wp_address====",wp_address,"  picture_button_url=====", picture_button_url,"  posttitle=====",posttitle)
 
 
     # 4) if already has link → stop
     if picture_button_url:
+        _safe_log_run(
+        conversation_id=conv_id, status="already_has_picture_button_url",
+        url=url, street=street, addr=addr,
+        wp_item=wp_item, ai_extract=extract,
+        recent_dialog=dialog,
+        message_count_considered=len(recent),
+        last_message_time_iso=last_time_iso,
+    )
         return {
             "conversation_id": conv_id,
             "status": "already_has_picture_button_url",
@@ -549,12 +634,22 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     # 5) upload/normalize to Dropbox (folder from address if possible; else street or conversation id)
     folder_hint = wp_address or addr or (street or f"conv_{conv_id}")
 
-    print("folder_hint========",folder_hint)
+    # # print("folder_hint========",folder_hint)
     try:
         final_link = ensure_dropbox_link(url, folder_hint=folder_hint)
-        print("final_link========",final_link)
+        # # print("final_link========",final_link)
 
     except Exception as e:
+        _safe_log_run(
+        conversation_id=conv_id, status="dropbox_error",
+        reason="Dropbox processing failed",
+        error=f"{type(e).__name__}: {e}",
+        url=url, street=street, addr=addr,
+        wp_item=wp_item, ai_extract=extract,
+        recent_dialog=dialog,
+        message_count_considered=len(recent),
+        last_message_time_iso=last_time_iso,
+    )
         return {
             "conversation_id": conv_id,
             "status": "dropbox_error",
@@ -570,13 +665,33 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
         "token": WP_TOKEN,
         "picture_button_url": final_link,
     }
-    print("final body to update WP========",body)
+
+    _safe_log_run(
+    conversation_id=conv_id, status="prepared_update",
+    url=url, street=street, addr=addr,
+    wp_item=wp_item, ai_extract=extract,
+    recent_dialog=dialog,
+    message_count_considered=len(recent),
+    last_message_time_iso=last_time_iso,
+    new_picture_button_url=final_link,
+)
+    # # print("final body to update WP========",body)
 
     # return body
     post_id = wp_post_update(body)
 
-    print("post_id after wp post logic==========",post_id)
+    # # print("post_id after wp post logic==========",post_id)
     if not post_id:
+        _safe_log_run(
+    conversation_id=conv_id, status="wp_update_failed",  # <-- change this
+    url=url, street=street, addr=addr,
+    wp_item={**wp_item, "post_id": post_id},  # record the new/confirmed id
+    ai_extract=extract,
+    recent_dialog=dialog,
+    message_count_considered=len(recent),
+    last_message_time_iso=last_time_iso,
+    new_picture_button_url=final_link,
+)
         return {
             "conversation_id": conv_id,
             "status": "wp_update_failed",
@@ -584,6 +699,17 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
             "wp_item": {"post_id": wp_item.get("post_id"), "address": wp_address},
             "attempted_body": body,
         }
+
+    _safe_log_run(
+    conversation_id=conv_id, status="updated",
+    url=url, street=street, addr=addr,
+    wp_item={**wp_item, "post_id": post_id},  # record the new/confirmed id
+    ai_extract=extract,
+    recent_dialog=dialog,
+    message_count_considered=len(recent),
+    last_message_time_iso=last_time_iso,
+    new_picture_button_url=final_link,
+)
 
     return {
         "conversation_id": conv_id,
