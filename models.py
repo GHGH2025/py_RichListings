@@ -194,3 +194,61 @@ class DailyBaseCount(Document):
     # Rolling "base" count (non_rest listings) for that day
     daily_base_count = IntField(required=True, default=0)
 
+
+
+
+
+
+
+# models.py (append at the bottom)
+
+from mongoengine import (
+    Document, StringField, IntField, DateTimeField, DictField, ListField, BooleanField
+)
+from datetime import datetime
+
+class RCMediaLinkLog(Document):
+    meta = {
+        "collection": "rc_media_link_logs",
+        "indexes": [
+            {"fields": ["conversation_id", "-created_at"], "name": "conv_time_idx"},
+            {"fields": ["status"], "name": "status_idx"},
+            {"fields": ["wp_post_id"], "name": "wp_post_idx"},
+        ]
+    }
+
+    # What conversation / when
+    conversation_id         = StringField(required=True)
+    last_message_time_iso   = StringField()      # keep as string to avoid tz parsing gotchas
+    message_count_considered= IntField()         # e.g., 10
+
+    # What we extracted/used
+    selected_url            = StringField()
+    selected_street_number  = StringField()
+    selected_address        = StringField()
+
+    # What we targeted in WP
+    wp_post_id              = IntField(null=True)
+    wp_address              = StringField()
+    wp_old_picture_button   = StringField()
+    wp_new_picture_button   = StringField()
+
+    # Outcome
+    status                  = StringField(choices=(
+        "updated",                      # WP update succeeded
+        "prepared_update",              # built update body (you currently return the body)
+        "already_has_picture_button_url",
+        "not_found_in_wp",
+        "no_action",
+        "dropbox_error",
+        "wp_update_failed",
+    ), required=True)
+    reason                  = StringField()      # human-readable reason or short note
+    error                   = StringField()      # exception text if any
+
+    # Debug blobs
+    ai_extract              = DictField()
+    search_debug            = DictField()
+    recent_dialog           = ListField(DictField())  # [{speaker, text}], sanitized
+
+    created_at              = DateTimeField(default=datetime.utcnow)
