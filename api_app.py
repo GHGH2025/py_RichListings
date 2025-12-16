@@ -5,14 +5,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Literal
 
-from config_runtime import (
-    set_whatsapp_send_mode,
-    get_whatsapp_send_mode,
-)
-# START_TIME is exposed via env so both runners share a consistent uptime
+from rc_media_linker import router as rc_media_router
+from config_runtime import set_whatsapp_send_mode, get_whatsapp_send_mode
+
 START_TIME = float(os.getenv("APP_START_TIME", str(time.time())))
 
 app = FastAPI(title="Worker API", version="1.0.0")
+app.include_router(rc_media_router)
 
 class ModePayload(BaseModel):
     mode: Literal["dm", "group"]
@@ -24,7 +23,6 @@ def server_status():
         "uptime_seconds": int(time.time() - START_TIME),
         "whatsapp_send_mode": get_whatsapp_send_mode(),
     }
-
 
 @app.post("/config/whatsapp-mode")
 def set_mode(payload: ModePayload):
