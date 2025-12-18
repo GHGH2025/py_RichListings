@@ -356,7 +356,7 @@ def extract_listings_from_email_html(email_html: str,
             chat = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT + "\nYou must output valid JSON only."},
+                    {"role": "system", "content": system_prompt + "\nYou must output valid JSON only."},
                     {"role": "user", "content": _USER_INSTRUCTIONS_TEMPLATE.format(email_html=compact_html)}
                 ],
                 temperature=temperature,
