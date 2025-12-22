@@ -196,7 +196,41 @@ class DailyBaseCount(Document):
     # Rolling "base" count (non_rest listings) for that day
     daily_base_count = IntField(required=True, default=0)
 
+class SpecialAvail(Document):
+    meta = {
+        "collection": "special_avail",  # name of the Mongo collection
+        "indexes": [
+            {"fields": ["wholesaler_name", "range_start", "range_end"], "unique": True}
+        ],
+    }
 
+    wholesaler_name = StringField(required=True)  # e.g. "Johnathan"
+    range_start     = DateTimeField(required=True)  # start of UTC range (yesterday 00:00)
+    range_end       = DateTimeField(required=True)  # end of UTC range (today 00:00)
+
+    # This will store the "unique_items" array from your function:
+    # [
+    #   {
+    #     "address": "...",
+    #     "city": "...",
+    #     "state": "...",
+    #     "zip": "...",
+    #     "parsed_listing_ids": [...]
+    #   }, ...
+    # ]
+    items           = ListField(DictField(), default=list)
+
+    active_listings = ListField(DictField(), default=list)
+
+    # workflow status for this snapshot
+    status          = StringField(default="new")  # "new", "processed", etc.
+
+    created_at      = DateTimeField(default=datetime.utcnow)
+    updated_at      = DateTimeField(default=datetime.utcnow)
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.utcnow()
+        return super().save(*args, **kwargs)
 
 
 

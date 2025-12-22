@@ -19,12 +19,12 @@ from gmail_hourly_multi import build_service_by_account
 from forward_completed_sources import forward_completed_source_emails
 from whatsapp_sender import process_whatsapp_queue
 from mongo_engine_conn import init_db
-from models import FilteredListingEmail, ParsedListing
+from models import FilteredListingEmail, ParsedListing, SpecialAvail
 from podio_direct_wholeseller import process_direct_wholeseller_batch,initialize_direct_wholeseller_flag
 from whatsapp_keepalive import send_keepalive_template, parse_recipients_env
 
 from image_curation import process_listings_ready_for_image_processing, process_primary_image_verification
-
+from special_avails import process_one_special_avail_with_active_listings,process_one_special_avail_matching
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -203,6 +203,18 @@ def run_forward_email():
         to_addr=TO,
         limit=10,
     )
+
+@repeat(every(3).minutes)
+def run_process_one_special_avail_with_active_listings():
+    logging.info("run_process_one_special_avail_with_active_listings")
+    # default 3; you can change to 5 if you want to push harder:
+    process_one_special_avail_with_active_listings()
+
+@repeat(every(5).minutes)
+def run_process_one_special_avail_matching():
+    logging.info("run_process_one_special_avail_matching")
+    # default 3; you can change to 5 if you want to push harder:
+    process_one_special_avail_matching()
 
 # @repeat(every(15).hours)
 # def run_whatsapp_keepalive():
