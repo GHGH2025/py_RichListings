@@ -10,7 +10,7 @@ from mongoengine.queryset.visitor import Q
 from mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing, SpecialAvail
 
-
+from zoneinfo import ZoneInfo 
 import requests
 import re
 from podio_direct_wholeseller import get_podio_access_token  # <-- make sure this import path is correct
@@ -61,15 +61,21 @@ DEFAULT_WHOLESALER_BUCKET: Dict[str, List[str]] = {
     "Johnathan": [
         "info-jefinancialholdings.com@shared1.ccsend.com",
     ],
-    # "David": [
-    #     "david@theligongroup.com",
-    # ],
+    "David": [
+        "david@theligongroup.com",
+    ],
+    "Willy":["sales-islandlivingrealty.com@shared1.ccsend.com"],
+    "Craig":["craig@nowhomebuyers.com"],
+    "John":["john@wholesalejax.com"]
 }
 
 DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
     # "sender_email": [podio_item_id_1, podio_item_id_2, ...]
     "Johnathan": [857496733, 778054254],
-    # "David":[816254022]
+    "David":[816254022],
+    "Willy":[618782696],
+    "Craig":[618782689],
+    "John":[2119852479,2088424136]
     # "another@sender.com": [111111111, 222222222],
 }
 
@@ -280,17 +286,67 @@ def _load_wholesaler_bucket() -> Dict[str, List[int]]:
 # -----------------------
 # DATE RANGE (YESTERDAY UTC)
 # -----------------------
+# def _yesterday_range_utc() -> Tuple[datetime, datetime]:
+#     """
+#     Returns [start, end) for yesterday in UTC, as naive datetimes:
+#       start = yesterday 00:00:00 UTC
+#       end   = today     00:00:00 UTC
+#     """
+#     now = datetime.utcnow()
+#     today_00 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+#     start = today_00 - timedelta(days=4)
+#     end = today_00
+#     return start, end
+
 def _yesterday_range_utc() -> Tuple[datetime, datetime]:
     """
-    Returns [start, end) for yesterday in UTC, as naive datetimes:
-      start = yesterday 00:00:00 UTC
-      end   = today     00:00:00 UTC
+    Returns [start, end) for **yesterday in America/New_York**, converted to UTC.
+
+    Example:
+      If now in EST is 2025-12-23 00:15,
+      this returns the UTC equivalents of:
+        start = 2025-12-22 00:00:00 EST
+        end   = 2025-12-23 00:00:00 EST
+
+    Both returned datetimes are naive UTC (tzinfo=None), ready for Mongo queries.
     """
-    now = datetime.utcnow()
-    today_00 = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    start = today_00 - timedelta(days=4)
-    end = today_00
-    return start, end
+    est = ZoneInfo("America/New_York")
+
+    # Current time in EST/EDT
+    now_est = datetime.now(est)
+
+    # EST "today" and "yesterday" dates
+    today_est = now_est.date()
+    yesterday_est = today_est - timedelta(days=1)
+
+    # Midnight boundaries in EST
+    start_est = datetime(
+        year=yesterday_est.year,
+        month=yesterday_est.month,
+        day=yesterday_est.day,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+        tzinfo=est,
+    )
+    end_est = datetime(
+        year=today_est.year,
+        month=today_est.month,
+        day=today_est.day,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+        tzinfo=est,
+    )
+
+    # Convert to UTC
+    start_utc = start_est.astimezone(timezone.utc)
+    end_utc = end_est.astimezone(timezone.utc)
+
+    # Return as naive UTC datetimes (what you were using before)
+    return start_utc.replace(tzinfo=None), end_utc.replace(tzinfo=None)
 
 
 def _sender_email_q(sender_emails: List[str]) -> Q:
