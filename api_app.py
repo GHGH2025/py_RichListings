@@ -69,6 +69,9 @@ app = FastAPI(title="Worker API", version="1.0.0")
 ALLOWED_ORIGINS = [
     "http://localhost:5173",  # Vite
     "http://localhost:3000",  # CRA
+    # ✅ Live (add these)
+    "http://100.51.131.116",
+    "https://100.51.131.116",     # include only if you serve https on the IP (safe to keep)
 ]
 
 app.add_middleware(
