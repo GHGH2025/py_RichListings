@@ -19,13 +19,18 @@ from gmail_hourly_multi import build_service_by_account
 from forward_completed_sources import forward_completed_source_emails
 from whatsapp_sender import process_whatsapp_queue
 from mongo_engine_conn import init_db
-from models import FilteredListingEmail, ParsedListing
+from models import FilteredListingEmail, ParsedListing, SpecialAvail
 from podio_direct_wholeseller import process_direct_wholeseller_batch,initialize_direct_wholeseller_flag
 from whatsapp_keepalive import send_keepalive_template, parse_recipients_env
 
-from image_curation import process_listings_ready_for_image_processing
+from image_curation import process_listings_ready_for_image_processing, process_primary_image_verification
+from special_avails import process_one_special_avail_with_active_listings,process_one_special_avail_matching
+from models import WebFormBuyerSubmission
+from buyer_matching_api import process_pending_buyer_matching_batch
 
 import os
+
+
 from dotenv import load_dotenv
 load_dotenv()
 import json
@@ -40,7 +45,7 @@ import uvicorn  # NEW: FastAPI server
 
 START_TIME = time.time()  # for uptime calculation
 os.environ["APP_START_TIME"] = str(START_TIME)  # used by api_app for consistent uptime
-
+BUYER_MATCHING_CRON_MINUTES = int(os.getenv("BUYER_MATCHING_CRON_MINUTES", "3"))
 
 # class StatusHandler(BaseHTTPRequestHandler):
 #     def do_GET(self):
@@ -152,6 +157,11 @@ def run_process_listings_ready_for_image_processing():
     logging.info("process_listings_ready_for_image_processing")
     process_listings_ready_for_image_processing(limit=5)
 
+@repeat(every(2).minutes)
+def run_process_primary_image_verification():
+    logging.info("process_primary_image_verification")
+    process_primary_image_verification(limit=5, model="gpt-5.1")
+
 
 @repeat(every(2).minutes)
 def run_make_whatsapp_posts_from_ready_to_post():
@@ -199,6 +209,27 @@ def run_forward_email():
         limit=10,
     )
 
+@repeat(every(3).minutes)
+def run_process_one_special_avail_with_active_listings():
+    logging.info("run_process_one_special_avail_with_active_listings")
+    # default 3; you can change to 5 if you want to push harder:
+    process_one_special_avail_with_active_listings()
+
+@repeat(every(5).minutes)
+def run_process_one_special_avail_matching():
+    logging.info("run_process_one_special_avail_matching")
+    # default 3; you can change to 5 if you want to push harder:
+    process_one_special_avail_matching()
+
+@repeat(every(BUYER_MATCHING_CRON_MINUTES).minutes)
+def run_buyer_matching_cron():
+    logging.info("run_buyer_matching_cron: start")
+    try:
+        result = process_pending_buyer_matching_batch()
+        logging.info("run_buyer_matching_cron: result=%s", result)
+    except Exception:
+        logging.exception("run_buyer_matching_cron: crashed")
+
 # @repeat(every(15).hours)
 # def run_whatsapp_keepalive():
 #     logging.info("run_whatsapp_keepalive")
@@ -229,6 +260,8 @@ if __name__ == "__main__":
     try:
         FilteredListingEmail.ensure_indexes()
         ParsedListing.ensure_indexes()
+        WebFormBuyerSubmission.ensure_indexes()
+
         # gmail_fetch_all()
     except Exception:
         logging.exception("ensure_indexes failed")

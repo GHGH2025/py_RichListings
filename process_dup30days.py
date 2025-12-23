@@ -7,7 +7,7 @@ from mongoengine.queryset.visitor import Q
 from models import ParsedListing
 
 NEXT_STATUS_ON_PASS = "processed"                 # what to set on pass
-HISTORICAL_STATUSES = ("skipped", "posted", "ready_to_post", "passed","processed","ready_for_image_processing")
+HISTORICAL_STATUSES = ("skipped", "posted", "ready_to_post", "passed","processed","ready_for_image_processing","ready_for_primary_image_check")
 PRICE_DROP_THRESHOLD = 0.06                       # 6%
 
 

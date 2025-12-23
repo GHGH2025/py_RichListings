@@ -59,6 +59,7 @@ from rc_media_linker import router as rc_media_router
 from config_runtime import set_whatsapp_send_mode, get_whatsapp_send_mode
 from buyer_submissions_api import router as buyer_submissions_router
 from buyer_matching_api import router as buyer_matching_router
+from special_avails import snapshot_yesterday_special_avail
 
 START_TIME = float(os.getenv("APP_START_TIME", str(time.time())))
 
@@ -104,4 +105,21 @@ def set_mode(payload: ModePayload):
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tasks/snapshot-yesterday-special-avail")
+def run_snapshot_yesterday_special_avail():
+    """
+    Manually trigger snapshot_yesterday_special_avail().
+    Returns whatever that function returns, wrapped in {"ok": True, "result": ...}
+    """
+    try:
+        result = snapshot_yesterday_special_avail()
+        return {
+            "ok": True,
+            "result": result,
+        }
+    except Exception as e:
+        # You can also log here if you want
         raise HTTPException(status_code=500, detail=str(e))
