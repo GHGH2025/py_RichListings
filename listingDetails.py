@@ -6,7 +6,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from models import ParsedListing, FilteredListingEmail
 from ai_address_search_keys import update_parsed_listing_address_keys
-from google_formatter import get_street_and_city
+from google_formatter import get_street_and_city, geocode_response
 
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -356,7 +356,7 @@ def extract_listings_from_email_html(email_html: str,
             chat = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT + "\nYou must output valid JSON only."},
+                    {"role": "system", "content": system_prompt + "\nYou must output valid JSON only."},
                     {"role": "user", "content": _USER_INSTRUCTIONS_TEMPLATE.format(email_html=compact_html)}
                 ],
                 temperature=temperature,
@@ -449,8 +449,16 @@ def upsert_parsed_listings_from_html(
 
     for idx, lst in enumerate(listings, start=1):  # 1..N within this email
         # honor slice by original position, so list_index stays stable for this email
-        if not (start_i <= idx <= end_i):
-            continue 
+        # if not (start_i <= idx <= end_i):
+        #     continue 
+        if list_slice:
+            if start_i <= idx <= end_i:
+                status_for_insert = "not_processed"
+            else:
+                status_for_insert = "bypassed"
+        else:
+            # old behavior: everything is not_processed
+            status_for_insert = "not_processed"
         try:
             addr  = (lst.get("address") or "").strip()
             city  = (lst.get("city") or "").strip()
@@ -467,7 +475,8 @@ def upsert_parsed_listings_from_html(
                         addr, city = fa, fc   # overwrite with formatted values
                     # geocode full result (non-blocking/fail-open)
                     geo_js = geocode_response(raw_line)
-            except Exception:
+            except Exception as e:
+                print(f"Exception in listing geo format: {e}")
                 # fail-open: keep original addr/city
                 pass
 
@@ -495,7 +504,11 @@ def upsert_parsed_listings_from_html(
 
             if dw_info and isinstance(dw_info, dict):
                 # Mark as not_processed for further handling elsewhere
-                direct_wholeseller_flag = "not_processed"
+                # direct_wholeseller_flag = "not_processed"
+                if status_for_insert == "not_processed":
+                    direct_wholeseller_flag = "not_processed"
+                else:
+                    direct_wholeseller_flag = "bypassed"
 
                 # Overwrite agent contact inside the listing blob (complete_info)
                 try:
@@ -534,7 +547,7 @@ def upsert_parsed_listings_from_html(
                 "set__images": _clean_images(lst.get("images")),
                 "set__other_images_source": (lst.get("other_images_source") or "").strip() or None,
                 "set__complete_info": lst,
-                "set_on_insert__status": "not_processed",  # brand-new only
+                "set_on_insert__status": status_for_insert,  # brand-new only
                 "set__direct_wholeseller": direct_wholeseller_flag,
             }
             if geo_js is not None:

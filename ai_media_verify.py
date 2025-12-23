@@ -219,7 +219,7 @@ What to do:
 - Scan the listing and use the provided ADDRESS (street + city [+ state/zip may appear]) to locate the exact section for that listing.
 - From that section:
   • Collect direct image URLs(http/https) that depict the property, might present under image tag, extract exact urls.
-  • If there is a single "more pictures", "click here for more pictures" / "view photos" / "gallery" / shared drive link, return it as other_images_source. If multiple, pick the best main gallery.
+  • If there is a single "more pictures", "click here for more pictures" / "view photos" / "gallery" / shared drive link, return it as other_images_source VERBATIM (exact URL as it appears in the content). If multiple, pick the best main gallery.
 - Ignore unsubscribe, logos, social icons, QR-code tracking, signatures, or generic banners.
 - If nothing is found, return matched=false with empty images and other_images_source=null.
 Rules:
