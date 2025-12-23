@@ -66,7 +66,9 @@ DEFAULT_WHOLESALER_BUCKET: Dict[str, List[str]] = {
     ],
     "Willy":["sales-islandlivingrealty.com@shared1.ccsend.com"],
     "Craig":["craig@nowhomebuyers.com"],
-    "John":["john@wholesalejax.com"]
+    "John":["john@wholesalejax.com"],
+    "JC":["jc-quickturnproperties.com@shared1.ccsend.com","jc@stellarholdingsllc.ccsend.com"],
+    "Todd":["tsims-southfloridacashhomebuyers.com@shared1.ccsend.com","kevin-titlerate.com@shared1.ccsend.com"]
 }
 
 DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
@@ -75,7 +77,9 @@ DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
     "David":[816254022],
     "Willy":[618782696],
     "Craig":[618782689],
-    "John":[2119852479,2088424136]
+    "John":[2119852479,2088424136],
+    "JC":[2084646293,1802627987],
+    "Todd":[618782750]
     # "another@sender.com": [111111111, 222222222],
 }
 
@@ -855,6 +859,10 @@ def snapshot_yesterday_special_avail() -> Dict[str, Any]:
 
     for wh_name, wh_data in wholesalers.items():
         unique_items = wh_data.get("unique_items") or []
+
+        # ✅ Skip wholesalers with no unique items
+        if not unique_items:
+            continue
 
         # Normalize wholesaler name (we store as-is, not lowercased)
         name_str = str(wh_name).strip()

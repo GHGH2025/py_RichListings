@@ -114,7 +114,7 @@ class ParsedListing(Document):
 
     # NEW: direct_wholeseller flag
     direct_wholeseller = StringField(
-        choices=("property_not_found","not_found", "not_processed", "processed", "no_agent_email","wholeseller_not_found")
+        choices=("property_not_found","not_found", "not_processed", "processed", "no_agent_email","wholeseller_not_found","bypassed")
     )
 
     FoundInPodioViaSearch= StringField(
@@ -122,7 +122,7 @@ class ParsedListing(Document):
     )
 
     status            = StringField(
-        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","ready_for_image_processing","image_curation_failed","ready_for_primary_image_check","primary_image_failed"),
+        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","ready_for_image_processing","image_curation_failed","ready_for_primary_image_check","primary_image_failed","bypassed"),
         default="not_processed"
     )
 
