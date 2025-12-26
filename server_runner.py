@@ -5,7 +5,7 @@ from schedule import every, repeat, run_pending
 
 # import your task entrypoints
 from gmail_hourly_multi import process_account, _ensure_paths, ACCOUNTS
-from processFilteredEmail import process_pending
+from processFilteredEmail import process_pending, reset_stale_processing_emails
 from process_dup30days import process_not_processed_with_duplicate_rule
 from ai_nl_rules_runner import apply_ai_english_rules
 from post_selection import select_passed_listings_for_post
@@ -220,6 +220,11 @@ def run_process_one_special_avail_matching():
     logging.info("run_process_one_special_avail_matching")
     # default 3; you can change to 5 if you want to push harder:
     process_one_special_avail_matching()
+
+@repeat(every(2).hours)
+def run_reset_stale_processing_emails():
+    logging.info("reset_stale_processing_emails")
+    reset_stale_processing_emails()
 
 @repeat(every(BUYER_MATCHING_CRON_MINUTES).minutes)
 def run_buyer_matching_cron():

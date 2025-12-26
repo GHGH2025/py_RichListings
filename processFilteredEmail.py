@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 # from mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing
 from listingDetails import upsert_parsed_listings_from_html
@@ -51,6 +51,8 @@ SENDER_LISTING_SLICES = {
     "acct1": [
         {"pattern": "jc-quickturnproperties.com@shared1.ccsend.com", "range": "1-1"},
         {"pattern": "jc@stellarholdingsllc.ccsend.com", "range": "1-1"},
+        {"pattern": "tsims-southfloridacashhomebuyers.com@shared1.ccsend.com", "range": "0-0"},
+        {"pattern": "kevin-titlerate.com@shared1.ccsend.com", "range": "0-0"}
     ],
     "acct2": [],
 }
@@ -63,7 +65,7 @@ def _parse_range_spec(spec: str) -> tuple[int, int] | None:
     else: a, b = s, s
     try:
         start, end = int(a), int(b)
-        if start < 1 or end < 1: return None
+        # if start < 1 or end < 1: return None
         if end < start: start, end = end, start
         return (start, end)
     except Exception:
@@ -139,5 +141,44 @@ def process_pending(limit=2):
                 set__updated_at=datetime.utcnow(),
             )
 
+
+def reset_stale_processing_emails(hours: int = 6) -> dict:
+    """
+    Find FilteredListingEmail docs that are stuck in 'processing' for more than `hours`
+    (based on created_at) and reset them back to 'not_processed'.
+
+    Returns a small summary dict.
+    """
+
+    now = datetime.utcnow()
+    cutoff = now - timedelta(hours=hours)
+
+    # Query all items stuck in processing and older than cutoff
+    q = FilteredListingEmail.objects(
+        status="processing",
+        created_at__lt=cutoff,
+    )
+
+    stuck_count = q.count()
+    if stuck_count == 0:
+        return {
+            "ok": True,
+            "stuck_count": 0,
+            "updated": 0,
+            "cutoff_utc": cutoff.isoformat(),
+        }
+
+    # Bulk update back to not_processed
+    updated = q.update(
+        set__status="not_processed",
+        set__updated_at=now,
+    )
+
+    return {
+        "ok": True,
+        "stuck_count": stuck_count,
+        "updated": updated,
+        "cutoff_utc": cutoff.isoformat(),
+    }
 
 # process_pending()
