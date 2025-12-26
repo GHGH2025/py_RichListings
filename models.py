@@ -79,13 +79,15 @@ class FilteredListingEmail(Document):
 class ParsedListing(Document):
     meta = {
         "collection": "parsed_listings",
-        # "strict": False,
+        "strict": False,
         "indexes": [
             # one row per listing within an email
             {"fields": ["account_label", "gmail_message_id", "list_index"], "unique": True, "name": "uniq_email_list_index"},
             {"fields": ["status"], "name": "listing_status_idx"},
             {"fields": ["city", "state", "zip"], "name": "city_state_zip_idx"},
             {"fields": ["address", "price"], "name": "addr_price_idx"},
+            {"fields": ["buyer_matching_status", "-updated_at"], "name": "buyer_match_status_idx"},
+            {"fields": ["buyer_matching_status", "-buyer_matching_last_attempt_at"], "name": "buyer_match_attempt_idx"},
         ]
     }
 
@@ -155,7 +157,24 @@ class ParsedListing(Document):
         choices=("pending", "failed","sent")
     )
 
+    matched_buyer_ids = ListField(StringField())    
+    
+    # -----------------------------
+    # Buyer Matching Queue (Phase 2 hardening)
+    # -----------------------------
+    buyer_matching_status = StringField(
+        choices=("none", "pending", "processing", "matched", "errored_listing"),
+        default="none"
+    )
+    buyer_matching_podio_item_id = IntField()  # podio properties item id passed by globiflow
+    buyer_matching_attempts = IntField(default=0)
+    buyer_matching_consecutive_errors = IntField(default=0)
+    buyer_matching_last_error_sig = StringField()
+    buyer_matching_last_error = StringField()
+    buyer_matching_last_attempt_at = DateTimeField(null=True)
+
     primary_image_check = DictField(null=True)
+
 
 
     rules_ai_rule_id            = StringField()   # e.g., "R3"
@@ -288,3 +307,65 @@ class RCMediaLinkLog(Document):
     recent_dialog           = ListField(DictField())  # [{speaker, text}], sanitized
 
     created_at              = DateTimeField(default=datetime.utcnow)
+
+
+
+# -------------------------------
+# Web Form Buyer Submissions
+# -------------------------------
+
+class BuyerContact(EmbeddedDocument):
+    name = StringField()
+    company = StringField()
+    email = StringField()
+    text_number = StringField()
+    phone_call = StringField()
+
+class BuyerLocation(EmbeddedDocument):
+    county = StringField()
+    city = StringField()
+
+class BuyerPropertyPrefs(EmbeddedDocument):
+    enabled = BooleanField(default=False)
+    type = StringField()
+    price_range = StringField()
+    preferences = DictField()  # {"Preference Label": "No/Yes/Maybe/Only"}
+
+class WebFormBuyerSubmission(Document):
+    meta = {
+        "collection": "web_form_buyer_submissions",
+        "indexes": [
+            {"fields": ["-created_at"], "name": "created_desc"},
+            {"fields": ["contact.email"], "name": "contact_email_idx"},
+            {"fields": ["location.county", "location.city"], "name": "county_city_idx"},
+            {"fields": ["podio_status"], "name": "podio_status_idx"},
+        ],
+    }
+
+    contact = EmbeddedDocumentField(BuyerContact, required=True)
+    location = EmbeddedDocumentField(BuyerLocation, required=True)
+
+    # property blocks (fixed keys used by frontend)
+    multi_family = EmbeddedDocumentField(BuyerPropertyPrefs)
+    condo = EmbeddedDocumentField(BuyerPropertyPrefs)
+    land = EmbeddedDocumentField(BuyerPropertyPrefs)
+    commercial = EmbeddedDocumentField(BuyerPropertyPrefs)
+    single_family = EmbeddedDocumentField(BuyerPropertyPrefs)
+    townhouse = EmbeddedDocumentField(BuyerPropertyPrefs)
+
+    # store raw request for safety/future (phase 2)
+    raw_payload = DictField()
+
+    # generated readable text per property type (HTML)
+    podio_property_html = DictField()  # e.g. {"multiFamily": "<p>...</p>", ...}
+
+    # Podio tracking
+    podio_item_id = IntField()
+    podio_status = StringField(choices=("not_sent", "sent", "failed"), default="not_sent")
+    podio_error = StringField()
+
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    def touch(self):
+        self.updated_at = datetime.utcnow()
