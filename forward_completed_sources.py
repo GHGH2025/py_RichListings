@@ -390,7 +390,7 @@ from mongoengine.queryset.visitor import Q
 from models import FilteredListingEmail, ParsedListing
 from forwardInline import forward_inline_html  # wherever you put your function
 
-ALLOWED_FINALS = {"posted", "skipped", "image_curation_failed", "primary_image_failed"}
+ALLOWED_FINALS = {"posted", "skipped", "image_curation_failed", "primary_image_failed","bypassed"}
 
 # ------------ Direct Wholeseller config ------------
 DIRECT_WHOLESELLER_PATH = os.path.join(
