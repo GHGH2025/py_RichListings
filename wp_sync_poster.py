@@ -160,7 +160,7 @@ def _build_post_body(pl: ParsedListing) -> Dict[str, Any]:
 
     # # static
     # body.setdefault("deal_type", ["MLS Deals"])
-    body.setdefault("newest_deals", ["Today's Deal"])
+    body.setdefault("newest_deals", ["Todays Deal"])
 
     return body
 
