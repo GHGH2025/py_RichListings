@@ -242,6 +242,7 @@ OUTPUT CONTRACT (must follow exactly):
 - Use the field names EXACTLY as in the JSON schema. No aliases, no renames, no extra fields.
 - Every field in the schema MUST be present in every listing. If unknown, put null (or "unknown" for enums).
 - Do not invent fields like "address_line", "property_address", "price", "price_usd", etc. The only valid keys are in the schema. Valid keys for locations are "address", "city", "state", "county", "zip" and for property price its should be "list_price_usd" only.
+- For "list_price_usd", NEVER use ARV / "after repair value" / "estimated value" numbers. Only use the actual asking / purchase / contract price the property is being offered at.
 
 Rules:
 - DO NOT GUESS. Only return values explicitly present in the HTML (or safe numeric conversions/derivations described below).
