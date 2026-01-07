@@ -68,7 +68,8 @@ DEFAULT_WHOLESALER_BUCKET: Dict[str, List[str]] = {
     "Craig":["craig@nowhomebuyers.com"],
     "John":["john@wholesalejax.com"],
     "JC":["jc-quickturnproperties.com@shared1.ccsend.com","jc@stellarholdingsllc.ccsend.com"],
-    "Todd":["tsims-southfloridacashhomebuyers.com@shared1.ccsend.com","kevin-titlerate.com@shared1.ccsend.com"]
+    "Todd":["tsims-southfloridacashhomebuyers.com@shared1.ccsend.com","kevin-titlerate.com@shared1.ccsend.com"],
+    "Richard":["richard@oasispropertyinvestments.ccsend.com","oasispropertydispo@gmail.com"]
 }
 
 DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
@@ -79,7 +80,8 @@ DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
     "Craig":[618782689],
     "John":[2119852479,2088424136],
     "JC":[2084646293,1802627987],
-    "Todd":[618782750]
+    "Todd":[618782750],
+    "Richard":[2083808740]
     # "another@sender.com": [111111111, 222222222],
 }
 
