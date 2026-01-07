@@ -86,6 +86,7 @@ ACCOUNTS = [
         "allowed_senders": [
             # examples:
             "richard@oasispropertyinvestments.ccsend.com",
+            "oasispropertydispo@gmail.com",
             "alex@lexicorealty.ccsend.com",
             "iwantacheaphousenow-gmail.com@shared1.ccsend.com",
             "craig@nowhomebuyers.com",
