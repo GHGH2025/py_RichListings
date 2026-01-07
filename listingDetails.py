@@ -431,7 +431,10 @@ def upsert_parsed_listings_from_html(
     # result = extract_listings_from_email_html(email_html)
     # NEW: choose image-rule mode based on sender
     sender = _sender_email_safe(source_email_doc)
-    use_nearest = (sender == "deals@aoinvestments.ccsend.com")
+    use_nearest = (
+        sender == "deals@aoinvestments.ccsend.com"
+        or sender == "southfloridadispo@joehomebuyer.com"
+    )
 
     result = extract_listings_from_email_html(
         email_html,
