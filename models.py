@@ -179,6 +179,13 @@ class ParsedListing(Document):
     )
     buyer_sms_description = StringField()
     buyer_email_description = StringField()
+    # Manual special prefs (set from Podio property field)
+    manual_special_preferences_raw = StringField(null=True)
+    manual_special_preferences_norm = ListField(StringField(), default=list)
+    manual_special_preferences_updated_at = DateTimeField(null=True)
+    # ✅ add these (required by your endpoint update_fields)
+    manual_special_preferences_saved_at = DateTimeField(null=True)     # always updates when admin saves
+    manual_special_preferences_rematch_at = DateTimeField(null=True)   # only updates when should_rematch=True
 
     primary_image_check = DictField(null=True)
 
@@ -316,28 +323,55 @@ class RCMediaLinkLog(Document):
     created_at              = DateTimeField(default=datetime.utcnow)
 
 
-
 # -------------------------------
 # Web Form Buyer Submissions
 # -------------------------------
 
 class BuyerContact(EmbeddedDocument):
     name = StringField()
-    company = StringField()
+    company = StringField()  # legacy (may be blank now)
     email = StringField()
+
+    # legacy fields (kept so old logic never breaks)
     text_number = StringField()
     phone_call = StringField()
     preference = StringField(choices=("whatsapp", "call", "sms", "email"))
 
+    # NEW fields
+    call_whatsapp = StringField()
+    preference = StringField()  # "Text" | "Email" | "WhatsApp" | "Call"
+
+
 class BuyerLocation(EmbeddedDocument):
+    # legacy top-level location (frontend no longer sends these)
     county = StringField()
     city = StringField()
+
+
+class BuyerPropertyLocation(EmbeddedDocument):
+    scope = StringField()  # e.g. "south_florida" | "all_florida"
+    counties = ListField(StringField(), default=list)
+
 
 class BuyerPropertyPrefs(EmbeddedDocument):
     enabled = BooleanField(default=False)
     type = StringField()
+
+    # LEGACY (kept)
     price_range = StringField()
-    preferences = DictField()  # {"Preference Label": "No/Yes/Maybe/Only"}
+
+    # NEW
+    price_ranges = ListField(StringField(), default=list)
+    beds = ListField(StringField(), default=list)
+    baths = ListField(StringField(), default=list)
+    location = EmbeddedDocumentField(BuyerPropertyLocation)
+    other_type = StringField()
+
+    # {"Preference Label": "No/Yes/Maybe/Only"}
+    preferences = DictField()
+    # ✅ Original preference labels preserved as data (no Mongo key restrictions)
+    preferences_kv = ListField(DictField(), default=list)
+
 
 class WebFormBuyerSubmission(Document):
     meta = {
@@ -363,9 +397,13 @@ class WebFormBuyerSubmission(Document):
 
     # store raw request for safety/future (phase 2)
     raw_payload = DictField()
+    raw_payload_json = StringField()  # exact original JSON string
 
     # generated readable text per property type (HTML)
-    podio_property_html = DictField()  # e.g. {"multiFamily": "<p>...</p>", ...}
+    podio_property_html = DictField()  # {"multiFamily": "<p>...</p>", ...}
+
+    # NEW: dedicated counties-per-type HTML for new Podio fields
+    podio_counties_html = DictField()  # {"multiFamily": "<p>Scope...</p>", ...}
 
     # Podio tracking
     podio_item_id = IntField()
