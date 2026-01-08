@@ -94,9 +94,12 @@ def _podio_request(method: str, path: str, *, token: Optional[str] = None, retry
 
 
 # Field IDs (from your Podio app structure)
+
+# Field IDs (from your Podio app structure)
 FIELD_NAME = 275184365
 FIELD_COMPANY = 275184418
 FIELD_PHONE_CALL = 275184419
+FIELD_CONTACT_PREFERENCE = 275361231
 FIELD_TEXT_NUMBER = 275184420
 FIELD_EMAIL = 275184421
 
@@ -107,9 +110,18 @@ FIELD_COMMERCIAL = 275184425
 FIELD_SINGLE_FAMILY = 275184426
 FIELD_TOWN_HOUSE = 275184427
 
-FIELD_COUNTY = 275184428
+# NEW: counties per property type
+FIELD_COUNTIES_MULTI_FAMILY = 275184428
+FIELD_COUNTIES_SINGLE_FAMILY = 275361232
+FIELD_COUNTIES_COMMERCIAL = 275361234
+FIELD_COUNTIES_LAND = 275361235
+FIELD_COUNTIES_CONDO = 275361236
+FIELD_COUNTIES_TOWN_HOUSE = 275361233
+
 FIELD_CITY = 275184429
 FIELD_MONGO_OBJECT_ID = 275184431
+
+
 
 
 def _field(field_id: int, value: Any) -> Dict[str, Any]:
@@ -131,10 +143,11 @@ def create_web_form_submission_item(
     email: str,
     phone_call: str,
     text_number: str,
-    county: str,
     city: str,
     mongo_object_id: str,
     property_html: Dict[str, str],
+    contact_preference: str = "",
+    counties_html: Optional[Dict[str, str]] = None,
 ) -> Optional[int]:
     fields: List[Dict[str, Any]] = []
 
@@ -144,9 +157,10 @@ def create_web_form_submission_item(
     if email: fields.append(_email_field(FIELD_EMAIL, email))
     if phone_call: fields.append(_phone_field(FIELD_PHONE_CALL, phone_call))
     if text_number: fields.append(_phone_field(FIELD_TEXT_NUMBER, text_number))
+    if contact_preference: fields.append(_field(FIELD_CONTACT_PREFERENCE, contact_preference))
+   
 
-    # Geo
-    if county: fields.append(_field(FIELD_COUNTY, county))
+    # City (still exists)
     if city: fields.append(_field(FIELD_CITY, city))
 
     # Mongo Object ID
@@ -160,12 +174,19 @@ def create_web_form_submission_item(
     if property_html.get("singleFamily"): fields.append(_field(FIELD_SINGLE_FAMILY, property_html["singleFamily"]))
     if property_html.get("townhouse"): fields.append(_field(FIELD_TOWN_HOUSE, property_html["townhouse"]))
 
+    # NEW: Counties fields (ONLY if non-empty)
+    if counties_html.get("multiFamily"): fields.append(_field(FIELD_COUNTIES_MULTI_FAMILY, counties_html["multiFamily"]))
+    if counties_html.get("singleFamily"): fields.append(_field(FIELD_COUNTIES_SINGLE_FAMILY, counties_html["singleFamily"]))
+    if counties_html.get("townhouse"): fields.append(_field(FIELD_COUNTIES_TOWN_HOUSE, counties_html["townhouse"]))
+    if counties_html.get("commercial"): fields.append(_field(FIELD_COUNTIES_COMMERCIAL, counties_html["commercial"]))
+    if counties_html.get("land"): fields.append(_field(FIELD_COUNTIES_LAND, counties_html["land"]))
+    if counties_html.get("condo"): fields.append(_field(FIELD_COUNTIES_CONDO, counties_html["condo"]))
+
     payload = {"fields": fields}
 
     data = _podio_request("POST", f"/item/app/{WEB_FORM_SUBMISSIONS_APP_ID}/", json=payload)
     if not data:
         return None
 
-    # Podio usually returns {"item_id": ...}
     item_id = data.get("item_id") if isinstance(data, dict) else None
     return item_id
