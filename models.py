@@ -135,7 +135,7 @@ class ParsedListing(Document):
     wp_parsed_data = DictField()
 
     wp_status = StringField(
-        choices=("ready_to_process", "keys_generated", "description_generated")
+        choices=("ready_to_process", "keys_generated", "description_generated","posted")
     )
 
     wp_check = StringField(
@@ -177,6 +177,8 @@ class ParsedListing(Document):
         choices=("pending", "des_generated", "sent", "failed"),
         default=None
     )
+    buyer_sms_description = StringField()
+    buyer_email_description = StringField()
     # Manual special prefs (set from Podio property field)
     manual_special_preferences_raw = StringField(null=True)
     manual_special_preferences_norm = ListField(StringField(), default=list)
@@ -333,6 +335,7 @@ class BuyerContact(EmbeddedDocument):
     # legacy fields (kept so old logic never breaks)
     text_number = StringField()
     phone_call = StringField()
+    preference = StringField(choices=("whatsapp", "call", "sms", "email"))
 
     # NEW fields
     call_whatsapp = StringField()

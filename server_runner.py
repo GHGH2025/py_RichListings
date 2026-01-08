@@ -27,6 +27,7 @@ from image_curation import process_listings_ready_for_image_processing, process_
 from special_avails import process_one_special_avail_with_active_listings,process_one_special_avail_matching
 from models import WebFormBuyerSubmission
 from buyer_matching_api import process_pending_buyer_matching_batch
+from matched_buyers_process import process_pending_buyer_descriptions,process_buyer_sends
 
 import os
 
@@ -234,6 +235,16 @@ def run_buyer_matching_cron():
         logging.info("run_buyer_matching_cron: result=%s", result)
     except Exception:
         logging.exception("run_buyer_matching_cron: crashed")
+
+@repeat(every(5).minutes)
+def run_process_pending_buyer_descriptions():
+    logging.info("process_pending_buyer_descriptions")
+    process_pending_buyer_descriptions(limit=5)
+
+@repeat(every(3).minutes)
+def run_process_buyer_sends():
+    logging.info("process_buyer_sends")
+    process_buyer_sends(limit=2)
 
 # @repeat(every(15).hours)
 # def run_whatsapp_keepalive():
