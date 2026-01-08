@@ -3,8 +3,11 @@ import time
 import json
 import re
 import logging
-from typing import Any, Dict, List, Optional, Tuple
 
+from html import unescape
+from typing import Any, Dict, List, Optional, Tuple
+from mongoengine.queryset.visitor import Q
+import difflib
 import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -47,6 +50,9 @@ PODIO_REDIRECT_URI = os.getenv("redirectUri")
 BUYER_MATCHING_BATCH_LIMIT = int(os.getenv("BUYER_MATCHING_BATCH_LIMIT", "5"))
 BUYER_MATCHING_MAX_CONSECUTIVE_ERRORS = int(os.getenv("BUYER_MATCHING_MAX_CONSECUTIVE_ERRORS", "3"))
 BUYER_MATCHING_PICK_MULTIPLIER = int(os.getenv("BUYER_MATCHING_PICK_MULTIPLIER", "4"))  # fetch more to allow claim skips
+
+PROPERTIES_SPECIAL_PREFERENCES_FIELD_ID = int(os.getenv("PODIO_PROPERTIES_SPECIAL_PREFERENCES_FIELD_ID", "275389745"))
+
 
 # Token cache (avoid hammering auth endpoint)
 _PODIO_ACCESS_TOKEN: Optional[str] = None
@@ -332,6 +338,457 @@ def parse_price_range(price_range: str) -> Tuple[Optional[float], Optional[float
     return (None, None)
 
 
+
+
+
+
+# -------------------------------------------------------------------
+# Phase 1 enhancement START
+# -------------------------------------------------------------------
+def podio_richtext_to_plain(s: str) -> str:
+    s = unescape((s or "").strip())
+
+    # convert common html breaks to newlines
+    s = re.sub(r"(?i)<br\s*/?>", "\n", s)
+    s = re.sub(r"(?i)</p\s*>", "\n", s)
+    s = re.sub(r"(?i)<p\s*>", "", s)
+
+    # strip any remaining tags
+    s = re.sub(r"<[^>]+>", " ", s)
+
+    # normalize whitespace/newlines
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"\n\s*\n+", "\n", s)
+    return s.strip()
+
+def normalize_manual_prefs_text(text: str) -> List[str]:
+    """
+    Normalizes Podio comma/newline separated manual prefs so whitespace/case/reorder doesn't trigger rerun.
+    Keeps symbols like '+' (unlike _norm_text which strips many chars).
+    """
+    raw = podio_richtext_to_plain(text)  # ✅ strip html first
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+
+    parts = re.split(r"[,\n;]+", raw)
+    out: List[str] = []
+    for p in parts:
+        s = (p or "").strip().lower()
+        s = re.sub(r"\s+", " ", s).strip(" \t\r\n-_.")
+        if s:
+            out.append(s)
+
+    # de-dup stable
+    return sorted(list(set(out)))
+
+
+def podio_get_item(item_id: int) -> Optional[Dict[str, Any]]:
+    token = get_podio_access_token()
+    data = _podio_request("GET", f"/item/{int(item_id)}", token=token)
+    return data if isinstance(data, dict) else None
+
+
+def podio_extract_text_field(item: Dict[str, Any], field_id: int) -> str:
+    """
+    Extract value for a Podio text/multi-line text field from item payload.
+    """
+    if not item or not field_id:
+        return ""
+
+    fields = item.get("fields") or []
+    for f in fields:
+        try:
+            if int(f.get("field_id") or 0) != int(field_id):
+                continue
+        except Exception:
+            continue
+
+        values = f.get("values") or []
+        chunks = []
+        for v in values:
+            val = v.get("value")
+            if val is None:
+                continue
+            chunks.append(str(val))
+        return "\n".join([c for c in chunks if c.strip()]).strip()
+
+    return ""
+
+
+def _safe_float(x) -> Optional[float]:
+    try:
+        if x is None:
+            return None
+        if isinstance(x, (int, float)):
+            return float(x)
+        s = str(x).strip().replace(",", "")
+        if not s:
+            return None
+        return float(s)
+    except Exception:
+        return None
+
+
+def _county_variants(raw: str) -> List[str]:
+    """
+    Variants to help match array-stored counties (case-sensitive in Mongo __in),
+    plus python-side normalization matching.
+    """
+    r = (raw or "").strip()
+    if not r:
+        return []
+    r2 = re.sub(r"\bcounty\b", "", r, flags=re.I).strip()
+    variants = {r, r2, r.title(), r2.title(), r.upper(), r2.upper(), r.lower(), r2.lower()}
+    # Miami-Dade vs Dade helper
+    tokens = [t for t in re.split(r"[\s\-]+", r2) if t]
+    for t in tokens:
+        variants.add(t)
+        variants.add(t.title())
+        variants.add(t.lower())
+    return [v for v in variants if v]
+
+
+def _county_list_match(listing_county: str, buyer_counties: List[str]) -> bool:
+    """
+    Python-side robust county match: compare normalized token overlap.
+    """
+    lc = _norm_text(listing_county)
+    if not lc:
+        return False
+    lc_tokens = set([t for t in re.split(r"[\s\-]+", lc) if t and len(t) >= 3])
+
+    for bc in (buyer_counties or []):
+        bc_norm = _norm_text(bc)
+        bc_tokens = set([t for t in re.split(r"[\s\-]+", bc_norm) if t and len(t) >= 3])
+        if lc_tokens & bc_tokens:
+            return True
+    return False
+
+
+def _scope_norm(s: str) -> str:
+    return _norm_text(s).replace(" ", "_")
+
+
+def buyer_location_match_v2(listing_city: str, listing_county: str, b: WebFormBuyerSubmission, bucket: str) -> bool:
+    """
+    NEW logic:
+    - If buyer bucket location.scope = all_florida => match
+    - If south_florida => listing county must be within buyer counties
+    - Else fallback to legacy top-level location matching (county+city strict)
+    """
+    bucket_doc = getattr(b, bucket, None)
+    if bucket_doc and getattr(bucket_doc, "location", None):
+        loc = bucket_doc.location
+        scope = _scope_norm(getattr(loc, "scope", "") or "")
+        if scope == "all_florida":
+            return True
+        if scope == "south_florida":
+            return _county_list_match(listing_county, list(getattr(loc, "counties", []) or []))
+        # if scope is set but unknown, fail closed
+        if scope:
+            return False
+
+    # legacy fallback (old submissions)
+    b_city = (b.location.city if b.location else "") or ""
+    b_county = (b.location.county if b.location else "") or ""
+    return stage1_location_match(listing_city, listing_county, b_city, b_county)
+
+
+def parse_price_range_extended(label: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Extends parse_price_range() to support labels like:
+    '$1 Million Dollar Houses and Up'
+    """
+    s = (label or "").strip()
+    if not s:
+        return (None, None)
+
+    s_clean = s.replace(",", "").strip()
+    s_low = s_clean.lower()
+
+    if "all price" in s_low:
+        return (None, None)
+
+    # handle "1 million ... up"
+    if "million" in s_low:
+        m = re.search(r"(\d+(?:\.\d+)?)\s*million", s_low)
+        if m:
+            base = float(m.group(1)) * 1_000_000.0
+            # treat as open ended
+            return (base, None)
+
+    # fallback to your existing numeric parser ($300000 - $600000, $1000000+ etc.)
+    return parse_price_range(s_clean)
+
+
+def price_match_v2(listing_price_usd: Any, selected_ranges: List[str]) -> bool:
+    """
+    Buyer ranges are multi-select.
+    - empty => PASS
+    - includes 'All price ranges' => PASS
+    - else listing price must be known and fall into at least one selected range
+    """
+    ranges = [str(x).strip() for x in (selected_ranges or []) if str(x or "").strip()]
+    if not ranges:
+        return True
+    if any("all price" in r.lower() for r in ranges):
+        return True
+
+    p = _safe_float(listing_price_usd)
+    if p is None:
+        return False
+
+    for r in ranges:
+        mn, mx = parse_price_range_extended(r)
+        if mn is None and mx is None:
+            return True
+        if mn is not None and mx is None and p >= mn:
+            return True
+        if mn is not None and mx is not None and mn <= p <= mx:
+            return True
+        if mn is None and mx is not None and p <= mx:
+            return True
+    return False
+
+
+def _multi_min_match(value: Any, selections: List[str]) -> bool:
+    """
+    selections like: ['Any', '1+', '2+', '3+'] or ['2'].
+    Multi-select interpreted as OR: if any selection matches, pass.
+    """
+    sel = [str(x).strip() for x in (selections or []) if str(x or "").strip()]
+    if not sel:
+        return True
+    if any(s.lower() == "any" for s in sel):
+        return True
+
+    v = _safe_float(value)
+    if v is None:
+        return False
+
+    for s in sel:
+        s_low = s.lower().strip()
+        m = re.match(r"^(\d+(?:\.\d+)?)\s*\+\s*$", s_low)
+        if m:
+            if v >= float(m.group(1)):
+                return True
+            continue
+        # exact numeric
+        m2 = re.match(r"^(\d+(?:\.\d+)?)$", s_low)
+        if m2:
+            if v == float(m2.group(1)):
+                return True
+            continue
+
+    return False
+
+
+def normalize_preferences_kv(bucket_doc: Any) -> List[Dict[str, str]]:
+    """
+    Prefer preferences_kv (original labels preserved).
+    Fallback: convert dict if needed.
+    Returns list of {label, value}.
+    """
+    kv = []
+    if bucket_doc:
+        kv = list(getattr(bucket_doc, "preferences_kv", []) or [])
+        if not kv:
+            d = getattr(bucket_doc, "preferences", {}) or {}
+            kv = [{"label": str(k), "value": str(v)} for k, v in d.items()]
+    # keep only filled
+    out = []
+    for x in kv:
+        lab = str((x or {}).get("label") or "").strip()
+        val = str((x or {}).get("value") or "").strip()
+        if lab and val:
+            out.append({"label": lab, "value": val})
+    return out
+
+
+def build_property_evidence_text(listing_ci: Dict[str, Any], listing: Any, manual_prefs_norm: List[str]) -> str:
+    """
+    Build a strong evidence text block for AI to semantically match preferences.
+    Keeps it bounded to avoid prompt bloat.
+    """
+    parts: List[str] = []
+
+    def add(x: Any, prefix: str = ""):
+        if x is None:
+            return
+        s = str(x).strip()
+        if not s:
+            return
+        if prefix:
+            parts.append(f"{prefix}{s}")
+        else:
+            parts.append(s)
+
+    # common description keys (your source data may vary)
+    for k in [
+        "raw_description_excerpt",
+        "raw_description",
+        "description",
+        "public_remarks",
+        "remarks",
+        "listing_description",
+        "property_description",
+        "agent_remarks",
+        "private_remarks",
+    ]:
+        if isinstance(listing_ci, dict) and listing_ci.get(k):
+            add(listing_ci.get(k), prefix=f"{k}: ")
+
+    # also check top-level listing fields (safe, optional)
+    add(getattr(listing, "raw_description", None), prefix="listing.raw_description: ")
+    add(getattr(listing, "description", None), prefix="listing.description: ")
+
+    # marketing tags
+    tags = listing_ci.get("marketing_tags") or []
+    if isinstance(tags, list) and tags:
+        tag_str = ", ".join([str(t).strip() for t in tags if str(t).strip()])
+        if tag_str.strip():
+            add(tag_str, prefix="Marketing tags: ")
+
+    # manual special prefs (raw + normalized)
+    raw_manual = (getattr(listing, "manual_special_preferences_raw", None) or "").strip()
+    if raw_manual:
+        add(raw_manual, prefix="Manual special preferences (raw): ")
+
+    if manual_prefs_norm:
+        add(", ".join(manual_prefs_norm[:100]), prefix="Manual special preferences (normalized): ")
+
+    # a compact structured highlight block
+    highlight_keys = [
+        "property_type", "water_feature", "is_on_water", "is_condo", "is_land_only",
+        "build_material", "is_frame_or_wood", "year_built",
+    ]
+    highlights = {}
+    for k in highlight_keys:
+        v = listing_ci.get(k)
+        if v is not None and str(v).strip() != "":
+            highlights[k] = v
+    if highlights:
+        add(json.dumps(highlights, ensure_ascii=False), prefix="Structured highlights: ")
+
+    text = "\n".join(parts).strip()
+    # keep prompt stable
+    return text[:3500]
+
+
+def _find_best_ai_check_for_label(expected_label: str, ai_by_label: Dict[str, Dict[str, Any]], threshold: float = 0.88) -> Optional[Dict[str, Any]]:
+    """
+    If AI returns label slightly different, pick the closest normalized label.
+    """
+    target = _norm_label(expected_label)
+    if not target:
+        return None
+    if target in ai_by_label:
+        return ai_by_label[target]
+
+    best_key = None
+    best_ratio = 0.0
+    for k in ai_by_label.keys():
+        r = difflib.SequenceMatcher(None, target, k).ratio()
+        if r > best_ratio:
+            best_ratio = r
+            best_key = k
+
+    if best_key and best_ratio >= threshold:
+        return ai_by_label[best_key]
+    return None
+
+def apply_special_preference_rules(pref_checks: List[Dict[str, Any]]) -> Tuple[bool, float, List[str], List[str]]:
+    """
+    Deterministic evaluation using AI-produced status.
+    Implements your rules:
+
+    - No: if feature/concept is PRESENT => mismatch. Otherwise pass (ABSENT/UNKNOWN pass).
+    - Yes: must be PRESENT.
+    - Maybe: never blocks.
+    - Only:
+        * If exactly one Only => it must be PRESENT.
+        * If multiple Only => at least ONE of the Only preferences must be PRESENT.
+      (Still respecting any Yes/No rules.)
+    Returns: (match, confidence, reasons, failed_checks)
+    """
+    checks = pref_checks or []
+
+    def sel(c) -> str:
+        return str(c.get("selection") or "").strip().lower()
+
+    def status(c) -> str:
+        return str(c.get("status") or "").strip().upper()
+
+    def conf(c) -> float:
+        try:
+            v = float(c.get("confidence_0_to_1") or 0.0)
+            # clamp
+            if v < 0: v = 0.0
+            if v > 1: v = 1.0
+            return v
+        except Exception:
+            return 0.0
+
+    no_checks = [c for c in checks if sel(c) == "no"]
+    yes_checks = [c for c in checks if sel(c) == "yes"]
+    maybe_checks = [c for c in checks if sel(c) == "maybe"]
+    only_checks = [c for c in checks if sel(c) == "only"]
+
+    reasons: List[str] = []
+    failed: List[str] = []
+
+    # confidence aggregation: keep it conservative only when something is positively confirmed PRESENT
+    overall_conf = 1.0
+
+    # NO: only fails if PRESENT
+    for c in no_checks:
+        st = status(c)
+        if st == "PRESENT":
+            failed.append(f"No selected but feature present: {c.get('label')}")
+        # ABSENT/UNKNOWN => pass (do not block)
+
+    # YES: must be PRESENT
+    for c in yes_checks:
+        st = status(c)
+        if st != "PRESENT":
+            failed.append(f"Yes selected but not present/unknown: {c.get('label')}")
+        else:
+            overall_conf = min(overall_conf, conf(c) or 1.0)
+
+    # ONLY logic
+    if len(only_checks) == 1:
+        c = only_checks[0]
+        st = status(c)
+        if st != "PRESENT":
+            failed.append(f"Only selected (single) but not present/unknown: {c.get('label')}")
+        else:
+            overall_conf = min(overall_conf, conf(c) or 1.0)
+
+    elif len(only_checks) > 1:
+        present_only = [c for c in only_checks if status(c) == "PRESENT"]
+        if not present_only:
+            failed.append("Multiple 'Only' selected but none are present")
+        else:
+            # at least one is present: confidence driven by best present-only evidence
+            best_present = max(conf(c) for c in present_only)
+            overall_conf = min(overall_conf, best_present if best_present > 0 else 1.0)
+
+    # MAYBE: never blocks (ignored completely)
+    _ = maybe_checks  # intentionally unused
+
+    if failed:
+        return (False, float(overall_conf), reasons, failed)
+
+    reasons.append("Special preferences passed")
+    return (True, float(overall_conf), reasons, failed)
+
+
+# -------------------------------------------------------------------
+# Phase 1 enhancement END
+# -------------------------------------------------------------------
+
+
 # -------------------------------------------------------------------
 # OpenAI JSON call (robust JSON extraction)
 # -------------------------------------------------------------------
@@ -349,7 +806,19 @@ def _extract_json_obj(text: str) -> Dict[str, Any]:
     return json.loads(m.group(0))
 
 
+
+
+
+# -------------------------------------------------------------------
+# Phase 1 enhancement START
+# -------------------------------------------------------------------
+
+
 def call_ai_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    AI ONLY classifies special preference labels as PRESENT/ABSENT/UNKNOWN.
+    All other matching rules are enforced deterministically in backend.
+    """
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY missing in environment")
 
@@ -358,34 +827,36 @@ def call_ai_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str,
         client = OpenAI(api_key=OPENAI_API_KEY)
 
         system = (
-    "You are a strict property-to-buyer matching engine.\n"
-    "Use ONLY the evidence provided. Do NOT guess. Do NOT assume.\n\n"
-
-    "Evidence you may use:\n"
-    "- structured property fields (booleans, numeric, tags)\n"
-    "- evidence_text_excerpt\n\n"
-
-    "Price rule:\n"
-    "- If buyer price_range empty => PASS.\n"
-    "- Else if property price_usd is known => must fall in range inclusive.\n"
-    "- Else (unknown price) => FAIL (cannot confirm).\n\n"
-
-    "Buyer selected_type rule:\n"
-    "- If selected_type is generic (e.g., just interest confirmation) => PASS.\n"
-    "- If selected_type contains any concrete constraints and you cannot confirm from evidence => FAIL.\n\n"
-
-    "Special preferences rule (per label):\n"
-    "- Determine status as PRESENT, ABSENT, or UNKNOWN based on evidence.\n"
-    "- Yes => must be PRESENT.\n"
-    "- Only => must be PRESENT.\n"
-    "- No => must be ABSENT.\n"
-    "- Maybe => ignore (always pass that preference).\n"
-    "- If status is UNKNOWN for Yes/Only/No => FAIL.\n\n"
-
-    "Return ONLY JSON:\n"
+    "You are a strict real estate preference classifier.\n"
+    "For each buyer, evaluate EACH preference label against the property's evidence.\n\n"
+    "IMPORTANT:\n"
+    "- The preference label may NOT match the listing text exactly. Use semantic matching (synonyms/paraphrases).\n"
+    "  Examples: 'pool' ~ 'swimming pool'; 'waterfront' ~ 'on canal'/'intracoastal'; 'no hoa' ~ 'no homeowners association'.\n"
+    "- Treat the LABEL as the concept/claim to check. If the label is negated (e.g., 'No HOA'), then PRESENT means evidence supports 'No HOA'.\n"
+    "- Use ONLY the provided structured fields and evidence_text_excerpt (including manual special preferences). Do NOT guess.\n\n"
+    "Definitions:\n"
+    "- PRESENT: clearly supported by evidence text/fields (including strong paraphrase)\n"
+    "- ABSENT: clearly contradicted by evidence (explicitly says the opposite)\n"
+    "- UNKNOWN: not enough evidence either way\n\n"
+    "Output requirements:\n"
+    "- For every candidate buyer, you MUST return a preference_checks entry for every preferences_kv label.\n"
+    "- Copy the preference label EXACTLY as provided in the candidate.\n"
+    "- Return ONLY JSON in this schema:\n"
     "{\n"
-    '  "matched_buyer_mongo_ids": string[],\n'
-    '  "evaluations": [{buyer_mongo_id, match, confidence_0_to_1, reasons: string[], failed_checks: string[]}]\n'
+    '  \"evaluations\": [\n'
+    "    {\n"
+    '      \"buyer_mongo_id\": \"string\",\n'
+    '      \"preference_checks\": [\n'
+    "        {\n"
+    '          \"label\": \"string\",\n'
+    '          \"selection\": \"No|Yes|Maybe|Only\",\n'
+    '          \"status\": \"PRESENT|ABSENT|UNKNOWN\",\n'
+    '          \"confidence_0_to_1\": 0.0,\n'
+    '          \"evidence\": \"short text\"\n'
+    "        }\n"
+    "      ]\n"
+    "    }\n"
+    "  ]\n"
     "}\n"
 )
 
@@ -409,6 +880,11 @@ def call_ai_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str,
 
     except Exception as e:
         raise RuntimeError(f"AI matcher failed: {str(e)}")
+
+
+# -------------------------------------------------------------------
+# Phase 1 enhancement END
+# -------------------------------------------------------------------
 
 
 def build_loose_regex_from_text(s: str) -> str:
@@ -537,6 +1013,19 @@ def process_pending_buyer_matching_batch(limit: int = BUYER_MATCHING_BATCH_LIMIT
                 dry_run=False,
             ))
 
+            needs_rerun_now = False
+            try:
+                curr2 = ParsedListing.objects(id=l.id).only(
+                    "manual_special_preferences_rematch_at",
+                    "buyer_matching_last_attempt_at"
+                ).first()
+
+                if curr2 and curr2.manual_special_preferences_rematch_at and curr2.buyer_matching_last_attempt_at:
+                    if curr2.manual_special_preferences_rematch_at > curr2.buyer_matching_last_attempt_at:
+                        needs_rerun_now = True
+            except Exception:
+                pass
+
             # IMPORTANT: if buyers matched but podio update failed, treat as retryable error
             if (
                 isinstance(result, dict)
@@ -545,13 +1034,23 @@ def process_pending_buyer_matching_batch(limit: int = BUYER_MATCHING_BATCH_LIMIT
             ):
                 raise RuntimeError("Podio update failed while buyers matched; will retry")
 
+
             # Success: mark matched (even if zero buyers matched — job completed cleanly)
-            ParsedListing.objects(id=l.id).update_one(
-                set__buyer_matching_status="matched",
-                set__buyer_matching_consecutive_errors=0,
-                set__buyer_matching_last_error_sig=None,
-                set__buyer_matching_last_error=None,
-            )
+            if needs_rerun_now or (isinstance(result, dict) and result.get("needs_rerun") is True):
+                ParsedListing.objects(id=l.id).update_one(
+                    set__buyer_matching_status="pending",
+                    set__buyer_matching_consecutive_errors=0,
+                    set__buyer_matching_last_error_sig=None,
+                    set__buyer_matching_last_error=None,
+                    unset__buyer_send_status=1,  # ensure sending restarts cleanly
+                )
+            else:
+                ParsedListing.objects(id=l.id).update_one(
+                    set__buyer_matching_status="matched",
+                    set__buyer_matching_consecutive_errors=0,
+                    set__buyer_matching_last_error_sig=None,
+                    set__buyer_matching_last_error=None,
+                )
 
             processed += 1
             matched += 1
@@ -665,6 +1164,174 @@ def enqueue_buyer_matching(payload: EnqueueBuyerMatchingPayload):
     }
 
 
+class ManualSpecialPrefsPayload(BaseModel):
+    mongodb_object_id: str
+    podio_property_item_id: Optional[int] = None
+
+    # If Globiflow can pass the field value, send it here (best).
+    special_preferences_text: Optional[str] = None
+
+    # If True, rerun on ANY meaningful change (add/remove), not just additions.
+    # Default matches your requirement: only rerun on new additions.
+    rematch_on_any_change: bool = False
+
+    dry_run: bool = False
+
+
+@router.post("/manual-special-preferences")
+def manual_special_preferences(payload: ManualSpecialPrefsPayload):
+    if not payload.special_preferences_text and not payload.podio_property_item_id:
+        raise HTTPException(status_code=400, detail="Provide special_preferences_text or podio_property_item_id")
+
+    # 1) Validate listing ObjectId
+    try:
+        listing_oid = ObjectId(payload.mongodb_object_id.strip())
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid mongodb_object_id (not a valid ObjectId)")
+
+    listing: Optional[ParsedListing] = ParsedListing.objects(id=listing_oid).first()
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found in parsed_listings for given ObjectId")
+
+    # 2) Determine the new text
+    new_text = (payload.special_preferences_text or "").strip()
+
+    # If not provided, fetch from Podio using item id + field id
+    if (not new_text) and payload.podio_property_item_id:
+        if not PROPERTIES_SPECIAL_PREFERENCES_FIELD_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="PODIO_PROPERTIES_SPECIAL_PREFERENCES_FIELD_ID not set in env, cannot fetch from Podio"
+            )
+        item = podio_get_item(int(payload.podio_property_item_id))
+        if not item:
+            raise HTTPException(status_code=502, detail="Failed to fetch Podio item")
+        new_text = podio_extract_text_field(item, PROPERTIES_SPECIAL_PREFERENCES_FIELD_ID)
+
+    # 3) Normalize + compare
+    old_norm = list(getattr(listing, "manual_special_preferences_norm", []) or [])
+    # if old list empty but raw exists, normalize raw to ensure stable behavior
+    if not old_norm and (getattr(listing, "manual_special_preferences_raw", None) or ""):
+        old_norm = normalize_manual_prefs_text(getattr(listing, "manual_special_preferences_raw", "") or "")
+
+    new_text = podio_richtext_to_plain(new_text)
+    new_norm = normalize_manual_prefs_text(new_text)
+
+    old_set = set(old_norm or [])
+    new_set = set(new_norm or [])
+
+    added = sorted(list(new_set - old_set))
+    removed = sorted(list(old_set - new_set))
+
+ 
+
+    any_meaningful_change = bool(added or removed)
+    # NO-OP change (spaces/case/reorder only) => do nothing
+    if not any_meaningful_change:
+        return {
+            "ok": True,
+            "mongodb_object_id": payload.mongodb_object_id,
+            "podio_property_item_id": payload.podio_property_item_id,
+            "added": [],
+            "removed": [],
+            "should_rematch": False,
+            "note": "No meaningful preference change (normalized). No DB update performed."
+        }
+    
+    added_only_change = bool(added)
+
+    should_rematch = (any_meaningful_change if payload.rematch_on_any_change else added_only_change)
+
+    now = datetime.utcnow()
+
+    update_fields = {
+        "set__manual_special_preferences_raw": new_text,
+        "set__manual_special_preferences_norm": new_norm,
+        "set__manual_special_preferences_saved_at": now,   # NEW: always update
+        "set__updated_at": now,
+    }
+    # keep podio item id in listing (optional but useful)
+    if payload.podio_property_item_id:
+        update_fields["set__buyer_matching_podio_item_id"] = int(payload.podio_property_item_id)
+
+    # Always clear send status if we’re going to rematch (per requirement)
+    if should_rematch:
+        update_fields["set__manual_special_preferences_rematch_at"] = now  # NEW: only when should_rematch
+        update_fields["unset__buyer_send_status"] = 1
+        if (listing.buyer_matching_status or "") != "processing":
+            update_fields["set__buyer_matching_status"] = "pending"
+
+    if payload.dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "mongodb_object_id": payload.mongodb_object_id,
+            "podio_property_item_id": payload.podio_property_item_id,
+            "old_norm": old_norm,
+            "new_norm": new_norm,
+            "added": added,
+            "removed": removed,
+            "should_rematch": should_rematch,
+            "note": "No DB updates performed (dry_run)",
+        }
+
+    ParsedListing.objects(id=listing_oid).update_one(**update_fields)
+
+    return {
+        "ok": True,
+        "mongodb_object_id": payload.mongodb_object_id,
+        "podio_property_item_id": payload.podio_property_item_id,
+        "added": added,
+        "removed": removed,
+        "should_rematch": should_rematch,
+        "buyer_matching_status_after": ("pending" if should_rematch and (listing.buyer_matching_status or "") != "processing" else (listing.buyer_matching_status or "none")),
+        "buyer_send_status_cleared": bool(should_rematch),
+    }
+
+def _norm_label(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = s.replace("__dollar__", "$")
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"[^\w\s$/\-\+\.]", "", s)  # keep $, /, -, +, .
+    return s
+
+
+
+def manual_pref_present(label: str, manual_prefs_norm: List[str]) -> bool:
+    """
+    If a label matches (or very closely matches) one of the manual prefs, treat it as PRESENT.
+    Manual prefs are user-supplied on the listing, so they override AI ambiguity.
+    """
+    if not label:
+        return False
+
+    manual_set = {_norm_label(x) for x in (manual_prefs_norm or []) if str(x or "").strip()}
+    if not manual_set:
+        return False
+
+    ln = _norm_label(label)
+    if not ln:
+        return False
+
+    # Exact normalized match
+    if ln in manual_set:
+        return True
+
+    # High-precision token subset match (keeps false positives low)
+    ltoks = {t for t in re.split(r"[\s/\-]+", ln) if len(t) >= 4}
+    if ltoks:
+        for m in manual_set:
+            mtoks = {t for t in re.split(r"[\s/\-]+", m) if len(t) >= 4}
+            if ltoks.issubset(mtoks):
+                return True
+
+    # Very high fuzzy match (only as last resort)
+    for m in manual_set:
+        if difflib.SequenceMatcher(None, ln, m).ratio() >= 0.93:
+            return True
+
+    return False
+
 @router.post("/match")
 def match_buyers(payload: MatchBuyersPayload):
     # 1) Validate listing ObjectId
@@ -698,39 +1365,61 @@ def match_buyers(payload: MatchBuyersPayload):
 
     bucket = get_listing_property_bucket(listing_ci)
 
-    # 3) Stage 1: NO AI filter — county AND city AND property type enabled
-    # Fetch buyers who enabled this bucket
-    enabled_filter = {f"{bucket}__enabled": True}
+
+    
+
+# -------------------------------------------------------------------
+# Phase 1 enhancement START
+# -------------------------------------------------------------------
+
+
+    # 3) Stage 1: NO AI filter
+    # NEW submissions match via per-bucket scope/counties
+    # Legacy submissions still supported via top-level county+city
+
+    q_enabled = Q(**{f"{bucket}__enabled": True})
+
+    # NEW: per-bucket location OR legacy top-level location
+    q_new_all = Q(**{f"{bucket}__location__scope": "all_florida"})
+
     county_re = build_loose_regex_from_text(listing_county)
     city_re = build_loose_regex_from_text(listing_city)
+    q_legacy = Q(location__county__iregex=county_re, location__city__iregex=city_re)
 
-    print("county_re=====",county_re)
-    print("city_re=====",city_re)
+    # (Optional) try cheap mongo prefilter for south_florida using __in variants
+    county_vars = _county_variants(listing_county)
+    q_new_sf = Q(**{
+        f"{bucket}__location__scope": "south_florida",
+        f"{bucket}__location__counties__in": county_vars
+    })
 
-    buyers_qs = WebFormBuyerSubmission.objects(
-        **enabled_filter,
-        location__county__iregex=county_re,
-        location__city__iregex=city_re,
+    buyers_qs = WebFormBuyerSubmission.objects(q_enabled & (q_new_all | q_new_sf | q_legacy)).only(
+        "id", "contact", "location", bucket, "podio_item_id"
     )
 
-    print("buyers_qs=====",buyers_qs)
-    
     stage1_candidates: List[WebFormBuyerSubmission] = []
     for b in buyers_qs:
-        b_city = (b.location.city if b.location else "") or ""
-        b_county = (b.location.county if b.location else "") or ""
-        if stage1_location_match(listing_city, listing_county, b_city, b_county):
+        if buyer_location_match_v2(listing_city, listing_county, b, bucket):
             stage1_candidates.append(b)
-    print("stage1_candidates=====",stage1_candidates)
+
+    print("stage1_candidates=====", stage1_candidates)
+
+
+# -------------------------------------------------------------------
+# Phase 1 enhancement END
+# -------------------------------------------------------------------
+
+
+
     # 4) Stage 2: AI filter within stage1 group
     # Build compact property payload for the model (include evidence, but keep it bounded)
-    raw_text = ""
-    try:
-        raw_text = str(listing_ci.get("complete_info") or "")
-    except Exception:
-        raw_text = ""
+    manual_prefs = list(getattr(listing, "manual_special_preferences_norm", []) or [])
 
-    raw_excerpt = raw_text[:2000]  # keep prompt stable
+    raw_excerpt = build_property_evidence_text(
+        listing_ci=listing_ci,
+        listing=listing,
+        manual_prefs_norm=manual_prefs,
+    )
 
     property_payload: Dict[str, Any] = {
         "mongodb_object_id": str(listing.id),
@@ -756,18 +1445,44 @@ def match_buyers(payload: MatchBuyersPayload):
         "marketing_tags": listing_ci.get("marketing_tags") or [],
         "raw_description_excerpt": listing_ci.get("raw_description_excerpt"),
         "evidence_text_excerpt": raw_excerpt,
+        "manual_special_preferences": manual_prefs,
     }
 
-    # Turn buyers into AI candidate objects (only the relevant bucket section)
+    
+
+# -------------------------------------------------------------------
+# Phase 1 enhancement START
+# -------------------------------------------------------------------
+    
     def buyer_bucket_obj(b: WebFormBuyerSubmission) -> Dict[str, Any]:
         bucket_doc = getattr(b, bucket, None)
-        prefs = {}
-        price_range = ""
+
+        price_ranges = []
+        beds_sel = []
+        baths_sel = []
+        scope = ""
+        counties = []
         selected_type = ""
+        pref_kv = []
+
         if bucket_doc:
-            prefs = bucket_doc.preferences or {}
-            price_range = bucket_doc.price_range or ""
-            selected_type = bucket_doc.type or ""
+            selected_type = (bucket_doc.type or "").strip()
+
+            price_ranges = list(getattr(bucket_doc, "price_ranges", []) or [])
+            # legacy fallback
+            if not price_ranges and (getattr(bucket_doc, "price_range", "") or "").strip():
+                price_ranges = [(getattr(bucket_doc, "price_range", "") or "").strip()]
+
+            beds_sel = list(getattr(bucket_doc, "beds", []) or [])
+            baths_sel = list(getattr(bucket_doc, "baths", []) or [])
+
+            loc = getattr(bucket_doc, "location", None)
+            if loc:
+                scope = (getattr(loc, "scope", "") or "").strip()
+                counties = list(getattr(loc, "counties", []) or [])
+
+            pref_kv = normalize_preferences_kv(bucket_doc)
+
         return {
             "buyer_mongo_id": str(b.id),
             "contact": {
@@ -775,65 +1490,164 @@ def match_buyers(payload: MatchBuyersPayload):
                 "email": (b.contact.email if b.contact else ""),
                 "company": (b.contact.company if b.contact else ""),
             },
-            "location": {
-                "county": (b.location.county if b.location else ""),
-                "city": (b.location.city if b.location else ""),
-            },
             "bucket": bucket,
             "selected_type": selected_type,
-            "price_range": price_range,
-            "parsed_price_range": {
-                "min": parse_price_range(price_range)[0],
-                "max": parse_price_range(price_range)[1],
-            },
-            "preferences": prefs,
+            "price_ranges": price_ranges,
+            "beds": beds_sel,
+            "baths": baths_sel,
+            "location": {"scope": scope, "counties": counties},
+            "preferences_kv": pref_kv,  # <-- use original labels preserved here
         }
 
-    ai_candidates = [buyer_bucket_obj(b) for b in stage1_candidates]
 
-    print("ai_candidates=====",ai_candidates)
-
+    ai_candidates: List[Dict[str, Any]] = []
     matched_buyer_ids: List[str] = []
     evaluations_all: List[Dict[str, Any]] = []
 
-    # Chunk AI calls
+    # Deterministic filters BEFORE AI
+    for b in stage1_candidates:
+        obj = buyer_bucket_obj(b)
+
+        # 3) FAIL-FAST: if buyer selected "No" but listing manual prefs says the thing is PRESENT -> reject immediately
+        pref_kv = obj.get("preferences_kv") or []
+        hard_block = False
+        for p in pref_kv:
+            label = (p.get("label") or "").strip()
+            selection = (p.get("value") or "").strip().lower()
+            if selection == "no" and manual_pref_present(label, manual_prefs):
+                hard_block = True
+                break
+        if hard_block:
+            continue
+
+
+        # 1) Price
+        if not price_match_v2(listing_price, obj.get("price_ranges") or []):
+            continue
+
+        # 2) Beds/Baths (only for SF/Condo/Townhouse)
+        if bucket in ("single_family", "condo", "townhouse"):
+            if not _multi_min_match(listing_ci.get("bedrooms"), obj.get("beds") or []):
+                continue
+            if not _multi_min_match(listing_ci.get("bathrooms_full"), obj.get("baths") or []):
+                continue
+
+        # 3) Special preferences
+        prefs_kv = obj.get("preferences_kv") or []
+        if not prefs_kv:
+            # no special prefs => auto match
+            matched_buyer_ids.append(obj["buyer_mongo_id"])
+            evaluations_all.append({
+                "buyer_mongo_id": obj["buyer_mongo_id"],
+                "match": True,
+                "confidence_0_to_1": 1.0,
+                "reasons": ["No special preferences set; deterministic rules passed"],
+                "failed_checks": [],
+            })
+            continue
+
+        ai_candidates.append(obj)
+
+    print("ai_candidates=====",ai_candidates)
+
+
+
+
+
+
+    # # Chunk AI calls
+ 
     for i in range(0, len(ai_candidates), AI_BATCH_SIZE):
         batch = ai_candidates[i:i + AI_BATCH_SIZE]
         if not batch:
             continue
 
-        
-
         ai_result = call_ai_matcher(property_payload, batch)
-
-        print("ai_result=====",ai_result)
-
-        batch_matches = ai_result.get("matched_buyer_mongo_ids") or []
         batch_evals = ai_result.get("evaluations") or []
 
-        print("batch_matches=====",batch_matches)
-        print("batch_evals=====",batch_evals)
-
-        # apply confidence threshold if provided
+        # Index by buyer id for safety
+        eval_by_id: Dict[str, Dict[str, Any]] = {}
         for ev in batch_evals:
-            try:
-                evaluations_all.append(ev)
-            except Exception:
-                pass
+            if isinstance(ev, dict) and ev.get("buyer_mongo_id"):
+                eval_by_id[str(ev["buyer_mongo_id"])] = ev
 
-        for ev in batch_evals:
-            if not isinstance(ev, dict):
-                continue
-            if ev.get("match") is True and float(ev.get("confidence_0_to_1") or 0) >= MIN_CONFIDENCE:
-                mid = ev.get("buyer_mongo_id")
-                if isinstance(mid, str) and mid:
-                    matched_buyer_ids.append(mid)
+        for cand in batch:
+            bid = cand["buyer_mongo_id"]
+            ev = eval_by_id.get(bid) or {}
 
-        # fallback: if model only returned matched_buyer_mongo_ids
-        if batch_matches:
-            for mid in batch_matches:
-                if isinstance(mid, str) and mid:
-                    matched_buyer_ids.append(mid)
+            expected = cand.get("preferences_kv") or []
+            expected_labels = [x.get("label") for x in expected if x.get("label") and x.get("value")]
+
+            ai_checks = ev.get("preference_checks") or []
+            ai_by_label = {}
+            for pc in ai_checks:
+                if isinstance(pc, dict) and pc.get("label"):
+                    ai_by_label[_norm_label(pc["label"])] = pc
+
+            # Build full check list (FAIL-CLOSED) + manual override to PRESENT
+            pref_checks = []
+            for x in expected:
+                lab = str(x.get("label") or "").strip()
+                sel = str(x.get("value") or "").strip()  # Yes/No/Maybe/Only
+                if not lab or not sel:
+                    continue
+
+                # ✅ B) Manual prefs override: if listing manual prefs imply this concept is PRESENT,
+                # force status=PRESENT regardless of AI output.
+                if manual_pref_present(lab, manual_prefs):
+                    pref_checks.append({
+                        "label": lab,
+                        "selection": sel,
+                        "status": "PRESENT",
+                        "confidence_0_to_1": 1.0,
+                        "evidence": "Manual special preferences override (listing indicates PRESENT)",
+                    })
+                    continue
+
+                pc = _find_best_ai_check_for_label(lab, ai_by_label)
+
+                if not pc:
+                    # missing from AI => UNKNOWN (so Yes/No/Only fail)
+                    pref_checks.append({
+                        "label": lab,
+                        "selection": sel,
+                        "status": "UNKNOWN",
+                        "confidence_0_to_1": 0.0,
+                        "evidence": "Missing from AI response",
+                    })
+                else:
+                    # ensure selection exists + keep output stable
+                    pc = dict(pc)  # avoid mutating ai_by_label contents
+                    pc["label"] = lab         # keep exact label from candidate (your system prompt asks for this)
+                    pc["selection"] = sel     # ensure correct selection
+                    pc.setdefault("confidence_0_to_1", 0.0)
+                    pc.setdefault("evidence", "")
+                    pref_checks.append(pc)
+
+
+
+
+            ok, conf, reasons, failed = apply_special_preference_rules(pref_checks)
+            final_match = bool(ok) and float(conf or 0) >= MIN_CONFIDENCE
+            
+
+
+            evaluations_all.append({
+                "buyer_mongo_id": bid,
+                "match": final_match,
+                "confidence_0_to_1": float(conf or 0),
+                "reasons": reasons,
+                "failed_checks": failed,
+            })
+
+            if final_match:
+                matched_buyer_ids.append(bid)
+
+# -------------------------------------------------------------------
+# Phase 1 enhancement END
+# -------------------------------------------------------------------
+
+
 
     # de-dup
     matched_buyer_ids = sorted(list(set(matched_buyer_ids)))
@@ -843,10 +1657,18 @@ def match_buyers(payload: MatchBuyersPayload):
     # 5) Update parsed_listings with matched buyer Mongo ids
     
     if not payload.dry_run:
-        ParsedListing.objects(id=listing_oid).update_one(
-            set__matched_buyer_ids=matched_buyer_ids,
-            set__updated_at=datetime.utcnow(),
-        )
+        update_fields = {
+            "set__matched_buyer_ids": matched_buyer_ids,
+            "set__updated_at": datetime.utcnow(),
+        }
+
+        # NEW: if at least one buyer matched, mark buyer_send_status as pending
+        if len(matched_buyer_ids) > 0:
+            update_fields["set__buyer_send_status"] = "pending"
+        else:
+            update_fields["unset__buyer_send_status"] = 1
+
+        ParsedListing.objects(id=listing_oid).update_one(**update_fields)
 
     # 6) If matches found => update Podio property reference field
     podio_updated = False
@@ -916,6 +1738,19 @@ def match_buyers(payload: MatchBuyersPayload):
     }
 )
     
+    needs_rerun = False
+    try:
+        curr = ParsedListing.objects(id=listing_oid).only(
+            "manual_special_preferences_rematch_at",
+            "buyer_matching_last_attempt_at"
+        ).first()
+
+        if curr and curr.manual_special_preferences_rematch_at and curr.buyer_matching_last_attempt_at:
+            if curr.manual_special_preferences_rematch_at > curr.buyer_matching_last_attempt_at:
+                needs_rerun = True
+    except Exception:
+        pass
+    
 
     return {
         "ok": True,
@@ -929,4 +1764,5 @@ def match_buyers(payload: MatchBuyersPayload):
         "podio_updated": podio_updated,
         "dry_run": payload.dry_run,
         "evaluations_sample": evaluations_all[:10],  # helpful for debugging in logs
+        "needs_rerun": needs_rerun,
     }
