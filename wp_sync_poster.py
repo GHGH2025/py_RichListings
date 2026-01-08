@@ -96,7 +96,7 @@ def _build_post_body(pl: ParsedListing) -> Dict[str, Any]:
       deal_type = ["MLS Deals"]
       newest_deals = ["Daily Deal Email"]
     """
-    body: Dict[str, Any] = {"token": WP_TOKEN}
+    body: Dict[str, Any] = {"token": WP_TOKEN,  "newest_deals": ["Todays Deal"]}
 
     # title/address lines
     full_addr_line = _compose_full_address(pl)
@@ -160,7 +160,7 @@ def _build_post_body(pl: ParsedListing) -> Dict[str, Any]:
 
     # # static
     # body.setdefault("deal_type", ["MLS Deals"])
-    body.setdefault("newest_deals", ["Todays Deal"])
+    # body.setdefault("newest_deals", ["Todays Deal"])
 
     return body
 
