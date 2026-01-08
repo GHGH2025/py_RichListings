@@ -135,7 +135,7 @@ class ParsedListing(Document):
     wp_parsed_data = DictField()
 
     wp_status = StringField(
-        choices=("ready_to_process", "keys_generated", "description_generated")
+        choices=("ready_to_process", "keys_generated", "description_generated","posted")
     )
 
     wp_check = StringField(
@@ -172,6 +172,13 @@ class ParsedListing(Document):
     buyer_matching_last_error_sig = StringField()
     buyer_matching_last_error = StringField()
     buyer_matching_last_attempt_at = DateTimeField(null=True)
+
+    buyer_send_status = StringField(
+        choices=("pending", "des_generated", "sent", "failed"),
+        default=None
+    )
+    buyer_sms_description = StringField()
+    buyer_email_description = StringField()
 
     primary_image_check = DictField(null=True)
 
@@ -320,6 +327,7 @@ class BuyerContact(EmbeddedDocument):
     email = StringField()
     text_number = StringField()
     phone_call = StringField()
+    preference = StringField(choices=("whatsapp", "call", "sms", "email"))
 
 class BuyerLocation(EmbeddedDocument):
     county = StringField()
