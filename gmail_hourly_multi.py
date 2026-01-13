@@ -66,7 +66,8 @@ ACCOUNTS = [
             "npabon34@gmail.com.send.mailchimpapp.com",
             "thesimplehomebuyers@95925329.mailchimpapp.com",
             "michaelzalkind@safetynetinv.com",
-            "mitch.conyers@poplarhomebuyers.com"
+            "mitch.conyers@poplarhomebuyers.com",
+            "mike.barone@outlook.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
@@ -99,7 +100,8 @@ ACCOUNTS = [
             "cody@graystoneig.com",
             "deals@aoinvestments.ccsend.com",
             "info+hoodsyhomes.com@ec1.msgsndr.org",
-            "lenny-riverwalkproperties.net@shared1.ccsend.com"
+            "lenny-riverwalkproperties.net@shared1.ccsend.com",
+            "judson@securehomeinvest.com"
 
 
             # or: "*@oasispropertyinvestments.ccsend.com",
