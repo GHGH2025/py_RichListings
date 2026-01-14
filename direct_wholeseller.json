@@ -148,5 +148,11 @@
     "email": "toddallensims@icloud.com",
     "phone": "305-458-8826",
     "updateFlagForPodio": "false"
+  },
+  "mike.barone@outlook.com": {
+    "name": "Mike Barone",
+    "email": "mike.barone@outlook.com",
+    "phone": "954-444-8579",
+    "updateFlagForPodio": "true"
   }
 }
