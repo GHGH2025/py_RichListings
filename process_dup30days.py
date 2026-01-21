@@ -5,6 +5,7 @@ from mongoengine.queryset.visitor import Q
 
 # from mongo_engine_conn import init_db
 from models import ParsedListing
+import re
 
 NEXT_STATUS_ON_PASS = "processed"                 # what to set on pass
 HISTORICAL_STATUSES = ("skipped", "posted", "ready_to_post", "passed","processed","ready_for_image_processing","ready_for_primary_image_check")
@@ -13,6 +14,26 @@ PRICE_DROP_THRESHOLD = 0.06                       # 6%
 
 def _now() -> datetime:
     return datetime.utcnow()
+
+
+
+
+_MASK_RUN_RE = re.compile(r"^(\s*\d+)\s*((?:[^\w\s]|_){2,})\s*")
+
+def normalize_masked_street(addr: str) -> str:
+    """
+    If address starts with a street number followed by a masked run like *** ___ ---,
+    convert that run to 'xxx' (lowercase) so we standardize.
+    Examples:
+      '2*** SW Natura Ave...' -> '2xxx SW Natura Ave...'
+      '2___ SW Natura Ave...' -> '2xxx SW Natura Ave...'
+      '2--- SW Natura Ave...' -> '2xxx SW Natura Ave...'
+    """
+    print("addr before masked func>>",addr)
+    if not isinstance(addr, str) or not addr.strip():
+        return addr
+    return _MASK_RUN_RE.sub(r"\1xxx ", addr.strip(), count=1)
+
 
 
 def _best_addr_city_zip(pl: ParsedListing) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -141,17 +162,23 @@ def _ensure_geo(pl) -> Optional[dict]:
     Persist if obtained.
     """
     geo = getattr(pl, "geo_code_response", None)
-    if isinstance(geo, dict) and geo:
+    ci = getattr(pl, "complete_info", {}) or {}
+    addr_src = (ci.get("address") or getattr(pl, "address", "") or "")
+
+    if isinstance(geo, dict) and geo and not _MASK_RUN_RE.match(addr_src.strip()):
         return geo
 
     # lazy-populate from complete_info if possible
+
     ci = getattr(pl, "complete_info", {}) or {}
+    raw_addr = normalize_masked_street((ci.get("address") or getattr(pl, "address", "") or "").strip())
     raw = _compose_raw_for_google(
-        (ci.get("address") or "").strip(),
-        (ci.get("city") or "").strip(),
-        (ci.get("state") or "").strip(),
-        (ci.get("zip") or "").strip(),
+        raw_addr,
+        (ci.get("city") or getattr(pl, "city", "") or "").strip(),
+        (ci.get("state") or getattr(pl, "state", "") or "").strip(),
+        (ci.get("zip") or getattr(pl, "zip", "") or "").strip(),
     )
+
     if not raw:
         return None
 
@@ -172,8 +199,9 @@ def _ensure_geo(pl) -> Optional[dict]:
 def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
     """
     Fallback search for recent prior using stored (or freshly-fetched) geo_code_response.
-    Priority: place_id → formatted_address → postal+route substring match.
+    Priority: place_id → formatted_address → postal+route substring match → lat/lng proximity.
     """
+
     geo = _ensure_geo(pl)
     if not geo:
         return None
@@ -189,7 +217,7 @@ def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
     if x.get("pid"):
         qs = (
             ParsedListing.objects(base_q & Q(geo_code_response__place_id=x["pid"]))
-            .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status")
+            .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status", "geo_code_response")
             .order_by("-skipped_or_posted_at")
         )
         hit = qs.first()
@@ -200,7 +228,7 @@ def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
     if x.get("fa"):
         qs = (
             ParsedListing.objects(base_q & Q(geo_code_response__formatted_address__iexact=x["fa"]))
-            .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status")
+            .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status", "geo_code_response")
             .order_by("-skipped_or_posted_at")
         )
         hit = qs.first()
@@ -217,7 +245,7 @@ def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
                 & Q(geo_code_response__formatted_address__icontains=postal)
                 & Q(geo_code_response__formatted_address__icontains=route)
             )
-            .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status")
+            .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status", "geo_code_response")
             .order_by("-skipped_or_posted_at")
         )
         hit = qs.first()
@@ -240,7 +268,7 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
 
     candidates = (
         ParsedListing.objects(status="verified")
-        .only("address", "city", "zip", "price", "complete_info", "skipped_or_posted_at")
+        .only("address", "city", "zip", "state", "price", "complete_info", "geo_code_response", "skipped_or_posted_at", "status")
         .limit(limit)
     )
 
