@@ -474,9 +474,11 @@ def upsert_parsed_listings_from_html(
                 norm_city = _normalize_city_for_google(city)
                 raw_line = _compose_raw_for_google(addr, norm_city, state, zip_)
                 if raw_line:
-                    fa, fc = get_street_and_city(raw_line)  # returns (street, city) or (None, None)
+                    fa, fc, fz = get_street_and_city(raw_line)  # returns (street, city) or (None, None)
                     if fa and fc:
                         addr, city = fa, fc   # overwrite with formatted values
+                    if fz and not zip_:
+                        zip_ = fz
                     # geocode full result (non-blocking/fail-open)
                     geo_js = geocode_response(raw_line)
             except Exception as e:
