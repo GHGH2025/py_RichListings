@@ -26,8 +26,8 @@ def get_street_and_city(raw_address: str, region_code: str = "US"):
       "3427 Barstow St, Sarasota, FL 34235, USA"
 
     Returns:
-      (street, city) -> ("3427 Barstow St", "Sarasota")
-    or (None, None) if parsing fails.
+      (street, city, zip_)
+    or (None, None, None) if parsing fails.
     """
     payload = {
         "address": {
@@ -45,17 +45,18 @@ def get_street_and_city(raw_address: str, region_code: str = "US"):
 
         street = postal["addressLines"][0].strip()         # "3427 Barstow St"
         city   = postal.get("locality", "").strip()        # "Sarasota"
+        fz     = postal.get("postalCode", "").strip()
 
         if not street or not city:
-            return None, None
+            return None, None, None
 
-        return street, city
+        return street, city, fz
 
     except (KeyError, IndexError):
-        return None, None
+        return None, None, None
     except requests.RequestException as e:
         print(f"Request error: {e}")
-        return None, None
+        return None, None, None
 
 def geocode_response(raw_address: str) -> Optional[Dict[str, Any]]:
     """
