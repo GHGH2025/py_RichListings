@@ -322,7 +322,6 @@ class RCMediaLinkLog(Document):
 
     created_at              = DateTimeField(default=datetime.utcnow)
 
-
 # -------------------------------
 # Web Form Buyer Submissions
 # -------------------------------
@@ -335,27 +334,41 @@ class BuyerContact(EmbeddedDocument):
     # legacy fields (kept so old logic never breaks)
     text_number = StringField()
     phone_call = StringField()
-    preference = StringField(choices=("whatsapp", "call", "sms", "email"))
+
+    # ✅ legacy single value (keep it)
+    preference = StringField()  # "whatsapp" | "call" | "sms" | "email" | "text" etc
 
     # NEW fields
     call_whatsapp = StringField()
-    preference = StringField()  # "Text" | "Email" | "WhatsApp" | "Call"
+
+    # ✅ NEW: store multi-select from frontend
+    preferences = ListField(StringField(), default=list)
 
 
 class BuyerLocation(EmbeddedDocument):
-    # legacy top-level location (frontend no longer sends these)
+    # legacy (kept for indexes + old logic)
     county = StringField()
     city = StringField()
+
+    # ✅ NEW global location (from updated frontend)
+    scope = StringField()  # "south_florida" | "all_florida"
+    counties = ListField(StringField(), default=list)
+    cities = ListField(StringField(), default=list)
 
 
 class BuyerPropertyLocation(EmbeddedDocument):
     scope = StringField()  # e.g. "south_florida" | "all_florida"
-    counties = ListField(StringField(), default=list)
+    counties = ListField(StringField(), default=list)  # legacy support (may be empty now)
 
 
 class BuyerPropertyPrefs(EmbeddedDocument):
     enabled = BooleanField(default=False)
+
+    # ✅ legacy single type (keep populated for old logic)
     type = StringField()
+
+    # ✅ NEW: multi-select types from updated frontend
+    types = ListField(StringField(), default=list)
 
     # LEGACY (kept)
     price_range = StringField()
@@ -369,7 +382,6 @@ class BuyerPropertyPrefs(EmbeddedDocument):
 
     # {"Preference Label": "No/Yes/Maybe/Only"}
     preferences = DictField()
-    # ✅ Original preference labels preserved as data (no Mongo key restrictions)
     preferences_kv = ListField(DictField(), default=list)
 
 
@@ -379,7 +391,7 @@ class WebFormBuyerSubmission(Document):
         "indexes": [
             {"fields": ["-created_at"], "name": "created_desc"},
             {"fields": ["contact.email"], "name": "contact_email_idx"},
-            {"fields": ["location.county", "location.city"], "name": "county_city_idx"},
+            {"fields": ["location.county", "location.city"], "name": "county_city_idx"},  # ✅ still valid
             {"fields": ["podio_status"], "name": "podio_status_idx"},
         ],
     }
@@ -397,15 +409,11 @@ class WebFormBuyerSubmission(Document):
 
     # store raw request for safety/future (phase 2)
     raw_payload = DictField()
-    raw_payload_json = StringField()  # exact original JSON string
+    raw_payload_json = StringField()
 
-    # generated readable text per property type (HTML)
-    podio_property_html = DictField()  # {"multiFamily": "<p>...</p>", ...}
+    podio_property_html = DictField()
+    podio_counties_html = DictField()
 
-    # NEW: dedicated counties-per-type HTML for new Podio fields
-    podio_counties_html = DictField()  # {"multiFamily": "<p>Scope...</p>", ...}
-
-    # Podio tracking
     podio_item_id = IntField()
     podio_status = StringField(choices=("not_sent", "sent", "failed"), default="not_sent")
     podio_error = StringField()

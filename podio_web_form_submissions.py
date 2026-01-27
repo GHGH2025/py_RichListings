@@ -151,6 +151,8 @@ def create_web_form_submission_item(
 ) -> Optional[int]:
     fields: List[Dict[str, Any]] = []
 
+    counties_html = counties_html or {}  # ✅ add this line (prevents None.get crash)
+
     # Contact
     if name: fields.append(_field(FIELD_NAME, name))
     if company: fields.append(_field(FIELD_COMPANY, company))

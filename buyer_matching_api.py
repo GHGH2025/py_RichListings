@@ -448,6 +448,236 @@ def _county_variants(raw: str) -> List[str]:
         variants.add(t.lower())
     return [v for v in variants if v]
 
+# -----------------------------
+# NEW: list/string normalizers
+# -----------------------------
+def _clean_list_any(x: Any) -> List[str]:
+    """
+    Accepts list[str] OR a legacy string, returns clean list[str].
+    """
+    if not x:
+        return []
+    if isinstance(x, list):
+        return [str(v).strip() for v in x if str(v).strip()]
+    s = str(x).strip()
+    if not s:
+        return []
+    # allow comma-separated legacy strings
+    if "," in s:
+        return [p.strip() for p in s.split(",") if p.strip()]
+    return [s]
+
+def _case_variants(s: str) -> List[str]:
+    s = (s or "").strip()
+    if not s:
+        return []
+    return list({s, s.title(), s.upper(), s.lower()})
+
+
+# -----------------------------
+# NEW: location matching v3 (uses global counties/cities arrays)
+# -----------------------------
+SOUTH_FLORIDA_COUNTY_TOKENS = {"miami", "dade", "broward", "palm", "beach"}
+
+def _is_south_florida_listing(listing_ci: Dict[str, Any], listing_city: str, listing_county: str) -> bool:
+    # if parsed region fields exist, trust them
+    tri = _norm_text(str(listing_ci.get("tri_county_name") or ""))
+    if tri in {"miami_dade", "broward", "palm_beach"}:
+        return True
+
+    # fallback token match on county name
+    lc = _norm_text(listing_county)
+    tokens = {t for t in re.split(r"[\s\-]+", lc) if t and len(t) >= 3}
+    return bool(tokens & SOUTH_FLORIDA_COUNTY_TOKENS)
+
+def _city_list_match(listing_city: str, buyer_cities: List[str]) -> bool:
+    if not listing_city or not buyer_cities:
+        return False
+
+    listing_opts = {_norm_text(listing_city)}
+    # also support st/saint variants on listing side
+    for x in _city_equivalents(listing_city):
+        listing_opts.add(_norm_text(x))
+
+    for bc in buyer_cities:
+        bc_norm = _norm_text(bc)
+        if not bc_norm:
+            continue
+        # exact or token-boundary containment
+        for lo in listing_opts:
+            if bc_norm == lo or re.search(rf"\b{re.escape(bc_norm)}\b", lo):
+                return True
+    return False
+
+def buyer_location_match_v3(
+    listing_city: str,
+    listing_county: str,
+    listing_ci: Dict[str, Any],
+    b: WebFormBuyerSubmission,
+    bucket: str
+) -> bool:
+    """
+    NEW RULES:
+    - Use bucket location if present (scope + counties).
+    - Use GLOBAL location arrays: location.counties[] / location.cities[].
+    - If buyer has cities[] => city must match (most precise).
+    - Else if buyer has counties[] => county must match.
+    - Else use scope presets (all_florida => pass, south_florida => tri-county check).
+    - Else fallback to legacy strict county+city.
+    """
+    bucket_doc = getattr(b, bucket, None)
+    bucket_loc = getattr(bucket_doc, "location", None) if bucket_doc else None
+
+    global_loc = getattr(b, "location", None)
+
+    bucket_scope = _scope_norm(getattr(bucket_loc, "scope", "") or "") if bucket_loc else ""
+    bucket_counties = _clean_list_any(getattr(bucket_loc, "counties", []) if bucket_loc else [])
+
+    global_scope = _scope_norm(getattr(global_loc, "scope", "") or "") if global_loc else ""
+    global_counties = _clean_list_any(getattr(global_loc, "counties", []) if global_loc else [])
+    global_cities = _clean_list_any(getattr(global_loc, "cities", []) if global_loc else [])
+
+    scope = bucket_scope or global_scope or ""
+
+    # effective counties: prefer bucket counties if provided, else global counties
+    eff_counties = bucket_counties if bucket_counties else global_counties
+    eff_cities = global_cities  # only global has cities in your current schema
+
+    # 1) cities list => strongest filter
+    if eff_cities:
+        return _city_list_match(listing_city, eff_cities)
+
+    # 2) counties list => next best
+    if eff_counties:
+        return _county_list_match(listing_county, eff_counties)
+
+    # 3) scope preset fallback
+    if scope == "all_florida":
+        return True
+    if scope == "south_florida":
+        return _is_south_florida_listing(listing_ci, listing_city, listing_county)
+
+    # 4) legacy strict fallback (older docs)
+    b_city = (global_loc.city if global_loc else "") or ""
+    b_county = (global_loc.county if global_loc else "") or ""
+    return stage1_location_match(listing_city, listing_county, b_city, b_county)
+
+
+# -----------------------------
+# NEW: AI type matching
+# -----------------------------
+def _is_generic_type_label(label: str) -> bool:
+    s = _norm_text(label)
+    if not s:
+        return False
+    # broad options that should not restrict matching
+    broad_hints = [
+        "in general", "any location", "any locations", "all locations",
+        "yes i am interested", "all florida", "all of florida"
+    ]
+    return any(h in s for h in broad_hints)
+
+def type_match_deterministic(
+    listing_ci: Dict[str, Any],
+    property_payload: Dict[str, Any],
+    bucket: str,
+    selected_types: List[str],
+    other_type: str
+) -> Tuple[Optional[bool], str]:
+    """
+    Returns (decision, reason):
+    - decision True/False => deterministic
+    - decision None => need AI
+    """
+    types = [t.strip() for t in (selected_types or []) if (t or "").strip()]
+    if not types:
+        return (True, "no types selected (legacy)")
+
+    if any(_is_generic_type_label(t) for t in types):
+        return (True, "generic type selection")
+
+    # quick deterministic signals (when types clearly imply a feature)
+    evidence = (property_payload.get("evidence_text_excerpt") or "").lower()
+    tags = [str(x).lower() for x in (listing_ci.get("marketing_tags") or [])]
+
+    for t in types:
+        tl = t.lower()
+
+        # "Other" => must use other_type text; deterministic only if other_type clearly appears
+        if "other" == _norm_text(t) or tl.strip() == "other":
+            if other_type and other_type.lower() in evidence:
+                return (True, "other_type matched in evidence")
+            return (None, "other needs AI or missing evidence")
+
+        # Beach / waterfront style filters
+        if ("beach" in tl) or ("waterfront" in tl) or ("ocean" in tl):
+            is_on_water = bool(listing_ci.get("is_on_water") is True)
+            wf = str(listing_ci.get("water_feature") or "").lower()
+            if is_on_water or (wf and wf != "none") or ("beach" in evidence) or any("beach" in x for x in tags):
+                return (True, "beach/waterfront implied and supported")
+            return (None, "beach/waterfront needs AI")
+
+        # Tear-down / redevelopment
+        if ("tear" in tl and "down" in tl) or ("teardown" in tl) or ("redevelop" in tl):
+            if listing_ci.get("is_teardown_or_redevelopment") is True:
+                return (True, "teardown flag true")
+            if "tear down" in evidence or "teardown" in evidence or "redevelop" in evidence:
+                return (True, "teardown implied in evidence")
+            return (None, "teardown needs AI")
+
+        # Units / duplex / triplex / fourplex -> usually needs AI (data may be in text)
+        if any(k in tl for k in ["duplex", "triplex", "fourplex", "units", "unit"]):
+            return (None, "unit-count style subtype needs AI")
+
+    # default: subtype selected but no deterministic mapping => AI required
+    return (None, "subtype selected; needs AI")
+
+def call_ai_type_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    AI decides whether listing matches ANY of buyer selected_types[] for that bucket.
+    Returns JSON:
+    { "evaluations": [ { "buyer_mongo_id": "...", "type_match": true/false, "confidence_0_to_1": 0.0, "evidence": "..." } ] }
+    """
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY missing in environment")
+
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    system = (
+        "You are a strict real estate subtype matcher.\n"
+        "For each candidate buyer, decide if the property matches ANY of their selected subtype labels.\n\n"
+        "Rules:\n"
+        "- Use semantic matching (synonyms/paraphrases). Do not require exact strings.\n"
+        "- If a selected type is broad/generic (e.g. 'in general', 'any location', 'yes i am interested'), treat as MATCH.\n"
+        "- If a selected type is 'Other', use candidate.other_type as the intended subtype.\n"
+        "- If unsure, return type_match=false with low confidence.\n\n"
+        "Return ONLY JSON:\n"
+        "{\n"
+        '  "evaluations": [\n'
+        "    {\n"
+        '      "buyer_mongo_id": "string",\n'
+        '      "type_match": true,\n'
+        '      "confidence_0_to_1": 0.0,\n'
+        '      "evidence": "short reason"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+    )
+
+    user = {"property": property_payload, "candidates": candidates}
+
+    resp = client.chat.completions.create(
+        model=MATCHER_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+        ],
+        temperature=0,
+    )
+
+    return _extract_json_obj(resp.choices[0].message.content)
+
 
 def _county_list_match(listing_county: str, buyer_counties: List[str]) -> bool:
     """
@@ -1332,6 +1562,158 @@ def manual_pref_present(label: str, manual_prefs_norm: List[str]) -> bool:
 
     return False
 
+def type_match_deterministic(
+    *,
+    listing_ci: Dict[str, Any],
+    property_payload: Dict[str, Any],
+    bucket: str,
+    selected_types: List[str],
+    other_type: str,
+) -> Tuple[Optional[bool], str]:
+    """
+    Returns:
+      (True, reason)  => type/subtype matched deterministically
+      (False, reason) => mismatch deterministically
+      (None, reason)  => not confident; requires AI subtype check
+    Notes:
+    - Multi-select selected_types is treated as OR: listing matches if it fits ANY selected type.
+    - Backward safe: if buyer has no types (legacy), do NOT block.
+    """
+
+    # Legacy/no selection: do not block old data
+    norm_types = [_norm_text(t) for t in (selected_types or []) if str(t or "").strip()]
+    if not norm_types:
+        return True, "No subtype selected (legacy) => do not block"
+
+    # "Other" usually needs AI because it depends on free-text other_type
+    if any(t == "other" for t in norm_types):
+        if other_type.strip():
+            return None, "Selected 'Other' with other_type => requires AI"
+        # If 'Other' selected but no other_type provided, we can’t validate => AI
+        return None, "Selected 'Other' without other_type => requires AI"
+
+    # If selection contains "in general" / "any location" / "any" etc => pass
+    if any(("in general" in t) or ("any location" in t) or (t == "any") for t in norm_types):
+        return True, "General subtype selected"
+
+    # Some deterministic signals
+    is_on_water = bool(listing_ci.get("is_on_water") is True)
+    water_feature = _norm_text(str(listing_ci.get("water_feature") or ""))
+    tags = " ".join([_norm_text(str(x)) for x in (listing_ci.get("marketing_tags") or []) if str(x).strip()])
+    excerpt = _norm_text(str(listing_ci.get("raw_description_excerpt") or ""))
+
+    # Condo subtype: beachfront
+    # (If buyer selected beachfront-only and listing clearly not on/near water => mismatch for that subtype)
+    def matches_condo_subtype(t: str) -> Optional[bool]:
+        if "beach" in t or "beachfront" in t or "beach front" in t:
+            # definite present signals
+            if is_on_water or ("ocean" in water_feature) or ("intracoastal" in water_feature) or ("beach" in tags) or ("ocean" in tags):
+                return True
+            # definite absent signals
+            if (listing_ci.get("is_on_water") is False) and (water_feature in ("none", "", "unknown")):
+                return False
+            return None
+        return None
+
+    # Land subtype: teardown
+    def matches_land_subtype(t: str) -> Optional[bool]:
+        if "tear" in t:
+            if listing_ci.get("is_teardown_or_redevelopment") is True:
+                return True
+            if "tear down" in excerpt or "teardown" in excerpt or "tear down" in tags:
+                return True
+            # if explicitly says not teardown? usually not present in data => None
+            return None
+        return None
+
+    # Multi-family subtype: duplex/triplex/fourplex vs 5-25 units (usually needs AI)
+    def matches_multifamily_subtype(t: str) -> Optional[bool]:
+        if "duplex" in t or "triplex" in t or "fourplex" in t:
+            if "duplex" in excerpt or "triplex" in excerpt or "fourplex" in excerpt:
+                return True
+            return None
+        if "5" in t and "unit" in t:
+            # if listing mentions units count
+            if re.search(r"\b(\d+)\s*units?\b", excerpt):
+                m = re.search(r"\b(\d+)\s*units?\b", excerpt)
+                if m:
+                    try:
+                        n = int(m.group(1))
+                        return True if 5 <= n <= 25 else False
+                    except Exception:
+                        return None
+            return None
+        return None
+
+    # Evaluate OR across selected types: if ANY is True => match
+    any_unknown = False
+    for t in norm_types:
+        verdict: Optional[bool] = None
+
+        if bucket == "condo":
+            verdict = matches_condo_subtype(t)
+        elif bucket == "land":
+            verdict = matches_land_subtype(t)
+        elif bucket == "multi_family":
+            verdict = matches_multifamily_subtype(t)
+
+        if verdict is True:
+            return True, f"Subtype matched deterministically: {t}"
+        if verdict is None:
+            any_unknown = True
+
+    # If we can deterministically say none match and no unknowns => mismatch
+    if not any_unknown:
+        return False, "No selected subtype matched deterministically"
+
+    # Otherwise require AI
+    return None, "Subtype uncertain => requires AI"
+
+
+def call_ai_type_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    AI only decides: does this listing match ANY of buyer.selected_types (plus other_type if provided)?
+    Output schema:
+    {
+      "evaluations": [
+        {"buyer_mongo_id":"...", "type_match": true/false, "confidence_0_to_1": 0.0-1.0, "evidence":"..."}
+      ]
+    }
+    """
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY missing in environment")
+
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    system = (
+        "You are a strict real estate property subtype matcher.\n"
+        "Given ONE property (listing) and multiple buyer candidates:\n"
+        "- Each candidate has selected_types (array). Treat it as OR: match if the listing fits ANY selected type.\n"
+        "- If candidate includes other_type text, use it to interpret 'Other'.\n"
+        "- Use semantic matching (synonyms/paraphrases). Do NOT guess.\n"
+        "- Output ONLY JSON in this schema:\n"
+        "{\n"
+        '  "evaluations": [\n'
+        '    {"buyer_mongo_id":"string","type_match":true,"confidence_0_to_1":0.0,"evidence":"short"}\n'
+        "  ]\n"
+        "}\n"
+    )
+
+    user = {"property": property_payload, "candidates": candidates}
+
+    resp = client.chat.completions.create(
+        model=MATCHER_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+        ],
+        temperature=MATCHER_TEMPERATURE,
+    )
+
+    return _extract_json_obj(resp.choices[0].message.content)
+
+
 @router.post("/match")
 def match_buyers(payload: MatchBuyersPayload):
     # 1) Validate listing ObjectId
@@ -1373,33 +1755,35 @@ def match_buyers(payload: MatchBuyersPayload):
 # -------------------------------------------------------------------
 
 
-    # 3) Stage 1: NO AI filter
-    # NEW submissions match via per-bucket scope/counties
-    # Legacy submissions still supported via top-level county+city
-
+   # 3) Stage 1: NO AI filter (UPDATED for global location arrays)
     q_enabled = Q(**{f"{bucket}__enabled": True})
 
-    # NEW: per-bucket location OR legacy top-level location
-    q_new_all = Q(**{f"{bucket}__location__scope": "all_florida"})
+    # bucket scope all_florida OR global scope all_florida
+    q_new_all = Q(**{f"{bucket}__location__scope": "all_florida"}) | Q(location__scope="all_florida")
 
     county_re = build_loose_regex_from_text(listing_county)
     city_re = build_loose_regex_from_text(listing_city)
     q_legacy = Q(location__county__iregex=county_re, location__city__iregex=city_re)
 
-    # (Optional) try cheap mongo prefilter for south_florida using __in variants
+    # cheap mongo prefilter for counties-in (bucket OR global)
     county_vars = _county_variants(listing_county)
-    q_new_sf = Q(**{
-        f"{bucket}__location__scope": "south_florida",
-        f"{bucket}__location__counties__in": county_vars
-    })
 
-    buyers_qs = WebFormBuyerSubmission.objects(q_enabled & (q_new_all | q_new_sf | q_legacy)).only(
-        "id", "contact", "location", bucket, "podio_item_id"
+    q_new_sf = (
+        Q(**{f"{bucket}__location__scope": "south_florida", f"{bucket}__location__counties__in": county_vars})
+        | Q(location__counties__in=county_vars)
     )
+
+    # optional city __in prefilter (case sensitive in mongo, but helps sometimes)
+    city_vars = _case_variants(listing_city)
+    q_city_in = Q(location__cities__in=city_vars)
+
+    buyers_qs = WebFormBuyerSubmission.objects(
+        q_enabled & (q_new_all | q_new_sf | q_city_in | q_legacy)
+    ).only("id", "contact", "location", bucket, "podio_item_id")
 
     stage1_candidates: List[WebFormBuyerSubmission] = []
     for b in buyers_qs:
-        if buyer_location_match_v2(listing_city, listing_county, b, bucket):
+        if buyer_location_match_v3(listing_city, listing_county, listing_ci, b, bucket):
             stage1_candidates.append(b)
 
     print("stage1_candidates=====", stage1_candidates)
@@ -1462,11 +1846,17 @@ def match_buyers(payload: MatchBuyersPayload):
         baths_sel = []
         scope = ""
         counties = []
-        selected_type = ""
+        selected_types = []
+        other_type = ""
         pref_kv = []
 
         if bucket_doc:
-            selected_type = (bucket_doc.type or "").strip()
+            # ✅ NEW: types is array now (fallback to legacy 'type' string)
+            selected_types = list(getattr(bucket_doc, "types", []) or [])
+            if (not selected_types) and (getattr(bucket_doc, "type", "") or "").strip():
+                selected_types = [(getattr(bucket_doc, "type", "") or "").strip()]
+
+            other_type = (getattr(bucket_doc, "other_type", "") or "").strip()
 
             price_ranges = list(getattr(bucket_doc, "price_ranges", []) or [])
             # legacy fallback
@@ -1491,24 +1881,28 @@ def match_buyers(payload: MatchBuyersPayload):
                 "company": (b.contact.company if b.contact else ""),
             },
             "bucket": bucket,
-            "selected_type": selected_type,
+
+            # ✅ NEW fields Patch 4 needs
+            "selected_types": selected_types,
+            "other_type": other_type,
+
             "price_ranges": price_ranges,
             "beds": beds_sel,
             "baths": baths_sel,
             "location": {"scope": scope, "counties": counties},
-            "preferences_kv": pref_kv,  # <-- use original labels preserved here
+            "preferences_kv": pref_kv,
         }
 
 
     ai_candidates: List[Dict[str, Any]] = []
+    type_ai_pending: List[Dict[str, Any]] = []  # candidates that need AI for subtype
     matched_buyer_ids: List[str] = []
     evaluations_all: List[Dict[str, Any]] = []
 
-    # Deterministic filters BEFORE AI
     for b in stage1_candidates:
         obj = buyer_bucket_obj(b)
 
-        # 3) FAIL-FAST: if buyer selected "No" but listing manual prefs says the thing is PRESENT -> reject immediately
+        # FAIL-FAST: No + manual pref present => reject
         pref_kv = obj.get("preferences_kv") or []
         hard_block = False
         for p in pref_kv:
@@ -1519,7 +1913,6 @@ def match_buyers(payload: MatchBuyersPayload):
                 break
         if hard_block:
             continue
-
 
         # 1) Price
         if not price_match_v2(listing_price, obj.get("price_ranges") or []):
@@ -1532,23 +1925,74 @@ def match_buyers(payload: MatchBuyersPayload):
             if not _multi_min_match(listing_ci.get("bathrooms_full"), obj.get("baths") or []):
                 continue
 
-        # 3) Special preferences
+        # 3) ✅ Type/Subtype (NEW) — must match (OR across selected_types)
+        decision, reason = type_match_deterministic(
+            listing_ci=listing_ci,
+            property_payload=property_payload,
+            bucket=bucket,
+            selected_types=obj.get("selected_types") or [],
+            other_type=obj.get("other_type") or "",
+        )
+
+        if decision is False:
+            continue
+
+        if decision is None:
+            type_ai_pending.append(obj)
+            continue
+
+        # If we get here: type matched deterministically
         prefs_kv = obj.get("preferences_kv") or []
         if not prefs_kv:
-            # no special prefs => auto match
             matched_buyer_ids.append(obj["buyer_mongo_id"])
             evaluations_all.append({
                 "buyer_mongo_id": obj["buyer_mongo_id"],
                 "match": True,
                 "confidence_0_to_1": 1.0,
-                "reasons": ["No special preferences set; deterministic rules passed"],
+                "reasons": [f"Type matched ({reason}); no special preferences set; deterministic rules passed"],
                 "failed_checks": [],
             })
             continue
 
         ai_candidates.append(obj)
 
-    print("ai_candidates=====",ai_candidates)
+    print("type_ai_pending=====", type_ai_pending)
+    print("ai_candidates(after deterministic type)=====", ai_candidates)
+
+    # ✅ NEW: run AI subtype checks for those pending
+    for i in range(0, len(type_ai_pending), AI_BATCH_SIZE):
+        batch = type_ai_pending[i:i + AI_BATCH_SIZE]
+        if not batch:
+            continue
+
+        ai_type_result = call_ai_type_matcher(property_payload, batch)
+        type_evals = ai_type_result.get("evaluations") or []
+        by_id = {str(x.get("buyer_mongo_id")): x for x in type_evals if isinstance(x, dict) and x.get("buyer_mongo_id")}
+
+        for cand in batch:
+            bid = cand["buyer_mongo_id"]
+            ev = by_id.get(bid) or {}
+            ok = bool(ev.get("type_match") is True)
+
+            if not ok:
+                continue
+
+            prefs_kv = cand.get("preferences_kv") or []
+            if not prefs_kv:
+                matched_buyer_ids.append(bid)
+                evaluations_all.append({
+                    "buyer_mongo_id": bid,
+                    "match": True,
+                    "confidence_0_to_1": float(ev.get("confidence_0_to_1") or 0.8),
+                    "reasons": [f"Type matched by AI: {ev.get('evidence') or 'ok'}; no special preferences set"],
+                    "failed_checks": [],
+                })
+                continue
+
+            ai_candidates.append(cand)
+
+    print("ai_candidates(after AI type)=====", ai_candidates)
+
 
 
 
