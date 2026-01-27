@@ -67,7 +67,8 @@ ACCOUNTS = [
             "thesimplehomebuyers@95925329.mailchimpapp.com",
             "michaelzalkind@safetynetinv.com",
             "mitch.conyers@poplarhomebuyers.com",
-            "mike.barone@outlook.com"
+            "mike.barone@outlook.com",
+            "lorena@safetynetrealty.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain

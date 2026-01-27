@@ -154,5 +154,11 @@
     "email": "mike.barone@outlook.com",
     "phone": "954-444-8579",
     "updateFlagForPodio": "true"
+  },
+  "lorena@safetynetrealty.com":{
+    "name": "Lorena Hernandez",
+    "email": "lorena@safetynetrealty.com",
+    "phone": "352-587-0975",
+    "updateFlagForPodio": "true"
   }
 }
