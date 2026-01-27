@@ -68,7 +68,8 @@ ACCOUNTS = [
             "michaelzalkind@safetynetinv.com",
             "mitch.conyers@poplarhomebuyers.com",
             "mike.barone@outlook.com",
-            "lorena@safetynetrealty.com"
+            "lorena@safetynetrealty.com",
+            "may@lpihomebuyers.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
