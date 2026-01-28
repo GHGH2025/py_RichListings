@@ -163,7 +163,7 @@ class ParsedListing(Document):
     # Buyer Matching Queue (Phase 2 hardening)
     # -----------------------------
     buyer_matching_status = StringField(
-        choices=("none", "pending", "processing", "matched", "errored_listing"),
+        choices=("none", "pending", "processing", "matched", "errored_listing","skipped"),
         default="none"
     )
     buyer_matching_podio_item_id = IntField()  # podio properties item id passed by globiflow
@@ -359,6 +359,7 @@ class BuyerLocation(EmbeddedDocument):
 class BuyerPropertyLocation(EmbeddedDocument):
     scope = StringField()  # e.g. "south_florida" | "all_florida"
     counties = ListField(StringField(), default=list)  # legacy support (may be empty now)
+    cities = ListField(StringField(), default=list)  # ✅ NEW
 
 
 class BuyerPropertyPrefs(EmbeddedDocument):

@@ -49,6 +49,7 @@ def build_property_html(state: Dict[str, Any]) -> str:
     loc = state.get("location") or {}
     scope = str(loc.get("scope") or "").strip()
     counties = _clean_list(loc.get("counties"))  # may be empty now
+    cities = _clean_list(loc.get("cities"))  # ✅ NEW
 
     prefs: Dict[str, str] = state.get("preferences") or {}
     other_type = str(state.get("otherType") or "").strip()
@@ -67,6 +68,8 @@ def build_property_html(state: Dict[str, Any]) -> str:
         parts.append(f"<p><b>Location scope:</b> {escape(scope)}</p>")
     if counties:
         parts.append(f"<p><b>Counties:</b> {escape(', '.join(counties))}</p>")
+    if cities:
+        parts.append(f"<p><b>Cities:</b> {escape(', '.join(cities))}</p>")
 
     if other_type:
         parts.append(f"<p><b>Other type:</b> {escape(other_type)}</p>")
@@ -94,29 +97,24 @@ def build_all_property_html(properties: Dict[str, Any]) -> Dict[str, str]:
 
 
 def build_counties_html(state: Dict[str, Any], global_location: Optional[Dict[str, Any]] = None) -> str:
-    """
-    Podio 'Counties for X' HTML.
-    NEW frontend: counties/cities are global, so we include global counties when provided.
-    """
     if not state or not state.get("enabled"):
         return ""
 
     loc = state.get("location") or {}
-    prop_scope = str(loc.get("scope") or "").strip()
-
-    global_location = global_location or {}
-    global_scope = str(global_location.get("scope") or "").strip()
-    global_counties = _clean_list(global_location.get("counties"))
+    scope = str(loc.get("scope") or "").strip()
+    counties = _clean_list(loc.get("counties"))
+    cities = _clean_list(loc.get("cities"))
 
     parts: List[str] = []
-    if prop_scope:
-        parts.append(f"<p><b>Property scope:</b> {escape(prop_scope)}</p>")
-    if global_scope:
-        parts.append(f"<p><b>Global scope:</b> {escape(global_scope)}</p>")
-    if global_counties:
-        parts.append(f"<p><b>Counties:</b> {escape(', '.join(global_counties))}</p>")
+    if scope:
+        parts.append(f"<p><b>Location scope:</b> {escape(scope)}</p>")
+    if counties:
+        parts.append(f"<p><b>Counties:</b> {escape(', '.join(counties))}</p>")
+    if cities:
+        parts.append(f"<p><b>Cities:</b> {escape(', '.join(cities))}</p>")
 
     return "\n".join(parts).strip()
+
 
 
 def build_all_counties_html(properties: Dict[str, Any], global_location: Optional[Dict[str, Any]] = None) -> Dict[str, str]:

@@ -680,10 +680,14 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                 full_name = (contact.name or "").strip()
                 first_name = full_name.split()[0] if full_name else "Investor"
 
-                pref = getattr(contact, "preference", None) or "sms"
-                pref = pref.lower().strip()
+                # pref = getattr(contact, "preference", None) or "sms"
+                # pref = pref.lower().strip()
 
-                print("pref",pref)
+                prefs_raw = getattr(contact, "preferences", []) or []
+                # normalize to lowercase
+                prefs = [p.lower().strip() for p in prefs_raw if p]
+
+                print("prefs", prefs)
 
                 # Base context for both SMS and Email
                 base_ctx = {
@@ -697,7 +701,7 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                 }
 
                 # ---- SMS send ----
-                if pref == "sms" and contact.text_number:
+                if ("text" in prefs)  and contact.text_number:
                     ctx_sms = dict(base_ctx)
                     ctx_sms["description"] = sms_desc or email_desc or ""
                     ctx_sms["pics_block"] = pics_block_sms
@@ -719,7 +723,7 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                     # send_sms(contact.text_number, sms_body)
 
                 # ---- Email send ----
-                elif pref == "email" and contact.email:
+                if ("email" in prefs) and contact.email:
                     ctx_email = dict(base_ctx)
                     ctx_email["description"] = email_desc or sms_desc or ""
                     ctx_email["pics_block"] = pics_block_email

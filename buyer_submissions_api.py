@@ -87,6 +87,7 @@ class ContactModel(BaseModel):
 class PropertyLocationModel(BaseModel):
     scope: str = ""
     counties: List[str] = Field(default_factory=list)  # legacy support (may be empty)
+    cities: List[str] = Field(default_factory=list)  # ✅ NEW
 
 
 class PropertyModel(BaseModel):
@@ -179,9 +180,23 @@ def _to_embedded(p: PropertyModel) -> BuyerPropertyPrefs:
     types = _normalized_types(p)
     legacy_type = (types[0] if types else "").strip()
 
+    scope = (p.location.scope or "").strip()
+    counties = [c.strip() for c in (p.location.counties or []) if (c or "").strip()]
+    cities = [c.strip() for c in (p.location.cities or []) if (c or "").strip()]
+
+    # ✅ enforce new frontend behavior
+    if scope in ("all_florida", "south_florida"):
+        counties = []
+        cities = []
+    elif scope == "counties":
+        cities = []
+    elif scope == "cities":
+        counties = []
+
     loc = BuyerPropertyLocation(
-        scope=(p.location.scope or "").strip(),
-        counties=[c.strip() for c in (p.location.counties or []) if (c or "").strip()],
+        scope=scope,
+        counties=counties,
+        cities=cities,
     )
 
     return BuyerPropertyPrefs(
@@ -205,6 +220,39 @@ def _to_embedded(p: PropertyModel) -> BuyerPropertyPrefs:
         price_range=(price_ranges[0].strip() if price_ranges else "").strip(),
     )
 
+def _extract_prop_loc(state: dict):
+    loc = (state or {}).get("location") or {}
+    scope = str(loc.get("scope") or "").strip()
+    counties = _clean_list(loc.get("counties") or loc.get("county"))
+    cities = _clean_list(loc.get("cities") or loc.get("city"))
+    return scope, counties, cities
+
+
+def _aggregate_location_from_properties(props_dict: dict):
+    scopes = []
+    counties_set = set()
+    cities_set = set()
+
+    for st in (props_dict or {}).values():
+        if not isinstance(st, dict) or not st.get("enabled"):
+            continue
+        scope, counties, cities = _extract_prop_loc(st)
+        if scope:
+            scopes.append(scope)
+        for c in counties:
+            counties_set.add(c)
+        for c in cities:
+            cities_set.add(c)
+
+    # keep legacy behavior: prefer more “broad” scopes first if mixed
+    scope_priority = ["all_florida", "south_florida", "counties", "cities"]
+    final_scope = ""
+    for s in scope_priority:
+        if s in scopes:
+            final_scope = s
+            break
+
+    return final_scope, sorted(list(counties_set)), sorted(list(cities_set))
 
 
 @router.post("/buyer-submissions")
@@ -213,33 +261,33 @@ def create_buyer_submission(payload: BuyerSubmissionPayload):
     raw_sanitized = mongo_safe_obj(raw_original)
 
     props_dict = raw_original.get("properties") or {}
-    global_loc_dict = raw_original.get("location") or {}
+    # global_loc_dict = raw_original.get("location") or {}
 
     property_html = build_all_property_html(props_dict)
 
-    # Use your existing _clean_list so it's consistent and safe
-    global_counties = _clean_list(global_loc_dict.get("counties") or global_loc_dict.get("county"))
-    global_cities = _clean_list(global_loc_dict.get("cities") or global_loc_dict.get("city"))
-    global_scope = str(global_loc_dict.get("scope") or "").strip()
+    # # Use your existing _clean_list so it's consistent and safe
+    # global_counties = _clean_list(global_loc_dict.get("counties") or global_loc_dict.get("county"))
+    # global_cities = _clean_list(global_loc_dict.get("cities") or global_loc_dict.get("city"))
+    # global_scope = str(global_loc_dict.get("scope") or "").strip()
 
-    global_loc_lines = []
-    if global_scope:
-        global_loc_lines.append(f"<p><b>Global scope:</b> {escape(global_scope)}</p>")
-    if global_counties:
-        global_loc_lines.append(f"<p><b>Global counties:</b> {escape(', '.join(global_counties))}</p>")
-    if global_cities:
-        global_loc_lines.append(f"<p><b>Global cities:</b> {escape(', '.join(global_cities))}</p>")
+    # global_loc_lines = []
+    # if global_scope:
+    #     global_loc_lines.append(f"<p><b>Global scope:</b> {escape(global_scope)}</p>")
+    # if global_counties:
+    #     global_loc_lines.append(f"<p><b>Global counties:</b> {escape(', '.join(global_counties))}</p>")
+    # if global_cities:
+    #     global_loc_lines.append(f"<p><b>Global cities:</b> {escape(', '.join(global_cities))}</p>")
 
-    global_loc_html = "\n".join(global_loc_lines).strip()
+    # global_loc_html = "\n".join(global_loc_lines).strip()
 
-    if global_loc_html:
-        for k, v in property_html.items():
-            if v:
-                property_html[k] = v + "\n" + global_loc_html
+    # if global_loc_html:
+    #     for k, v in property_html.items():
+    #         if v:
+    #             property_html[k] = v + "\n" + global_loc_html
 
 
     # ✅ UPDATED: include global location to avoid losing counties in Podio HTML
-    counties_html = build_all_counties_html(props_dict, global_loc_dict)
+    counties_html = build_all_counties_html(props_dict, None)
 
     # prefer new number, fallback to legacy
     number = (payload.contact.callWhatsapp or payload.contact.textNumber or payload.contact.phoneCall or "").strip()
@@ -255,14 +303,22 @@ def create_buyer_submission(payload: BuyerSubmissionPayload):
     loc_county_legacy = ""
     loc_city_legacy = ""
 
-    if payload.location:
-        loc_scope = (payload.location.scope or "").strip()
-        loc_counties = [c.strip() for c in (payload.location.counties or []) if (c or "").strip()]
-        loc_cities = [c.strip() for c in (payload.location.cities or []) if (c or "").strip()]
+    # if payload.location:
+    #     loc_scope = (payload.location.scope or "").strip()
+    #     loc_counties = [c.strip() for c in (payload.location.counties or []) if (c or "").strip()]
+    #     loc_cities = [c.strip() for c in (payload.location.cities or []) if (c or "").strip()]
 
-        # legacy strings (keep indexes working)
-        loc_county_legacy = (payload.location.county or "").strip() or (loc_counties[0] if loc_counties else "")
-        loc_city_legacy = (payload.location.city or "").strip() or (loc_cities[0] if loc_cities else "")
+    #     # legacy strings (keep indexes working)
+    #     loc_county_legacy = (payload.location.county or "").strip() or (loc_counties[0] if loc_counties else "")
+    #     loc_city_legacy = (payload.location.city or "").strip() or (loc_cities[0] if loc_cities else "")
+
+    # ✅ NEW: derive from property-level locations
+    loc_scope, loc_counties, loc_cities = _aggregate_location_from_properties(props_dict)
+
+    # legacy strings (keep indexes working)
+    loc_county_legacy = (loc_counties[0] if loc_counties else "")
+    loc_city_legacy = (loc_cities[0] if loc_cities else "")
+
 
     doc = WebFormBuyerSubmission(
         contact=BuyerContact(

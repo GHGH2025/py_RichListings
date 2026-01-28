@@ -563,6 +563,71 @@ def buyer_location_match_v3(
     return stage1_location_match(listing_city, listing_county, b_city, b_county)
 
 
+def buyer_location_match_v4(
+    listing_city: str,
+    listing_county: str,
+    listing_ci: Dict[str, Any],
+    b: WebFormBuyerSubmission,
+    bucket: str
+) -> bool:
+    """
+    Bucket-first location matching (NEW schema):
+    - Use bucket.location.scope/counties/cities if present.
+    - If scope == cities => listing city must match one of bucket cities.
+    - If scope == counties => listing county must match one of bucket counties.
+    - If scope == all_florida => pass.
+    - If scope == south_florida => tri-county check.
+    - Fallback to legacy global location (older submissions).
+    """
+
+    bucket_doc = getattr(b, bucket, None)
+    bucket_loc = getattr(bucket_doc, "location", None) if bucket_doc else None
+
+    # legacy global location (older docs)
+    global_loc = getattr(b, "location", None)
+
+    # Prefer bucket scope/counties/cities
+    scope = _scope_norm(getattr(bucket_loc, "scope", "") or "") if bucket_loc else ""
+    counties = _clean_list_any(getattr(bucket_loc, "counties", []) if bucket_loc else [])
+    cities = _clean_list_any(getattr(bucket_loc, "cities", []) if bucket_loc else [])
+
+    # If bucket has nothing (older docs), fallback to global arrays if they exist
+    if not scope and not counties and not cities and global_loc:
+        scope = _scope_norm(getattr(global_loc, "scope", "") or "")
+        counties = _clean_list_any(getattr(global_loc, "counties", []) or [])
+        cities = _clean_list_any(getattr(global_loc, "cities", []) or [])
+
+    # 1) scope=cities => must match one of cities (fail closed if empty)
+    if scope == "cities":
+        if not cities:
+            return False
+        return _city_list_match(listing_city, cities)
+
+    # 2) scope=counties => must match one of counties (fail closed if empty)
+    if scope == "counties":
+        if not counties:
+            return False
+        return _county_list_match(listing_county, counties)
+
+    # 3) scope presets
+    if scope == "all_florida":
+        return True
+
+    if scope == "south_florida":
+        return _is_south_florida_listing(listing_ci, listing_city, listing_county)
+
+    # 4) If scope is empty but lists exist, treat lists as intent
+    if cities:
+        return _city_list_match(listing_city, cities)
+    if counties:
+        return _county_list_match(listing_county, counties)
+
+    # 5) Legacy strict fallback (very old docs with location.city/location.county)
+    b_city = (getattr(global_loc, "city", "") if global_loc else "") or ""
+    b_county = (getattr(global_loc, "county", "") if global_loc else "") or ""
+    return stage1_location_match(listing_city, listing_county, b_city, b_county)
+
+
 # -----------------------------
 # NEW: AI type matching
 # -----------------------------
@@ -1356,6 +1421,30 @@ def enqueue_buyer_matching(payload: EnqueueBuyerMatchingPayload):
     if not listing:
         raise HTTPException(status_code=404, detail="Listing not found in parsed_listings for given ObjectId")
 
+    # ✅ derive property_type bucket from listing.complete_info.property_type
+    complete_info = listing.complete_info or {}
+    listing_ci = complete_info.get("complete_info") if isinstance(complete_info.get("complete_info"), dict) else complete_info
+    bucket = get_listing_property_bucket(listing_ci)
+
+        # ✅ SKIP: do not enqueue matching for land or commercial
+    if bucket in ("land", "commercial"):
+        # optional: store podio item id + mark as skipped so cron never touches it
+        ParsedListing.objects(id=listing_oid).update_one(
+            set__buyer_matching_status="skipped",
+            set__buyer_matching_podio_item_id=int(payload.podio_property_item_id),
+            set__updated_at=datetime.utcnow()
+        )
+
+        return {
+            "ok": True,
+            "queued": False,
+            "reason": f"skipped_{bucket}",
+            "bucket": bucket,
+            "mongodb_object_id": payload.mongodb_object_id,
+            "buyer_matching_status": "skipped",
+            "podio_property_item_id": int(payload.podio_property_item_id),
+        }
+
     # If already matched, don't requeue (safe + idempotent).
     if (listing.buyer_matching_status or "none") == "matched":
         return {
@@ -1756,35 +1845,73 @@ def match_buyers(payload: MatchBuyersPayload):
 
 
    # 3) Stage 1: NO AI filter (UPDATED for global location arrays)
+    # q_enabled = Q(**{f"{bucket}__enabled": True})
+
+    # # bucket scope all_florida OR global scope all_florida
+    # q_new_all = Q(**{f"{bucket}__location__scope": "all_florida"}) | Q(location__scope="all_florida")
+
+    # county_re = build_loose_regex_from_text(listing_county)
+    # city_re = build_loose_regex_from_text(listing_city)
+    # q_legacy = Q(location__county__iregex=county_re, location__city__iregex=city_re)
+
+    # # cheap mongo prefilter for counties-in (bucket OR global)
+    # county_vars = _county_variants(listing_county)
+
+    # q_new_sf = (
+    #     Q(**{f"{bucket}__location__scope": "south_florida", f"{bucket}__location__counties__in": county_vars})
+    #     | Q(location__counties__in=county_vars)
+    # )
+
+    # # optional city __in prefilter (case sensitive in mongo, but helps sometimes)
+    # city_vars = _case_variants(listing_city)
+    # q_city_in = Q(location__cities__in=city_vars)
+
+    # buyers_qs = WebFormBuyerSubmission.objects(
+    #     q_enabled & (q_new_all | q_new_sf | q_city_in | q_legacy)
+    # ).only("id", "contact", "location", bucket, "podio_item_id")
+
+
     q_enabled = Q(**{f"{bucket}__enabled": True})
 
-    # bucket scope all_florida OR global scope all_florida
-    q_new_all = Q(**{f"{bucket}__location__scope": "all_florida"}) | Q(location__scope="all_florida")
+    county_vars = _county_variants(listing_county)
+    city_vars = _case_variants(listing_city)
 
+    # legacy strict (very old docs)
     county_re = build_loose_regex_from_text(listing_county)
     city_re = build_loose_regex_from_text(listing_city)
     q_legacy = Q(location__county__iregex=county_re, location__city__iregex=city_re)
 
-    # cheap mongo prefilter for counties-in (bucket OR global)
-    county_vars = _county_variants(listing_county)
+    # bucket scopes (NEW)
+    q_scope_all = Q(**{f"{bucket}__location__scope": "all_florida"}) | Q(location__scope="all_florida")
 
-    q_new_sf = (
-        Q(**{f"{bucket}__location__scope": "south_florida", f"{bucket}__location__counties__in": county_vars})
+    # IMPORTANT: south_florida buyers have empty counties in new schema => don't require __in
+    q_scope_sf = Q(**{f"{bucket}__location__scope": "south_florida"}) | Q(location__scope="south_florida")
+
+    q_scope_counties = (
+        Q(**{f"{bucket}__location__scope": "counties", f"{bucket}__location__counties__in": county_vars})
         | Q(location__counties__in=county_vars)
     )
 
-    # optional city __in prefilter (case sensitive in mongo, but helps sometimes)
-    city_vars = _case_variants(listing_city)
-    q_city_in = Q(location__cities__in=city_vars)
+    q_scope_cities = (
+        Q(**{f"{bucket}__location__scope": "cities", f"{bucket}__location__cities__in": city_vars})
+        | Q(location__cities__in=city_vars)
+    )
 
     buyers_qs = WebFormBuyerSubmission.objects(
-        q_enabled & (q_new_all | q_new_sf | q_city_in | q_legacy)
+        q_enabled & (q_scope_all | q_scope_sf | q_scope_counties | q_scope_cities | q_legacy)
     ).only("id", "contact", "location", bucket, "podio_item_id")
+
+
+    # stage1_candidates: List[WebFormBuyerSubmission] = []
+    # for b in buyers_qs:
+    #     if buyer_location_match_v3(listing_city, listing_county, listing_ci, b, bucket):
+    #         stage1_candidates.append(b)
 
     stage1_candidates: List[WebFormBuyerSubmission] = []
     for b in buyers_qs:
-        if buyer_location_match_v3(listing_city, listing_county, listing_ci, b, bucket):
+        if buyer_location_match_v4(listing_city, listing_county, listing_ci, b, bucket):
             stage1_candidates.append(b)
+
 
     print("stage1_candidates=====", stage1_candidates)
 
@@ -1846,6 +1973,7 @@ def match_buyers(payload: MatchBuyersPayload):
         baths_sel = []
         scope = ""
         counties = []
+        cities = []
         selected_types = []
         other_type = ""
         pref_kv = []
@@ -1870,6 +1998,7 @@ def match_buyers(payload: MatchBuyersPayload):
             if loc:
                 scope = (getattr(loc, "scope", "") or "").strip()
                 counties = list(getattr(loc, "counties", []) or [])
+                cities = list(getattr(loc, "cities", []) or [])
 
             pref_kv = normalize_preferences_kv(bucket_doc)
 
@@ -1889,7 +2018,7 @@ def match_buyers(payload: MatchBuyersPayload):
             "price_ranges": price_ranges,
             "beds": beds_sel,
             "baths": baths_sel,
-            "location": {"scope": scope, "counties": counties},
+            "location": {"scope": scope, "counties": counties, "cities": cities},
             "preferences_kv": pref_kv,
         }
 
