@@ -1577,6 +1577,11 @@ def manual_special_preferences(payload: ManualSpecialPrefsPayload):
     if should_rematch:
         update_fields["set__manual_special_preferences_rematch_at"] = now  # NEW: only when should_rematch
         update_fields["unset__buyer_send_status"] = 1
+
+        # ✅ NEW: mark rematch + reset new-id storage for upcoming run
+        update_fields["set__rematch"] = True
+        update_fields["set__re_matched_buyer_ids"] = []
+
         if (listing.buyer_matching_status or "") != "processing":
             update_fields["set__buyer_matching_status"] = "pending"
 
@@ -1815,6 +1820,10 @@ def match_buyers(payload: MatchBuyersPayload):
     listing: Optional[ParsedListing] = ParsedListing.objects(id=listing_oid).first()
     if not listing:
         raise HTTPException(status_code=404, detail="Listing not found in parsed_listings for given ObjectId")
+    
+    # ✅ capture rematch state + previously matched ids (must be before recompute)
+    is_rematch = bool(getattr(listing, "rematch", False))
+    prev_matched_buyer_ids = list(getattr(listing, "matched_buyer_ids", []) or [])
 
     complete_info = listing.complete_info or {}
     # Your sample stores actual fields under complete_info["complete_info"] too; handle both
@@ -2225,23 +2234,58 @@ def match_buyers(payload: MatchBuyersPayload):
     # de-dup
     matched_buyer_ids = sorted(list(set(matched_buyer_ids)))
 
+    # ✅ NEW: if rematch, store only new buyer ids in re_matched_buyer_ids
+    re_matched_buyer_ids: List[str] = []
+
+    if is_rematch:
+        prev_set = set(prev_matched_buyer_ids or [])
+        new_set = set(matched_buyer_ids or [])
+
+        re_matched_buyer_ids = sorted(list(new_set - prev_set))     # only NEW ids
+        matched_buyer_ids = sorted(list(prev_set | new_set))        # keep ALL (old + new)
+
     print("matched_buyer_ids=====",matched_buyer_ids)
 
     # 5) Update parsed_listings with matched buyer Mongo ids
-    
+
     if not payload.dry_run:
         update_fields = {
             "set__matched_buyer_ids": matched_buyer_ids,
             "set__updated_at": datetime.utcnow(),
         }
 
-        # NEW: if at least one buyer matched, mark buyer_send_status as pending
-        if len(matched_buyer_ids) > 0:
-            update_fields["set__buyer_send_status"] = "pending"
+        if is_rematch:
+            # ✅ store only new ids for contact step
+            update_fields["set__re_matched_buyer_ids"] = re_matched_buyer_ids
+            update_fields["set__rematch"] = False  # reset flag once handled
+
+            # ✅ only trigger sending if we actually found NEW matches
+            if len(re_matched_buyer_ids) > 0:
+                update_fields["set__buyer_send_status"] = "pending"
+            else:
+                update_fields["unset__buyer_send_status"] = 1
         else:
-            update_fields["unset__buyer_send_status"] = 1
+            # existing behavior (unchanged)
+            if len(matched_buyer_ids) > 0:
+                update_fields["set__buyer_send_status"] = "pending"
+            else:
+                update_fields["unset__buyer_send_status"] = 1
 
         ParsedListing.objects(id=listing_oid).update_one(**update_fields)
+    
+    # if not payload.dry_run:
+    #     update_fields = {
+    #         "set__matched_buyer_ids": matched_buyer_ids,
+    #         "set__updated_at": datetime.utcnow(),
+    #     }
+
+    #     # NEW: if at least one buyer matched, mark buyer_send_status as pending
+    #     if len(matched_buyer_ids) > 0:
+    #         update_fields["set__buyer_send_status"] = "pending"
+    #     else:
+    #         update_fields["unset__buyer_send_status"] = 1
+
+    #     ParsedListing.objects(id=listing_oid).update_one(**update_fields)
 
     # 6) If matches found => update Podio property reference field
     podio_updated = False
@@ -2338,4 +2382,7 @@ def match_buyers(payload: MatchBuyersPayload):
         "dry_run": payload.dry_run,
         "evaluations_sample": evaluations_all[:10],  # helpful for debugging in logs
         "needs_rerun": needs_rerun,
+        "is_rematch": is_rematch,
+        "re_matched_buyers_count": len(re_matched_buyer_ids) if is_rematch else 0,
+        "re_matched_buyer_mongo_ids": re_matched_buyer_ids if is_rematch else [],
     }

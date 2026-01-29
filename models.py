@@ -157,7 +157,11 @@ class ParsedListing(Document):
         choices=("pending", "failed","sent")
     )
 
-    matched_buyer_ids = ListField(StringField())    
+    matched_buyer_ids = ListField(StringField())   
+
+    # ✅ NEW: Rematch flag + only-new buyer ids for that rematch run
+    rematch = BooleanField(default=False)
+    re_matched_buyer_ids = ListField(StringField(), default=list) 
     
     # -----------------------------
     # Buyer Matching Queue (Phase 2 hardening)
