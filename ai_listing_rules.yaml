@@ -33,11 +33,11 @@ rules:
 
   - id: R6
     text: >
-      South Florida Tri-County only: No 3-bed / 1-bath houses over $375,000 allowed unless they are on the water.
+      South Florida only: No 3-bed / 1-bath houses over $375,000 unless they are on the water.
 
   - id: R7
     text: >
-      South Florida Tri-County only: No 3-bed / 1-bath houses that are under 900 sqft and priced over $325,000 allowed unless they are on the water.
+      South Florida only: No 3-bed / 1-bath houses that are under 900 sqft and priced over $325,000 unless they are on the water.
 
   - id: R8
     text: >

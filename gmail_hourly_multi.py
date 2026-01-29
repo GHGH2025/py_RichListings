@@ -30,8 +30,6 @@ ACCOUNTS = [
             "talya@safetynetinv.com",
             "info@assetsbyalec.com",
             "todd@southfloridawholesalehomes.ccsend.com",
-            "tsims-southfloridacashhomebuyers.com@shared1.ccsend.com",
-            "kevin-titlerate.com@shared1.ccsend.com",
             "jpaul@7kidsandflipping.com",
             "the3minvestments-gmail.com@shared1.ccsend.com",
             "tricountyflippers-gmail.com@shared1.ccsend.com",
@@ -61,15 +59,8 @@ ACCOUNTS = [
             "erniethetitleguy-gmail.com@shared1.ccsend.com",
             "deals@aoinvestments.ccsend.com",
             "ffassioli@peakregroup.ccsend.com",
-            "jc@stellarholdingsllc.ccsend.com",
-            "offmarketdeals@encorehomeoffer.com",
-            "npabon34@gmail.com.send.mailchimpapp.com",
-            "thesimplehomebuyers@95925329.mailchimpapp.com",
-            "michaelzalkind@safetynetinv.com",
-            "mitch.conyers@poplarhomebuyers.com",
-            "mike.barone@outlook.com",
-            "lorena@safetynetrealty.com",
-            "may@lpihomebuyers.com"
+            "jc@stellarholdingsllc.ccsend.com"
+
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
@@ -89,23 +80,11 @@ ACCOUNTS = [
         "allowed_senders": [
             # examples:
             "richard@oasispropertyinvestments.ccsend.com",
-            "oasispropertydispo@gmail.com",
             "alex@lexicorealty.ccsend.com",
             "iwantacheaphousenow-gmail.com@shared1.ccsend.com",
             "craig@nowhomebuyers.com",
             "ctorres@spectrumpropertygroup.com",
-            "ryan@floridahomeownersolutions.com",
-            "ffassioli@peakregroup.ccsend.com",
-            "sguerrero-housingig.com@shared1.ccsend.com",
-            "erniethetitleguy-gmail.com@shared1.ccsend.com",
-            "info-rushproperties.net@shared1.ccsend.com",
-            "cody@graystoneig.com",
-            "deals@aoinvestments.ccsend.com",
-            "info+hoodsyhomes.com@ec1.msgsndr.org",
-            "lenny-riverwalkproperties.net@shared1.ccsend.com",
-            "judson@securehomeinvest.com"
-
-
+            "ryan@floridahomeownersolutions.com"
             # or: "*@oasispropertyinvestments.ccsend.com",
         ],
         "skip_senders": [

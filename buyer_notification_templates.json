@@ -1,9 +1,0 @@
-{
-  "sms": {
-    "body": "{{first_name}},\n\nIt's your AI Assistant - here with another deal for your consideration:\n\nAddress: {{address}}\n{{description}}\nPrice: {{price}}{{pics_block}}\n\nNot a good match, let us know why!\nhttps://www.WholesaleDealFinder.Ai/Fix\n\nWant to change your preferences?\nhttps://www.WholesaleDealFinder.Ai\n"
-  },
-  "email": {
-    "subject": "New deal for your review",
-    "html": "<p>Hi {{first_name}},</p>\n<p>It's your AI Assistant - here with another deal for your consideration:</p>\n{{image_block}}\n<p><strong>Address:</strong> {{address}}</p>\n<p>{{description}}</p>\n<p><strong>Price:</strong> {{price}}</p>\n{{pics_block}}\n<p>Not a good match, let us know why!<br>\n<a href=\"https://www.WholesaleDealFinder.Ai/Fix\" style=\"color:#ff6600;\">www.WholesaleDealFinder.Ai/Fix</a></p>\n<p>Want to change your preferences?<br>\n<a href=\"https://www.WholesaleDealFinder.Ai\" style=\"color:#ff6600;\">www.WholesaleDealFinder.Ai</a></p>\n<p>Richard Burdette, Founder<br>\n<a href=\"https://www.WholesaleDealFinder.Ai\">WholesaleDealFinder.Ai</a><br>\nP: 754 200 1204</p>"
-  }
-}
