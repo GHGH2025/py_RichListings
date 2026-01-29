@@ -621,7 +621,6 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
         .limit(limit)
     )
 
-
     print("listings",listings)
 
     processed = 0

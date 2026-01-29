@@ -5,27 +5,97 @@ from schedule import every, repeat, run_pending
 
 # import your task entrypoints
 from gmail_hourly_multi import process_account, _ensure_paths, ACCOUNTS
-from processFilteredEmail import process_pending
+from processFilteredEmail import process_pending, reset_stale_processing_emails
 from process_dup30days import process_not_processed_with_duplicate_rule
 from ai_nl_rules_runner import apply_ai_english_rules
 from post_selection import select_passed_listings_for_post
 from ai_make_whatsapp_posts import make_whatsapp_posts_from_ready_to_post
-
+from wp_ai_mapper_catalog_first import ai_build_wp_payload_for_posted
+from wp_ai_property_description import ai_build_wp_property_description_for_posted
+from wp_sync_poster import sync_wp_for_descriptions
+from ai_media_verify import verify_and_fill_missing_media_for_not_processed
+from wp_price_red_pic_links import process_wp_price_and_media_updates
 from gmail_hourly_multi import build_service_by_account
 from forward_completed_sources import forward_completed_source_emails
-
+from whatsapp_sender import process_whatsapp_queue
 from mongo_engine_conn import init_db
-from models import FilteredListingEmail, ParsedListing
-
+from models import FilteredListingEmail, ParsedListing, SpecialAvail
+from podio_direct_wholeseller import process_direct_wholeseller_batch,initialize_direct_wholeseller_flag
 from whatsapp_keepalive import send_keepalive_template, parse_recipients_env
 
-from image_curation import process_listings_ready_for_image_processing
+from image_curation import process_listings_ready_for_image_processing, process_primary_image_verification
+from special_avails import process_one_special_avail_with_active_listings,process_one_special_avail_matching
+from models import WebFormBuyerSubmission
+from buyer_matching_api import process_pending_buyer_matching_batch
+from matched_buyers_process import process_pending_buyer_descriptions,process_buyer_sends
 
 import os
+
+
 from dotenv import load_dotenv
 load_dotenv()
+import json
+import threading
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+from config_runtime import get_whatsapp_send_mode
+
+import uvicorn  # NEW: FastAPI server
+
+# from http.server import BaseHTTPRequestHandler, HTTPServer
+
+START_TIME = time.time()  # for uptime calculation
+os.environ["APP_START_TIME"] = str(START_TIME)  # used by api_app for consistent uptime
+BUYER_MATCHING_CRON_MINUTES = int(os.getenv("BUYER_MATCHING_CRON_MINUTES", "3"))
+
+# class StatusHandler(BaseHTTPRequestHandler):
+#     def do_GET(self):
+#         # Support both /server-sattus (as you requested) and /server-status (correct spelling)
+#         if self.path in ("/server-sattus", "/server-status"):
+#             self.send_response(200)
+#             self.send_header("Content-Type", "application/json")
+#             self.end_headers()
+
+#             response = {
+#                 "status": "working",
+#                 "uptime_seconds": int(time.time() - START_TIME),
+#             }
+
+#             self.wfile.write(json.dumps(response).encode("utf-8"))
+#         else:
+#             self.send_response(404)
+#             self.end_headers()
+
+#     def do_POST(self):
+#         if self.path == "/config/whatsapp-mode":
+#             length = int(self.headers.get("Content-Length", "0") or 0)
+#             body = self.rfile.read(length).decode("utf-8") if length else "{}"
+#             try:
+#                 data = json.loads(body or "{}")
+#                 mode = (data.get("mode") or "").strip().lower()
+#                 set_whatsapp_send_mode(mode)   # validates + persists
+#                 self.send_response(200)
+#                 self.send_header("Content-Type", "application/json")
+#                 self.end_headers()
+#                 self.wfile.write(json.dumps({"ok": True, "mode": get_whatsapp_send_mode()}).encode("utf-8"))
+#             except ValueError as ve:
+#                 self.send_response(400)
+#                 self.send_header("Content-Type", "application/json")
+#                 self.end_headers()
+#                 self.wfile.write(json.dumps({"ok": False, "error": str(ve)}).encode("utf-8"))
+#             except Exception as e:
+#                 self.send_response(500)
+#                 self.send_header("Content-Type", "application/json")
+#                 self.end_headers()
+#                 self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+#         else:
+#             self.send_response(404)
+#             self.end_headers()
+
+#     # Avoid default noisy logging to stderr
+#     def log_message(self, format, *args):
+#         logging.info("StatusHandler: " + format % args)
+
 
 def gmail_fetch_all():
     logging.info("gmail_fetch_all: start")
@@ -54,6 +124,16 @@ def run_process_email():
     logging.info("run_process_email")
     process_pending()
 
+@repeat(every(3).minutes)
+def run_verify_and_fill_missing_media_for_not_processed():
+    logging.info("verify_and_fill_missing_media_for_not_processed")
+    verify_and_fill_missing_media_for_not_processed(limit=35, max_workers=8)
+
+@repeat(every(2).minutes)
+def run_process_wp_price_and_media_updates():
+    logging.info("process_wp_price_and_media_updates")
+    process_wp_price_and_media_updates(limit=5)
+
 # schedule parse email to create listing every 5 minute
 @repeat(every(1).minutes)
 def run_process_dup30days():
@@ -78,12 +158,43 @@ def run_process_listings_ready_for_image_processing():
     logging.info("process_listings_ready_for_image_processing")
     process_listings_ready_for_image_processing(limit=5)
 
+@repeat(every(2).minutes)
+def run_process_primary_image_verification():
+    logging.info("process_primary_image_verification")
+    process_primary_image_verification(limit=5, model="gpt-5.1")
+
 
 @repeat(every(2).minutes)
 def run_make_whatsapp_posts_from_ready_to_post():
     logging.info("make_whatsapp_posts_from_ready_to_post")
     make_whatsapp_posts_from_ready_to_post("ad_post_rules.txt", limit=5)
 
+@repeat(every(1).minutes)
+def run_process_whatsapp_queue():
+    logging.info("process_whatsapp_queue")
+    process_whatsapp_queue(limit=5)
+
+@repeat(every(3).minutes)
+def run_ai_build_wp_payload_for_posted():
+    logging.info("ai_build_wp_payload_for_posted")
+    ai_build_wp_payload_for_posted(limit=5)
+
+
+@repeat(every(3).minutes)
+def run_ai_build_wp_property_description_for_posted():
+    logging.info("ai_build_wp_property_description_for_posted")
+    ai_build_wp_property_description_for_posted(limit=5, batch_size=10, per_item_sleep_s=0.2)
+
+@repeat(every(5).minutes)
+def run_sync_wp_for_descriptions():
+    logging.info("sync_wp_for_descriptions")
+    sync_wp_for_descriptions(limit=5, per_item_sleep_s=0.2)
+
+@repeat(every(3).minutes)
+def run_direct_wholeseller_linking():
+    logging.info("run_direct_wholeseller_linking")
+    # default 3; you can change to 5 if you want to push harder:
+    process_direct_wholeseller_batch(batch_limit=5)
 
 @repeat(every(15).minutes)
 def run_forward_email():
@@ -98,6 +209,42 @@ def run_forward_email():
         to_addr=TO,
         limit=10,
     )
+
+@repeat(every(3).minutes)
+def run_process_one_special_avail_with_active_listings():
+    logging.info("run_process_one_special_avail_with_active_listings")
+    # default 3; you can change to 5 if you want to push harder:
+    process_one_special_avail_with_active_listings()
+
+@repeat(every(5).minutes)
+def run_process_one_special_avail_matching():
+    logging.info("run_process_one_special_avail_matching")
+    # default 3; you can change to 5 if you want to push harder:
+    process_one_special_avail_matching()
+
+@repeat(every(2).hours)
+def run_reset_stale_processing_emails():
+    logging.info("reset_stale_processing_emails")
+    reset_stale_processing_emails()
+
+@repeat(every(BUYER_MATCHING_CRON_MINUTES).minutes)
+def run_buyer_matching_cron():
+    logging.info("run_buyer_matching_cron: start")
+    try:
+        result = process_pending_buyer_matching_batch()
+        logging.info("run_buyer_matching_cron: result=%s", result)
+    except Exception:
+        logging.exception("run_buyer_matching_cron: crashed")
+
+@repeat(every(5).minutes)
+def run_process_pending_buyer_descriptions():
+    logging.info("process_pending_buyer_descriptions")
+    process_pending_buyer_descriptions(limit=5)
+
+@repeat(every(3).minutes)
+def run_process_buyer_sends():
+    logging.info("process_buyer_sends")
+    process_buyer_sends(limit=2)
 
 # @repeat(every(15).hours)
 # def run_whatsapp_keepalive():
@@ -117,6 +264,10 @@ def run_forward_email():
 # def run_other_job():
 #     placeholder_other_job()
 
+def start_api_server(host: str = "0.0.0.0", port: int = 8000):
+    # Serve FastAPI app in this thread
+    uvicorn.run("api_app:app", host=host, port=port, log_level="info")
+
 if __name__ == "__main__":
     logging.info("Scheduler loop started")
 
@@ -125,11 +276,23 @@ if __name__ == "__main__":
     try:
         FilteredListingEmail.ensure_indexes()
         ParsedListing.ensure_indexes()
+        WebFormBuyerSubmission.ensure_indexes()
+
         # gmail_fetch_all()
     except Exception:
         logging.exception("ensure_indexes failed")
 
-    # Loop forever
+    # Start status HTTP server in background
+    status_port = int(os.getenv("STATUS_PORT", "8000"))
+    api_thread = threading.Thread(
+        target=start_api_server,
+        kwargs={"host": "0.0.0.0", "port": status_port},
+        daemon=True,
+    )
+    api_thread.start()
+    logging.info("FastAPI status available at http://0.0.0.0:%s/server-status", status_port)
+
+    # Main scheduler loop
     while True:
         run_pending()
         time.sleep(1)
