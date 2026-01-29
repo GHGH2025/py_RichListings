@@ -185,9 +185,11 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
             pl.update(
                 set__post_content=post_text,
                 set__status="posted",
+                set__wp_status="ready_to_process",
                 set__skipped_or_posted_at=datetime.utcnow(),
                 set__updated_at=datetime.utcnow(),
                 set__rules_ai_reason=None,
+                set__whatsapp_status="pending"
             )
 
             # NEW: best-effort webhook (does not affect flow)
@@ -199,13 +201,13 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
             # except Exception as we:
             #     print(f"[warn] WhatsApp send failed for {pl.id}: {we}")
 
-            try:
-                if TEAM_NUMBERS:
-                    for num in TEAM_NUMBERS:
-                        send_listing_to_whatsapp(pl.id, [num])  # send per recipient
-                        time.sleep(random.uniform(2, 15))        # 2–5s pause
-            except Exception as we:
-                print(f"[warn] WhatsApp send failed for {pl.id}: {we}")
+            # try:
+            #     if TEAM_NUMBERS:
+            #         for num in TEAM_NUMBERS:
+            #             send_listing_to_whatsapp(pl.id, [num])  # send per recipient
+            #             time.sleep(random.uniform(10, 15))        # 2–5s pause
+            # except Exception as we:
+            #     print(f"[warn] WhatsApp send failed for {pl.id}: {we}")
 
             done += 1
         except Exception as e:

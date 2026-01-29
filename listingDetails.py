@@ -5,11 +5,60 @@ from typing import Dict, Any, List, Optional
 from openai import OpenAI
 from dotenv import load_dotenv
 from models import ParsedListing, FilteredListingEmail
+from ai_address_search_keys import update_parsed_listing_address_keys
+from google_formatter import get_street_and_city, geocode_response
+
+from concurrent.futures import ThreadPoolExecutor
+import logging
+
+
 # -------------------------
 # CONFIG
 # -------------------------
 # Load environment variables
 load_dotenv()
+
+# Path + loader for direct wholeseller config
+DIRECT_WHOLESELLER_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "direct_wholeseller.json",
+)
+
+def _load_direct_wholeseller_map() -> Dict[str, Any]:
+    """
+    Load direct_wholeseller.json as:
+    {
+      "email1@example.com": { "name": "...", "phone": "...", "email": "...", "updateFlagForPodio" :"true/false" },
+      ...
+    }
+    Keys are normalized to lowercase for robust matching.
+    """
+    try:
+        with open(DIRECT_WHOLESELLER_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+        if not isinstance(raw, dict):
+            logging.warning("direct_wholeseller.json is not a dict; ignoring.")
+            return {}
+
+        out: Dict[str, Any] = {}
+        for k, v in raw.items():
+            if not isinstance(k, str):
+                continue
+            email_key = k.strip().lower()
+            if not email_key:
+                continue
+            out[email_key] = v
+        return out
+    except FileNotFoundError:
+        logging.info("direct_wholeseller.json not found at %s; skipping wholeseller overrides.", DIRECT_WHOLESELLER_PATH)
+    except Exception as e:
+        logging.exception("Failed to load direct_wholeseller.json: %s", e)
+    return {}
+
+# Loaded once at import
+DIRECT_WHOLESELLER_MAP: Dict[str, Any] = _load_direct_wholeseller_map()
+
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # supports structured outputs
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -21,125 +70,18 @@ client = OpenAI(
 )
 
 
-# -------------------------
-# JSON-SCHEMA (STRICT)
-# -------------------------
-# def _listing_schema() -> Dict[str, Any]:
-#     # Schema matches the keys we agreed on; nullables are allowed to avoid hallucination.
-#     return {
-#         "type": "object",
-#         "additionalProperties": False,
-#         "properties": {
-#             "complete_info": {
-#                 "type": ["string", "null"],
-#                 # Verbose description helps the model obey
-#                 "description": "Verbatim text for this listing exactly as written in the email. Strip HTML tags but keep original wording, numbers, symbols, and line breaks. Do not paraphrase. If very long, truncate to ~2000 chars."
-#             },
-#             # 1) Identification
-#             "source_title": {"type": ["string", "null"]},
-#             "listing_url": {"type": ["string", "null"]},
-#             "mls_id": {"type": ["string", "null"]},
-#             "agent_name": {"type": ["string", "null"]},
-#             "agent_phone": {"type": ["string", "null"]},
-#             "agent_email": {"type": ["string", "null"]},
+ADDRESS_KEYS_POOL = ThreadPoolExecutor(max_workers=6)  # tune as you like
 
-#             # 2) Location
-#             "address_line": {"type": ["string", "null"]},
-#             "city": {"type": ["string", "null"]},
-#             "county": {"type": ["string", "null"]},
-#             "state": {"type": ["string", "null"]},
-#             "zip": {"type": ["string", "null"]},
-#             "latitude": {"type": ["number", "null"]},
-#             "longitude": {"type": ["number", "null"]},
+def _update_keys_async(listing_id: str, addr: str, city: str) -> None:
+    try:
+        from ai_address_search_keys import update_parsed_listing_address_keys
+        ok = update_parsed_listing_address_keys(listing_id, addr, city)
+        if not ok:
+            logging.warning("address_search_keys update returned False for %s", listing_id)
+    except Exception as e:
+        logging.exception("address_search_keys async failed for %s: %s", listing_id, e)
 
-#             # 3) Price & Fees
-#             "list_price_usd": {"type": ["number", "null"]},
-#             "hoa_fee_monthly_usd": {"type": ["number", "null"]},
-#             "hoa_assessment_monthly_usd": {"type": ["number", "null"]},
-#             "hoa_total_monthly_usd": {"type": ["number", "null"]},
-#             "taxes_annual_usd": {"type": ["number", "null"]},
 
-#             # 4) Property Type & Basics
-#             "property_type": {
-#                 "type": ["string", "null"],
-#                 "enum": [
-#                     "single_family", "condo", "townhouse", "multi_family",
-#                     "land", "mobile_home", "manufactured", "other", None
-#                 ]
-#             },
-#             "bedrooms": {"type": ["number", "null"]},
-#             "bathrooms_full": {"type": ["number", "null"]},
-#             "bathrooms_half": {"type": ["number", "null"]},
-#             "living_area_sqft": {"type": ["number", "null"]},
-#             "year_built": {"type": ["number", "null"]},
-#             "is_condo": {"type": ["boolean", "null"]},
-
-#             # 5) Lot / Land
-#             "lot_size_sqft": {"type": ["number", "null"]},
-#             "lot_size_acres": {"type": ["number", "null"]},
-#             "is_land_only": {"type": ["boolean", "null"]},
-
-#             # 6) Waterfront / Water Access
-#             "water_feature": {
-#                 "type": ["string", "null"],
-#                 "enum": [
-#                     "oceanfront", "ocean_access", "intracoastal",
-#                     "bayfront", "canal", "lakefront", "riverfront",
-#                     "water_view_only", "none", "unknown", None
-#                 ]
-#             },
-#             "is_on_water": {"type": ["boolean", "null"]},
-#             "water_notes": {"type": ["string", "null"]},
-
-#             # 7) Structure / Build
-#             "build_material": {
-#                 "type": ["string", "null"],
-#                 "enum": ["frame", "wood", "concrete_block", "brick", "stucco", "mixed", "unknown", None]
-#             },
-#             "is_frame_or_wood": {"type": ["boolean", "null"]},
-
-#             # 8) Keywords & Exceptional Flags
-#             "is_teardown_or_redevelopment": {"type": ["boolean", "null"]},
-#             "marketing_tags": {"type": "array", "items": {"type": "string"}},
-#             "raw_description_excerpt": {"type": ["string", "null"]},
-
-#             # 9) Region Classification
-#             "region_bucket": {
-#                 "type": ["string", "null"],
-#                 "enum": [
-#                     "south_florida_tri_county", "st_lucie", "fort_pierce",
-#                     "rest_of_florida", "outside_florida", "unknown", None
-#                 ]
-#             },
-#             "tri_county_name": {
-#                 "type": ["string", "null"],
-#                 "enum": ["miami_dade", "broward", "palm_beach", None]
-#             },
-
-#             # 10) Mobile Home
-#             "is_mobile_home": {"type": ["boolean", "null"]},
-
-#             # 11) Derived convenience flags
-#             "bath_combo_label": {"type": ["string", "null"]},
-#             "has_hoa": {"type": ["boolean", "null"]},
-#             "under_900_sqft": {"type": ["boolean", "null"]},
-#             "land_under_5000_sqft": {"type": ["boolean", "null"]},
-#             "water_exception_applicable": {"type": ["boolean", "null"]},
-
-#             # NEW: Images found in the email for this listing
-#             "images": {
-#                 "type": "array",
-#                 "items": {"type": "string"},
-#                 "description": "Direct image URLs (http/https) that appear in the email for this listing. Exclude logos, agent headshots, social icons, QR codes, and tracking pixels."
-#             },
-
-#             # NEW: External gallery link (if any)
-#             "other_images_source": {
-#                 "type": ["string", "null"],
-#                 "description": "Single external link to additional photos (e.g., Google Drive, Dropbox, MLS gallery) found in the listing block."
-#             },
-#         }
-#     }
 
 
 def _listing_schema() -> Dict[str, Any]:
@@ -264,10 +206,33 @@ def _response_format() -> Dict[str, Any]:
     }
 
 
-# -------------------------
-# PROMPT UTILS
-# -------------------------
-_SYSTEM_PROMPT = """\
+
+IMAGE_RULES_DEFAULT = """
+- For each listing, populate image fields:
+  • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
+    - If URLs are relative, include them as-is.
+    - Cap to the first 12 unique URLs per listing.
+  • "other_images_source": if the listing includes a link to more photos (e.g., “View more photos”, "Click Here For Pictures", “Gallery”, Google Drive, Dropbox, MLS), return that single URL; otherwise null.
+""".strip()
+
+IMAGE_RULES_NEAREST = """
+- For each listing, populate image fields:
+  • "images": collect direct image URLs (http/https) that visually depict the property for that listing.
+    - Look for images both just BEFORE and just AFTER the listing’s address/price/ARV lines.
+    - An image that appears immediately BEFORE the address (with no other property address in between)
+      belongs to that listing, not to the next one.
+    - In general, within the same section (between county/header text and the next property address/header),
+      attach each image to the NEAREST property address in that section.
+    - Ignore obvious non-property images (logos, social icons, tiny spacer GIFs, generic dividers/banners).
+    - Cap to the first 12 unique URLs per listing.
+  • "other_images_source": if the listing includes a link whose purpose is clearly “more photos”
+    (e.g. gallery, drive/dropbox/MLS photo link), return that single URL; otherwise null.
+""".strip()
+
+
+def build_system_prompt(use_nearest_image_rules: bool = False) -> str:
+    image_block = IMAGE_RULES_NEAREST if use_nearest_image_rules else IMAGE_RULES_DEFAULT
+    return f"""\
 You extract structured data from EMAIL Markdown Content containing MULTIPLE property listings, Process and return ALL listings addresses.
 Don't skip any address to process. 
 Make sure if listing have images include in images.
@@ -277,6 +242,7 @@ OUTPUT CONTRACT (must follow exactly):
 - Use the field names EXACTLY as in the JSON schema. No aliases, no renames, no extra fields.
 - Every field in the schema MUST be present in every listing. If unknown, put null (or "unknown" for enums).
 - Do not invent fields like "address_line", "property_address", "price", "price_usd", etc. The only valid keys are in the schema. Valid keys for locations are "address", "city", "state", "county", "zip" and for property price its should be "list_price_usd" only.
+- For "list_price_usd", NEVER use ARV / "after repair value" / "estimated value" numbers. Only use the actual asking / purchase / contract price the property is being offered at.
 
 Rules:
 - DO NOT GUESS. Only return values explicitly present in the HTML (or safe numeric conversions/derivations described below).
@@ -284,7 +250,7 @@ Rules:
 - Normalize numbers: strip $ and commas. Convert acres->sqft (1 acre = 43560 sqft) when only acres given.
 - Compute `hoa_total_monthly_usd` = fee + assessments (if both present).
 - Compute convenience booleans (is_condo, is_land_only, under_900_sqft, land_under_5000_sqft, has_hoa, water_exception_applicable).
-- Water exception applies only for water_feature in {oceanfront, ocean_access, intracoastal}.
+- Water exception applies only for water_feature in {{"oceanfront", "ocean_access", "intracoastal"}}.
 - Classify `region_bucket`:
   • south_florida_tri_county if county is Miami-Dade, Broward, or Palm Beach (set tri_county_name accordingly)
   • st_lucie if county=St. Lucie
@@ -327,13 +293,9 @@ Rules:
 - If none of the above are explicitly indicated, return property_type=null (do NOT guess).
 - These keywords may appear in subject, title blocks, body text, bullets, image captions, or buttons.
 
-- For each listing, populate image fields:
-  • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
-    - If URLs are relative, include them as-is.
-    - Cap to the first 12 unique URLs per listing.
-  • "other_images_source": if the listing includes a link to more photos (e.g., “View more photos”, "Click Here For Pictures", “Gallery”, Google Drive, Dropbox, MLS), return that single URL; otherwise null.
+{image_block}
 Output MUST strictly match the provided JSON schema.
-"""
+""".strip()
 
 _USER_INSTRUCTIONS_TEMPLATE = """\
 EMAIL_HTML:
@@ -351,7 +313,8 @@ Extract ALL listings present. Return an object with:
 # -------------------------
 def extract_listings_from_email_html(email_html: str,
                                      model: Optional[str] = None,
-                                     temperature: float = 0.0) -> Dict[str, Any]:
+                                     temperature: float = 0.0,
+                                     use_nearest_image_rules: bool = False) -> Dict[str, Any]:
     """
     Parse a raw email HTML (no scripts/styles/comments) containing multiple property ads,
     and return structured listings using OpenAI Structured Outputs (strict JSON schema).
@@ -367,8 +330,10 @@ def extract_listings_from_email_html(email_html: str,
     # Optional: tiny cleanup to reduce obvious noise that sometimes slips through.
     compact_html = re.sub(r"\s+\n", "\n", email_html).strip()
 
+    system_prompt = build_system_prompt(use_nearest_image_rules=use_nearest_image_rules)
+
     messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": _USER_INSTRUCTIONS_TEMPLATE.format(email_html=compact_html)}
     ]
 
@@ -392,7 +357,7 @@ def extract_listings_from_email_html(email_html: str,
             chat = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT + "\nYou must output valid JSON only."},
+                    {"role": "system", "content": system_prompt + "\nYou must output valid JSON only."},
                     {"role": "user", "content": _USER_INSTRUCTIONS_TEMPLATE.format(email_html=compact_html)}
                 ],
                 temperature=temperature,
@@ -408,7 +373,19 @@ def extract_listings_from_email_html(email_html: str,
             return {"listings": [], "notes": [f"extraction_failed: {e}", f"fallback_failed: {e2}"]}
 
 
+def _normalize_city_for_google(city: str) -> str:
+    """
+    Replace any standalone 'bch' (any casing) with 'Beach'.
+    Examples:
+      'Pompano Bch'      -> 'Pompano Beach'
+      'POMPANO BCH'      -> 'POMPANO Beach'
+      'bch'              -> 'Beach'
+    """
+    if not city:
+        return city
 
+    # \b = word boundary, re.I = case-insensitive
+    return re.sub(r"\bbch\b", "Beach", city, flags=re.IGNORECASE)
 
 
 def _clean_images(arr):
@@ -419,6 +396,26 @@ def _clean_images(arr):
             if u2.lower().startswith(("http://", "https://")):
                 out.append(u2)
     return out[:12]  # cap to 12
+
+def _compose_raw_for_google(addr: str, city: str, state: str, zip_: str) -> str:
+    parts = [p.strip() for p in [addr, city, state, zip_] if p and str(p).strip()]
+    return ", ".join(parts + ["USA"]) if parts else ""
+
+def _sender_email_safe(source_email_doc) -> str:
+    """
+    Safely get the sender email from FilteredListingEmail.
+    Supports both attribute and dict-like access for from_info.
+    """
+    if not source_email_doc:
+        return ""
+    fi = getattr(source_email_doc, "from_info", None)
+    if not fi:
+        return ""
+    # mongoengine EmbeddedDocument vs dict
+    email = getattr(fi, "email", None)
+    if not email and isinstance(fi, dict):
+        email = fi.get("email")
+    return (email or "").strip().lower()
 
 def upsert_parsed_listings_from_html(
     email_html: str,
@@ -431,7 +428,18 @@ def upsert_parsed_listings_from_html(
     Run extraction on given HTML, then upsert rows into parsed_listings.
     Returns: {"count": N, "ids": [...], "notes": [...]}
     """
-    result = extract_listings_from_email_html(email_html)
+    # result = extract_listings_from_email_html(email_html)
+    # NEW: choose image-rule mode based on sender
+    sender = _sender_email_safe(source_email_doc)
+    use_nearest = (
+        sender == "deals@aoinvestments.ccsend.com"
+        or sender == "southfloridadispo@joehomebuyer.com"
+    )
+
+    result = extract_listings_from_email_html(
+        email_html,
+        use_nearest_image_rules=True,  # default False unless AO sender
+    )
     listings = result.get("listings", []) or []
     saved_ids: List[str] = []
     
@@ -445,13 +453,39 @@ def upsert_parsed_listings_from_html(
 
     for idx, lst in enumerate(listings, start=1):  # 1..N within this email
         # honor slice by original position, so list_index stays stable for this email
-        if not (start_i <= idx <= end_i):
-            continue 
+        # if not (start_i <= idx <= end_i):
+        #     continue 
+        if list_slice:
+            if start_i <= idx <= end_i:
+                status_for_insert = "not_processed"
+            else:
+                status_for_insert = "bypassed"
+        else:
+            # old behavior: everything is not_processed
+            status_for_insert = "not_processed"
         try:
             addr  = (lst.get("address") or "").strip()
             city  = (lst.get("city") or "").strip()
             state = (lst.get("state") or "").strip()
             zip_  = (lst.get("zip") or "").strip()
+            # ✨ NEW: try to normalize with Google
+            geo_js = None
+            try:
+                norm_city = _normalize_city_for_google(city)
+                raw_line = _compose_raw_for_google(addr, norm_city, state, zip_)
+                if raw_line:
+                    fa, fc, fz = get_street_and_city(raw_line)  # returns (street, city) or (None, None)
+                    if fa and fc:
+                        addr, city = fa, fc   # overwrite with formatted values
+                    if fz and not zip_:
+                        zip_ = fz
+                    # geocode full result (non-blocking/fail-open)
+                    geo_js = geocode_response(raw_line)
+            except Exception as e:
+                print(f"Exception in listing geo format: {e}")
+                # fail-open: keep original addr/city
+                pass
+
             price_val = None
             if lst.get("list_price_usd") is not None:
                 try:
@@ -465,23 +499,76 @@ def upsert_parsed_listings_from_html(
                 list_index=idx,  
             )
 
-            q.update_one(
-                upsert=True,
-                set__source_email=source_email_doc,
-                set__address=addr,
-                set__city=city,
-                set__state=state,
-                set__zip=zip_,
-                set__price=price_val,
-                set__images=_clean_images(lst.get("images")),
-                set__other_images_source=(lst.get("other_images_source") or "").strip() or None,
-                set__complete_info=lst,
-                set_on_insert__status="not_processed",  # brand-new only
-            )
+            # -------------------------------
+            # NEW: direct_wholeseller logic
+            # -------------------------------
+            direct_wholeseller_flag = "not_found"
+            dw_info = None
+            if sender:
+                # sender is already lowercased by _sender_email_safe
+                dw_info = DIRECT_WHOLESELLER_MAP.get(sender)
+
+            if dw_info and isinstance(dw_info, dict):
+                # Mark as not_processed for further handling elsewhere
+                # direct_wholeseller_flag = "not_processed"
+                if status_for_insert == "not_processed":
+                    direct_wholeseller_flag = "not_processed"
+                else:
+                    direct_wholeseller_flag = "bypassed"
+
+                # Overwrite agent contact inside the listing blob (complete_info)
+                try:
+                    name = dw_info.get("name")
+                    phone = dw_info.get("phone")
+                    email = dw_info.get("email")
+                    updateFlagForPodio= dw_info.get("updateFlagForPodio")
+
+                    if name:
+                        lst["agent_name"] = name
+                    if phone is not None:
+                        # ensure string, but keep formatting flexible
+                        lst["agent_phone"] = str(phone)
+                    if email:
+                        lst["agent_email"] = email
+                    if updateFlagForPodio:
+                        # ensure string, but keep formatting flexible
+                        lst["updateFlagForPodio"] = updateFlagForPodio
+
+                    
+                except Exception as e:
+                    # If anything goes wrong, we log and keep the original listing intact
+                    logging.exception("Failed to apply direct_wholeseller override for sender %s: %s", sender, e)
+            # If no match, flag stays "not_found"
+
+
+    
+            updates = {
+                "upsert": True,
+                "set__source_email": source_email_doc,
+                "set__address": addr,
+                "set__city": city,
+                "set__state": state,
+                "set__zip": zip_,
+                "set__price": price_val,
+                "set__images": _clean_images(lst.get("images")),
+                "set__other_images_source": (lst.get("other_images_source") or "").strip() or None,
+                "set__complete_info": lst,
+                "set_on_insert__status": status_for_insert,  # brand-new only
+                "set__direct_wholeseller": direct_wholeseller_flag,
+            }
+            if geo_js is not None:
+                updates["set__geo_code_response"] = geo_js
+
+            q.update_one(**updates)
 
             saved = q.only("id").first()
             if saved:
                 saved_ids.append(str(saved.id))
+                if addr and city:
+                    try:
+                        ADDRESS_KEYS_POOL.submit(_update_keys_async, str(saved.id), addr, city)
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"[parsed_listings] upsert error @idx {idx}: {e}")
 
