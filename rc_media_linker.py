@@ -28,8 +28,8 @@ WP_POST_URL = "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1/creat
 REQUEST_TIMEOUT = 25
 
 # URL guard thresholds and probe config
-URL_GUARD_MIN_CONF  = float(os.getenv("URL_GUARD_MIN_CONF",  "0.78"))  # if there is some allow-hint
-URL_GUARD_HIGH_CONF = float(os.getenv("URL_GUARD_HIGH_CONF", "0.88"))  # unknown domains need higher confidence
+URL_GUARD_MIN_CONF  = float(os.getenv("URL_GUARD_MIN_CONF",  "0.78"))  # for allowed hosts / strong cues
+URL_GUARD_HIGH_CONF = float(os.getenv("URL_GUARD_HIGH_CONF", "0.88"))  # unknown hosts
 URL_PROBE_TIMEOUT   = float(os.getenv("URL_PROBE_TIMEOUT",   "6"))
 
 if not OPENAI_API_KEY:
@@ -237,15 +237,15 @@ def ai_verify_same(target: str, wp_address: str, model: Optional[str] = None) ->
     except Exception:
         return {"match": False, "confidence": 0.0}
 
-# ---------- NEW: URL Guard (rule-based + MIME probe + AI) ----------
+# ---------- NEW: URL Guard (host-aware blocklist + MIME/EXT + context + AI) ----------
 _MEDIA_EXTS = (
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff",
     ".heic", ".heif", ".svg",
     ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"
 )
 
-# hard blocklist (marketing/meetings/social/etc.)
-_BLOCK_PATTERNS = (
+# hard blocklist (marketing/meetings/social/etc.) — host-based
+_BLOCK_DOMAINS = (
     "calendly.com", "calendar.google.com", "meet.google.com",
     "zoom.us", "teams.microsoft.com", "webex.com",
     "whatsapp.com", "wa.me",
@@ -253,17 +253,51 @@ _BLOCK_PATTERNS = (
     "youtube.com", "youtu.be", "t.me", "telegram.me",
     "bit.ly", "tinyurl.com", "linktr.ee",
     "mailchi.mp", "sendgrid.net",
-    "wholesaledealfinder.ai", "systemops.ai"  # your marketing domains
+    # keep your marketing domains blocked as non-media
+    "wholesaledealfinder.ai", "systemops.ai",
 )
 
-# soft allow-hints (lower threshold if these appear)
-_ALLOWHINT_PATTERNS = ("drive.google.com", "dropbox.com", "box.com",
-                       "sharepoint.com", "onedrive.live.com",
-                       "amazonaws.com", "cloudinary.com", "imgur.com",
-                       "photos.google.com")
+# allow-list of known media-capable hosts (lower friction)
+_ALLOW_DOMAINS = (
+    "dropbox.com", "dl.dropboxusercontent.com",
+    "drive.google.com", "photos.google.com",
+    "box.com", "app.box.com",
+    "sharepoint.com", "onedrive.live.com",
+    "cloudinary.com", "imgur.com",
+    "amazonaws.com", "s3.amazonaws.com"
+)
+
+_MEDIA_CUE_RE = re.compile(
+    r"\b(pic|pics|picture|pictures|photo|photos|image|images|album|gallery|drive\s+link|dropbox)\b",
+    re.IGNORECASE
+)
 
 def _lc(s: Optional[str]) -> str:
     return (s or "").strip().lower()
+
+def _url_host(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+
+def _host_matches(host: str, domain: str) -> bool:
+    # exact or suffix match (e.g., foo.dropbox.com endswith dropbox.com)
+    return host == domain or host.endswith("." + domain)
+
+def _is_blocked_host(host: str) -> Tuple[bool, str]:
+    h = _lc(host)
+    for d in _BLOCK_DOMAINS:
+        if _host_matches(h, d):
+            return True, f"blocked_domain:{d}"
+    return False, ""
+
+def _is_allowed_host(host: str) -> Tuple[bool, str]:
+    h = _lc(host)
+    for d in _ALLOW_DOMAINS:
+        if _host_matches(h, d):
+            return True, d
+    return False, ""
 
 def _has_media_ext(url: str) -> bool:
     try:
@@ -271,13 +305,6 @@ def _has_media_ext(url: str) -> bool:
         return any(path.endswith(ext) for ext in _MEDIA_EXTS)
     except Exception:
         return False
-
-def _is_blocked_url(url: str) -> Tuple[bool, str]:
-    L = _lc(url)
-    for pat in _BLOCK_PATTERNS:
-        if pat in L:
-            return True, f"blocked_pattern:{pat}"
-    return False, ""
 
 def _probe_mimetype(url: str) -> Tuple[bool, str, Dict[str, Any]]:
     """
@@ -350,7 +377,6 @@ def _ai_guard_media_url(dialog: List[Dict[str, str]], url: str, model: Optional[
             ],
         )
         out = json.loads(chat.choices[0].message.content)
-        # normalize
         out["accept"] = bool(out.get("accept"))
         out["category"] = (out.get("category") or "other").strip()
         try:
@@ -363,33 +389,64 @@ def _ai_guard_media_url(dialog: List[Dict[str, str]], url: str, model: Optional[
     except Exception as e:
         return {"accept": False, "category": "other", "confidence": 0.0, "cues": [f"guard_error:{type(e).__name__}"]}
 
+def _has_strong_media_cues(dialog: List[Dict[str, str]], window:int = 2) -> bool:
+    """
+    True if any of the last `window` messages explicitly mention pictures/photos/etc.
+    """
+    if not dialog:
+        return False
+    for m in dialog[-window:]:
+        if _MEDIA_CUE_RE.search(m.get("text") or ""):
+            return True
+    return False
+
 def should_accept_media_url(url: str, dialog: List[Dict[str, str]]) -> Dict[str, Any]:
     """
-    Decision order:
-      1) Hard blocklist → reject
-      2) Direct media extension → accept
-      3) MIME probe → accept if image/* or video/*
-      4) AI fallback:
-           - if URL contains an allow-hint domain → need >= URL_GUARD_MIN_CONF
-           - otherwise (unknown domain) → need >= URL_GUARD_HIGH_CONF
-    Returns a dict: {"accept": bool, "stage": "blocklist|ext|mime|ai", "reason": "...", ...}
+    Decision order (host-aware and context-aware):
+      A) Parse host.
+      B) If host is ALLOWED:
+           - accept if media extension or MIME says image/video
+           - else if strong media cues in recent text → accept (context)
+           - else AI with MIN threshold
+      C) Else (host not in ALLOW):
+           - hard blocklist by HOST → reject
+           - else accept if media extension or MIME says image/video
+           - else AI: if strong cues → MIN threshold; otherwise HIGH threshold
     """
     u = (url or "").strip()
-    blocked, block_reason = _is_blocked_url(u)
+    host = _url_host(u)
+    allow_host, allow_match = _is_allowed_host(host)
+    strong_cues = _has_strong_media_cues(dialog, window=3)
+
+    # Allowed media hosts skip hard blocklist entirely (Dropbox/Drive/etc.)
+    if allow_host:
+        if _has_media_ext(u):
+            return {"accept": True, "stage": "ext", "reason": f"media_extension@{allow_match}"}
+        is_media, probe_reason, probe_debug = _probe_mimetype(u)
+        if is_media:
+            return {"accept": True, "stage": "mime", "reason": f"{probe_reason}@{allow_match}", "probe": probe_debug}
+        if strong_cues:
+            return {"accept": True, "stage": "context", "reason": f"strong_cues@{allow_match}"}
+        ai = _ai_guard_media_url(dialog, u)
+        if ai.get("accept") and float(ai.get("confidence", 0.0)) >= URL_GUARD_MIN_CONF:
+            return {"accept": True, "stage": "ai", "reason": ai.get("category"), "confidence": ai.get("confidence")}
+        return {"accept": False, "stage": "ai", "reason": ai.get("category"), "confidence": ai.get("confidence")}
+
+    # Non-allowed hosts: enforce hard blocklist by host
+    blocked, block_reason = _is_blocked_host(host)
     if blocked:
         return {"accept": False, "stage": "blocklist", "reason": block_reason}
 
+    # Then normal checks
     if _has_media_ext(u):
         return {"accept": True, "stage": "ext", "reason": "media_extension"}
-
     is_media, probe_reason, probe_debug = _probe_mimetype(u)
     if is_media:
         return {"accept": True, "stage": "mime", "reason": probe_reason, "probe": probe_debug}
 
+    # AI fallback with thresholds depending on cues
     ai = _ai_guard_media_url(dialog, u)
-    # choose threshold
-    lower_thresh = any(h in _lc(u) for h in _ALLOWHINT_PATTERNS)
-    thresh = URL_GUARD_MIN_CONF if lower_thresh else URL_GUARD_HIGH_CONF
+    thresh = URL_GUARD_MIN_CONF if strong_cues else URL_GUARD_HIGH_CONF
     if ai.get("accept") and float(ai.get("confidence", 0.0)) >= thresh:
         return {"accept": True, "stage": "ai", "reason": ai.get("category"), "confidence": ai.get("confidence")}
     return {"accept": False, "stage": "ai", "reason": ai.get("category"), "confidence": ai.get("confidence")}
@@ -568,7 +625,7 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     if not conv_id:
         raise HTTPException(400, "conversationId not found in payload")
     
-    print("mediaLinkerConvoId:",conv_id)
+    print("mediaLinkerConvoId:", conv_id)
 
     # 1) fetch full thread; keep last 10
     thread = fetch_conversation(conv_id, per_page=100, max_pages=10)
@@ -584,7 +641,7 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     street = (extract.get("street_number") or "").strip()
     addr = (extract.get("address") or "").strip()
 
-    print("url, street, addr:",url, ",",street,",", addr)
+    print("url, street, addr:", url, ",", street, ",", addr)
 
     # Heuristic fallback to find a URL
     if not url:
@@ -660,14 +717,11 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
             "debug": {"message_count_considered": len(recent)},
         }
 
-    # ---------- NEW: Media URL Guard (blocklist + extension + MIME probe + AI) ----------
+    # ---------- Media URL Guard (host-aware blocklist + extension + MIME + context + AI) ----------
     guard = should_accept_media_url(url, dialog)
-
-    print("mediaLinker, guard:",guard)
-
     extract["url_guard"] = guard  # keep in logs for auditing
 
-    print("mediaLinker, guard:",guard)
+    print("mediaLinker, guard:", guard)
 
     if not guard.get("accept"):
         _safe_log_run(
@@ -678,14 +732,12 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
             message_count_considered=len(recent),
             last_message_time_iso=last_time_iso,
         )
-
-        print("mediaLinker, not found valid URL:",{
+        print("mediaLinker, not found valid URL:", {
             "conversation_id": conv_id,
             "status": "skipped_non_media_url",
             "ai_extract": extract,
             "debug": {"guard": guard},
         })
-
         return {
             "conversation_id": conv_id,
             "status": "skipped_non_media_url",
@@ -693,9 +745,7 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
             "debug": {"guard": guard},
         }
 
-
-    print("mediaLinker, continuing with valid URL:",guard)
-
+    print("mediaLinker, continuing with valid URL:", guard)
 
     # 3) find WP listing
     wp_item, search_debug = resolve_wp_listing(street, addr)
@@ -816,7 +866,6 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
         "picture_button_url": final_link,
         "post_id": post_id,
     }
-
 
 # # rc_media_linker.py
 # import os
