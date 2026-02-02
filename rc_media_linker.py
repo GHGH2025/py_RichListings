@@ -244,7 +244,7 @@ _MEDIA_EXTS = (
     ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"
 )
 
-# hard blocklist (marketing/meetings/social/etc.) — host-based
+# HARD blocklist (marketing/meetings/social/etc.) — host-based
 _BLOCK_DOMAINS = (
     "calendly.com", "calendar.google.com", "meet.google.com",
     "zoom.us", "teams.microsoft.com", "webex.com",
@@ -253,22 +253,25 @@ _BLOCK_DOMAINS = (
     "youtube.com", "youtu.be", "t.me", "telegram.me",
     "bit.ly", "tinyurl.com", "linktr.ee",
     "mailchi.mp", "sendgrid.net",
-    # keep your marketing domains blocked as non-media
+    # your marketing domains (non-media)
     "wholesaledealfinder.ai", "systemops.ai",
 )
 
-# allow-list of known media-capable hosts (lower friction)
+# Media-capable ALLOW list (expanded to cover stock-photo hosts)
 _ALLOW_DOMAINS = (
     "dropbox.com", "dl.dropboxusercontent.com",
     "drive.google.com", "photos.google.com",
     "box.com", "app.box.com",
     "sharepoint.com", "onedrive.live.com",
     "cloudinary.com", "imgur.com",
-    "amazonaws.com", "s3.amazonaws.com"
+    "amazonaws.com", "s3.amazonaws.com",
+    "istockphoto.com", "gettyimages.com",
+    "unsplash.com", "pexels.com", "pixabay.com",
 )
 
+# Broader cue set: pic/pict/picture/pics/photos/images/album/gallery etc.
 _MEDIA_CUE_RE = re.compile(
-    r"\b(pic|pics|picture|pictures|photo|photos|image|images|album|gallery|drive\s+link|dropbox)\b",
+    r"\b(pic\w*|photo\w*|image\w*|album\w*|gallery\w*|drive\s*link|google\s*photos|dropbox)\b",
     re.IGNORECASE
 )
 
@@ -282,7 +285,6 @@ def _url_host(url: str) -> str:
         return ""
 
 def _host_matches(host: str, domain: str) -> bool:
-    # exact or suffix match (e.g., foo.dropbox.com endswith dropbox.com)
     return host == domain or host.endswith("." + domain)
 
 def _is_blocked_host(host: str) -> Tuple[bool, str]:
@@ -307,10 +309,6 @@ def _has_media_ext(url: str) -> bool:
         return False
 
 def _probe_mimetype(url: str) -> Tuple[bool, str, Dict[str, Any]]:
-    """
-    HEAD/GET probe: accept if Content-Type starts with image/* or video/*
-    or filename in Content-Disposition has an image/video extension.
-    """
     debug: Dict[str, Any] = {}
     try:
         resp = requests.head(url, allow_redirects=True, timeout=URL_PROBE_TIMEOUT)
@@ -389,10 +387,7 @@ def _ai_guard_media_url(dialog: List[Dict[str, str]], url: str, model: Optional[
     except Exception as e:
         return {"accept": False, "category": "other", "confidence": 0.0, "cues": [f"guard_error:{type(e).__name__}"]}
 
-def _has_strong_media_cues(dialog: List[Dict[str, str]], window:int = 2) -> bool:
-    """
-    True if any of the last `window` messages explicitly mention pictures/photos/etc.
-    """
+def _has_strong_media_cues(dialog: List[Dict[str, str]], window:int = 3) -> bool:
     if not dialog:
         return False
     for m in dialog[-window:]:
@@ -411,14 +406,14 @@ def should_accept_media_url(url: str, dialog: List[Dict[str, str]]) -> Dict[str,
       C) Else (host not in ALLOW):
            - hard blocklist by HOST → reject
            - else accept if media extension or MIME says image/video
-           - else AI: if strong cues → MIN threshold; otherwise HIGH threshold
+           - else if strong media cues → accept (context)  <-- NEW (for iStock-like pages)
+           - else AI: HIGH threshold
     """
     u = (url or "").strip()
     host = _url_host(u)
     allow_host, allow_match = _is_allowed_host(host)
     strong_cues = _has_strong_media_cues(dialog, window=3)
 
-    # Allowed media hosts skip hard blocklist entirely (Dropbox/Drive/etc.)
     if allow_host:
         if _has_media_ext(u):
             return {"accept": True, "stage": "ext", "reason": f"media_extension@{allow_match}"}
@@ -444,10 +439,13 @@ def should_accept_media_url(url: str, dialog: List[Dict[str, str]]) -> Dict[str,
     if is_media:
         return {"accept": True, "stage": "mime", "reason": probe_reason, "probe": probe_debug}
 
-    # AI fallback with thresholds depending on cues
+    # NEW: strong cues on non-blocked host → accept (covers iStock/Gettty/etc. HTML pages)
+    if strong_cues:
+        return {"accept": True, "stage": "context", "reason": "strong_cues_nonblocked_host"}
+
+    # AI fallback with higher threshold on unknown host
     ai = _ai_guard_media_url(dialog, u)
-    thresh = URL_GUARD_MIN_CONF if strong_cues else URL_GUARD_HIGH_CONF
-    if ai.get("accept") and float(ai.get("confidence", 0.0)) >= thresh:
+    if ai.get("accept") and float(ai.get("confidence", 0.0)) >= URL_GUARD_HIGH_CONF:
         return {"accept": True, "stage": "ai", "reason": ai.get("category"), "confidence": ai.get("confidence")}
     return {"accept": False, "stage": "ai", "reason": ai.get("category"), "confidence": ai.get("confidence")}
 
@@ -641,9 +639,22 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     street = (extract.get("street_number") or "").strip()
     addr = (extract.get("address") or "").strip()
 
+    # Prefer the MOST RECENT URL when it appears with cues/allowed host
+    idxs = _find_url_indexes(recent)
+    if idxs:
+        last_idx, last_url = idxs[-1]
+        # If last message has cues or last_url host is allowed, promote it
+        last_host = _url_host(last_url)
+        allow_last, _am = _is_allowed_host(last_host)
+        if last_url != url and (_has_strong_media_cues(dialog, window=3) or allow_last):
+            url = last_url
+            s2, a2 = _nearest_addr_before(recent, last_idx)
+            if s2: street = s2
+            if a2: addr = a2
+
     print("url, street, addr:", url, ",", street, ",", addr)
 
-    # Heuristic fallback to find a URL
+    # Heuristic fallback to find a URL (if AI missed and no recent url captured)
     if not url:
         for m in reversed(recent):
             urls = _URL_RE.findall(m.text or "")
@@ -717,9 +728,9 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
             "debug": {"message_count_considered": len(recent)},
         }
 
-    # ---------- Media URL Guard (host-aware blocklist + extension + MIME + context + AI) ----------
+    # ---------- Media URL Guard (host-aware + extension + MIME + context + AI) ----------
     guard = should_accept_media_url(url, dialog)
-    extract["url_guard"] = guard  # keep in logs for auditing
+    extract["url_guard"] = guard  # keep in logs
 
     print("mediaLinker, guard:", guard)
 
