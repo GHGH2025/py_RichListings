@@ -567,6 +567,8 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     conv_id = _extract_conversation_id(payload)
     if not conv_id:
         raise HTTPException(400, "conversationId not found in payload")
+    
+    print("mediaLinkerConvoId:",conv_id)
 
     # 1) fetch full thread; keep last 10
     thread = fetch_conversation(conv_id, per_page=100, max_pages=10)
@@ -581,6 +583,8 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
     url = (extract.get("url") or "").strip()
     street = (extract.get("street_number") or "").strip()
     addr = (extract.get("address") or "").strip()
+
+    print("url, street, addr:",url, ",",street,",", addr)
 
     # Heuristic fallback to find a URL
     if not url:
@@ -658,7 +662,13 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
 
     # ---------- NEW: Media URL Guard (blocklist + extension + MIME probe + AI) ----------
     guard = should_accept_media_url(url, dialog)
+
+    print("mediaLinker, guard:",guard)
+
     extract["url_guard"] = guard  # keep in logs for auditing
+
+    print("mediaLinker, guard:",guard)
+
     if not guard.get("accept"):
         _safe_log_run(
             conversation_id=conv_id, status="skipped_non_media_url",
@@ -668,12 +678,24 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
             message_count_considered=len(recent),
             last_message_time_iso=last_time_iso,
         )
+
+        print("mediaLinker, not found valid URL:",{
+            "conversation_id": conv_id,
+            "status": "skipped_non_media_url",
+            "ai_extract": extract,
+            "debug": {"guard": guard},
+        })
+
         return {
             "conversation_id": conv_id,
             "status": "skipped_non_media_url",
             "ai_extract": extract,
             "debug": {"guard": guard},
         }
+
+
+    print("mediaLinker, continuing with valid URL:",guard)
+
 
     # 3) find WP listing
     wp_item, search_debug = resolve_wp_listing(street, addr)
