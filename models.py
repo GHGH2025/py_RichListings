@@ -318,6 +318,7 @@ class RCMediaLinkLog(Document):
         "no_action",
         "dropbox_error",
         "wp_update_failed",
+        "skipped_non_media_url",   # ← add this
     ), required=True)
     reason                  = StringField()      # human-readable reason or short note
     error                   = StringField()      # exception text if any

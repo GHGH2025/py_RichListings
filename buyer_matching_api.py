@@ -901,6 +901,76 @@ def normalize_preferences_kv(bucket_doc: Any) -> List[Dict[str, str]]:
     return out
 
 
+# def build_property_evidence_text(listing_ci: Dict[str, Any], listing: Any, manual_prefs_norm: List[str]) -> str:
+#     """
+#     Build a strong evidence text block for AI to semantically match preferences.
+#     Keeps it bounded to avoid prompt bloat.
+#     """
+#     parts: List[str] = []
+
+#     def add(x: Any, prefix: str = ""):
+#         if x is None:
+#             return
+#         s = str(x).strip()
+#         if not s:
+#             return
+#         if prefix:
+#             parts.append(f"{prefix}{s}")
+#         else:
+#             parts.append(s)
+
+#     # common description keys (your source data may vary)
+#     for k in [
+#         "raw_description_excerpt",
+#         "raw_description",
+#         "description",
+#         "public_remarks",
+#         "remarks",
+#         "listing_description",
+#         "property_description",
+#         "agent_remarks",
+#         "private_remarks",
+#     ]:
+#         if isinstance(listing_ci, dict) and listing_ci.get(k):
+#             add(listing_ci.get(k), prefix=f"{k}: ")
+
+#     # also check top-level listing fields (safe, optional)
+#     add(getattr(listing, "raw_description", None), prefix="listing.raw_description: ")
+#     add(getattr(listing, "description", None), prefix="listing.description: ")
+
+#     # marketing tags
+#     tags = listing_ci.get("marketing_tags") or []
+#     if isinstance(tags, list) and tags:
+#         tag_str = ", ".join([str(t).strip() for t in tags if str(t).strip()])
+#         if tag_str.strip():
+#             add(tag_str, prefix="Marketing tags: ")
+
+#     # manual special prefs (raw + normalized)
+#     raw_manual = (getattr(listing, "manual_special_preferences_raw", None) or "").strip()
+#     if raw_manual:
+#         add(raw_manual, prefix="Manual special preferences (raw): ")
+
+#     if manual_prefs_norm:
+#         add(", ".join(manual_prefs_norm[:100]), prefix="Manual special preferences (normalized): ")
+
+#     # a compact structured highlight block
+#     highlight_keys = [
+#         "property_type", "water_feature", "is_on_water", "is_condo", "is_land_only",
+#         "build_material", "is_frame_or_wood", "year_built",
+#     ]
+#     highlights = {}
+#     for k in highlight_keys:
+#         v = listing_ci.get(k)
+#         if v is not None and str(v).strip() != "":
+#             highlights[k] = v
+#     if highlights:
+#         add(json.dumps(highlights, ensure_ascii=False), prefix="Structured highlights: ")
+
+#     text = "\n".join(parts).strip()
+#     # keep prompt stable
+#     return text[:3500]
+
+
 def build_property_evidence_text(listing_ci: Dict[str, Any], listing: Any, manual_prefs_norm: List[str]) -> str:
     """
     Build a strong evidence text block for AI to semantically match preferences.
@@ -919,8 +989,39 @@ def build_property_evidence_text(listing_ci: Dict[str, Any], listing: Any, manua
         else:
             parts.append(s)
 
+    # ✅ NEW: include listing.complete_info.complete_info (full raw listing blob text)
+    # This is ONLY used for AI evidence (special preference classifier + subtype AI).
+    try:
+        blob = None
+        outer_ci = getattr(listing, "complete_info", None)
+
+        if isinstance(outer_ci, dict):
+            blob = outer_ci.get("complete_info")
+            # sometimes complete_info itself can be nested dict that again contains "complete_info"
+            if isinstance(blob, dict):
+                blob = blob.get("complete_info")
+
+        blob_s = str(blob).strip() if blob else ""
+
+        # avoid duplicating if listing_ci already contains the same complete_info string
+        existing = ""
+        if isinstance(listing_ci, dict):
+            existing = str(listing_ci.get("complete_info") or "").strip()
+
+        if blob_s and blob_s != existing:
+            add(blob_s, prefix="Complete info (raw full text): ")
+        elif blob_s:
+            # even if same, still include once via listing_ci path below (keeps behavior stable)
+            pass
+    except Exception:
+        pass
+
     # common description keys (your source data may vary)
+    # ✅ NOTE: we keep your existing behavior intact
     for k in [
+        # OPTIONAL: if listing_ci carries the same raw blob, it will be included here too
+        # (safe and does not affect non-AI logic)
+        "complete_info",
         "raw_description_excerpt",
         "raw_description",
         "description",
@@ -930,6 +1031,7 @@ def build_property_evidence_text(listing_ci: Dict[str, Any], listing: Any, manua
         "property_description",
         "agent_remarks",
         "private_remarks",
+      
     ]:
         if isinstance(listing_ci, dict) and listing_ci.get(k):
             add(listing_ci.get(k), prefix=f"{k}: ")
