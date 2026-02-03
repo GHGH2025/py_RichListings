@@ -124,7 +124,7 @@ class ParsedListing(Document):
     )
 
     status            = StringField(
-        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","ready_for_image_processing","image_curation_failed","ready_for_primary_image_check","primary_image_failed","bypassed"),
+        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","skipped_quota","ready_for_image_processing","image_curation_failed","ready_for_primary_image_check","primary_image_failed","bypassed"),
         default="not_processed"
     )
 
@@ -176,13 +176,14 @@ class ParsedListing(Document):
     buyer_matching_last_error_sig = StringField()
     buyer_matching_last_error = StringField()
     buyer_matching_last_attempt_at = DateTimeField(null=True)
-
     buyer_send_status = StringField(
         choices=("pending", "des_generated", "sent", "failed"),
         default=None
     )
+
     buyer_sms_description = StringField()
     buyer_email_description = StringField()
+    
     # Manual special prefs (set from Podio property field)
     manual_special_preferences_raw = StringField(null=True)
     manual_special_preferences_norm = ListField(StringField(), default=list)
@@ -190,6 +191,8 @@ class ParsedListing(Document):
     # ✅ add these (required by your endpoint update_fields)
     manual_special_preferences_saved_at = DateTimeField(null=True)     # always updates when admin saves
     manual_special_preferences_rematch_at = DateTimeField(null=True)   # only updates when should_rematch=True
+        
+
 
     primary_image_check = DictField(null=True)
 

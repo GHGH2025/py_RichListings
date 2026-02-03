@@ -373,7 +373,7 @@ def select_passed_listings_for_post(
 
     for pl in rest_overflow:
         updates = {
-            "set__status": "skipped",
+            "set__status": "skipped_quota",
             "set__rules_ai_rule_id": "POST_POLICY_35PC",
             "set__rules_ai_version": "v1",
             "set__rules_ai_reason": f"{REASON_OVER_CAP}: allowed={rest_cap}, base_non_rest={final_base_count}",
