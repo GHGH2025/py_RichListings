@@ -67,6 +67,15 @@ MATCHER_TEMPERATURE = float(os.getenv("MATCHER_TEMPERATURE", "0"))
 AI_BATCH_SIZE = int(os.getenv("MATCHER_AI_BATCH_SIZE", "25"))
 MIN_CONFIDENCE = float(os.getenv("MATCHER_MIN_CONFIDENCE", "0.60"))
 
+def _env_bool(name: str, default: bool) -> bool:
+    v = (os.getenv(name, "") or "").strip().lower()
+    if not v:
+        return default
+    return v in ("1", "true", "yes", "y", "on")
+
+SPECIAL_PREF_ENFORCE_MIN_CONFIDENCE = _env_bool("SPECIAL_PREF_ENFORCE_MIN_CONFIDENCE", True)
+
+
 BUYER_MATCHING_PROCESSING_STALE_MINUTES = int(os.getenv("BUYER_MATCHING_PROCESSING_STALE_MINUTES", "30"))
 
 
@@ -642,106 +651,106 @@ def _is_generic_type_label(label: str) -> bool:
     ]
     return any(h in s for h in broad_hints)
 
-def type_match_deterministic(
-    listing_ci: Dict[str, Any],
-    property_payload: Dict[str, Any],
-    bucket: str,
-    selected_types: List[str],
-    other_type: str
-) -> Tuple[Optional[bool], str]:
-    """
-    Returns (decision, reason):
-    - decision True/False => deterministic
-    - decision None => need AI
-    """
-    types = [t.strip() for t in (selected_types or []) if (t or "").strip()]
-    if not types:
-        return (True, "no types selected (legacy)")
+# def type_match_deterministic(
+#     listing_ci: Dict[str, Any],
+#     property_payload: Dict[str, Any],
+#     bucket: str,
+#     selected_types: List[str],
+#     other_type: str
+# ) -> Tuple[Optional[bool], str]:
+#     """
+#     Returns (decision, reason):
+#     - decision True/False => deterministic
+#     - decision None => need AI
+#     """
+#     types = [t.strip() for t in (selected_types or []) if (t or "").strip()]
+#     if not types:
+#         return (True, "no types selected (legacy)")
 
-    if any(_is_generic_type_label(t) for t in types):
-        return (True, "generic type selection")
+#     if any(_is_generic_type_label(t) for t in types):
+#         return (True, "generic type selection")
 
-    # quick deterministic signals (when types clearly imply a feature)
-    evidence = (property_payload.get("evidence_text_excerpt") or "").lower()
-    tags = [str(x).lower() for x in (listing_ci.get("marketing_tags") or [])]
+#     # quick deterministic signals (when types clearly imply a feature)
+#     evidence = (property_payload.get("evidence_text_excerpt") or "").lower()
+#     tags = [str(x).lower() for x in (listing_ci.get("marketing_tags") or [])]
 
-    for t in types:
-        tl = t.lower()
+#     for t in types:
+#         tl = t.lower()
 
-        # "Other" => must use other_type text; deterministic only if other_type clearly appears
-        if "other" == _norm_text(t) or tl.strip() == "other":
-            if other_type and other_type.lower() in evidence:
-                return (True, "other_type matched in evidence")
-            return (None, "other needs AI or missing evidence")
+#         # "Other" => must use other_type text; deterministic only if other_type clearly appears
+#         if "other" == _norm_text(t) or tl.strip() == "other":
+#             if other_type and other_type.lower() in evidence:
+#                 return (True, "other_type matched in evidence")
+#             return (None, "other needs AI or missing evidence")
 
-        # Beach / waterfront style filters
-        if ("beach" in tl) or ("waterfront" in tl) or ("ocean" in tl):
-            is_on_water = bool(listing_ci.get("is_on_water") is True)
-            wf = str(listing_ci.get("water_feature") or "").lower()
-            if is_on_water or (wf and wf != "none") or ("beach" in evidence) or any("beach" in x for x in tags):
-                return (True, "beach/waterfront implied and supported")
-            return (None, "beach/waterfront needs AI")
+#         # Beach / waterfront style filters
+#         if ("beach" in tl) or ("waterfront" in tl) or ("ocean" in tl):
+#             is_on_water = bool(listing_ci.get("is_on_water") is True)
+#             wf = str(listing_ci.get("water_feature") or "").lower()
+#             if is_on_water or (wf and wf != "none") or ("beach" in evidence) or any("beach" in x for x in tags):
+#                 return (True, "beach/waterfront implied and supported")
+#             return (None, "beach/waterfront needs AI")
 
-        # Tear-down / redevelopment
-        if ("tear" in tl and "down" in tl) or ("teardown" in tl) or ("redevelop" in tl):
-            if listing_ci.get("is_teardown_or_redevelopment") is True:
-                return (True, "teardown flag true")
-            if "tear down" in evidence or "teardown" in evidence or "redevelop" in evidence:
-                return (True, "teardown implied in evidence")
-            return (None, "teardown needs AI")
+#         # Tear-down / redevelopment
+#         if ("tear" in tl and "down" in tl) or ("teardown" in tl) or ("redevelop" in tl):
+#             if listing_ci.get("is_teardown_or_redevelopment") is True:
+#                 return (True, "teardown flag true")
+#             if "tear down" in evidence or "teardown" in evidence or "redevelop" in evidence:
+#                 return (True, "teardown implied in evidence")
+#             return (None, "teardown needs AI")
 
-        # Units / duplex / triplex / fourplex -> usually needs AI (data may be in text)
-        if any(k in tl for k in ["duplex", "triplex", "fourplex", "units", "unit"]):
-            return (None, "unit-count style subtype needs AI")
+#         # Units / duplex / triplex / fourplex -> usually needs AI (data may be in text)
+#         if any(k in tl for k in ["duplex", "triplex", "fourplex", "units", "unit"]):
+#             return (None, "unit-count style subtype needs AI")
 
-    # default: subtype selected but no deterministic mapping => AI required
-    return (None, "subtype selected; needs AI")
+#     # default: subtype selected but no deterministic mapping => AI required
+#     return (None, "subtype selected; needs AI")
 
-def call_ai_type_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    AI decides whether listing matches ANY of buyer selected_types[] for that bucket.
-    Returns JSON:
-    { "evaluations": [ { "buyer_mongo_id": "...", "type_match": true/false, "confidence_0_to_1": 0.0, "evidence": "..." } ] }
-    """
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY missing in environment")
+# def call_ai_type_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+#     """
+#     AI decides whether listing matches ANY of buyer selected_types[] for that bucket.
+#     Returns JSON:
+#     { "evaluations": [ { "buyer_mongo_id": "...", "type_match": true/false, "confidence_0_to_1": 0.0, "evidence": "..." } ] }
+#     """
+#     if not OPENAI_API_KEY:
+#         raise RuntimeError("OPENAI_API_KEY missing in environment")
 
-    from openai import OpenAI
-    client = OpenAI(api_key=OPENAI_API_KEY)
+#     from openai import OpenAI
+#     client = OpenAI(api_key=OPENAI_API_KEY)
 
-    system = (
-        "You are a strict real estate subtype matcher.\n"
-        "For each candidate buyer, decide if the property matches ANY of their selected subtype labels.\n\n"
-        "Rules:\n"
-        "- Use semantic matching (synonyms/paraphrases). Do not require exact strings.\n"
-        "- If a selected type is broad/generic (e.g. 'in general', 'any location', 'yes i am interested'), treat as MATCH.\n"
-        "- If a selected type is 'Other', use candidate.other_type as the intended subtype.\n"
-        "- If unsure, return type_match=false with low confidence.\n\n"
-        "Return ONLY JSON:\n"
-        "{\n"
-        '  "evaluations": [\n'
-        "    {\n"
-        '      "buyer_mongo_id": "string",\n'
-        '      "type_match": true,\n'
-        '      "confidence_0_to_1": 0.0,\n'
-        '      "evidence": "short reason"\n'
-        "    }\n"
-        "  ]\n"
-        "}\n"
-    )
+#     system = (
+#         "You are a strict real estate subtype matcher.\n"
+#         "For each candidate buyer, decide if the property matches ANY of their selected subtype labels.\n\n"
+#         "Rules:\n"
+#         "- Use semantic matching (synonyms/paraphrases). Do not require exact strings.\n"
+#         "- If a selected type is broad/generic (e.g. 'in general', 'any location', 'yes i am interested'), treat as MATCH.\n"
+#         "- If a selected type is 'Other', use candidate.other_type as the intended subtype.\n"
+#         "- If unsure, return type_match=false with low confidence.\n\n"
+#         "Return ONLY JSON:\n"
+#         "{\n"
+#         '  "evaluations": [\n'
+#         "    {\n"
+#         '      "buyer_mongo_id": "string",\n'
+#         '      "type_match": true,\n'
+#         '      "confidence_0_to_1": 0.0,\n'
+#         '      "evidence": "short reason"\n'
+#         "    }\n"
+#         "  ]\n"
+#         "}\n"
+#     )
 
-    user = {"property": property_payload, "candidates": candidates}
+#     user = {"property": property_payload, "candidates": candidates}
 
-    resp = client.chat.completions.create(
-        model=MATCHER_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-        ],
-        temperature=0,
-    )
+#     resp = client.chat.completions.create(
+#         model=MATCHER_MODEL,
+#         messages=[
+#             {"role": "system", "content": system},
+#             {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+#         ],
+#         temperature=0,
+#     )
 
-    return _extract_json_obj(resp.choices[0].message.content)
+#     return _extract_json_obj(resp.choices[0].message.content)
 
 
 def _county_list_match(listing_county: str, buyer_counties: List[str]) -> bool:
@@ -1095,37 +1104,329 @@ def _find_best_ai_check_for_label(expected_label: str, ai_by_label: Dict[str, Di
         return ai_by_label[best_key]
     return None
 
+
+import re
+from typing import Dict, Any, List, Tuple, Set
+
+def _norm(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+def _slug(s: str) -> str:
+    s = _norm(s)
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s
+
+# Your official labels (use exactly what the form uses)
+SPECIAL_PREF_LABELS = [
+    "$1 Million Dollar Houses and Up",
+    "40 Year Inspection Failed",
+    "40/10 Year Inspection Certificate Failed",
+    "40/10 Year Inspection Certificate Passed",
+    "55 Plus Communities",
+    "Bulk Property Packages",
+    "Eviction Needed/ In Progress",
+    "Frame Construction",
+    "Garage",
+    "Located on Beach Front Only",
+    "Located on Golf Course Only",
+    "Located on Ocean Access / Intracoastal Way Only",
+    "Located on Water Front Only",
+    "Mobile Homes",
+    "Mold Remediation Needed",
+    "Need to Buy Property Sight Unseen (Bad Tenants, Other Access Issues) - Videos or Pictures might be available case by case.",
+    "NO HOA",
+    "Pool",
+    "Post Occupancy Required (with escrow holdback and/ or rent)",
+    "Property has Code Violations / Liens / Fines",
+    "Property has Foundation / Structural Issues",
+    "Property has Rental Restrictions",
+    "Property has Special Assessments",
+    "Property is Fire Damaged",
+    "Property Needs a Full Rehab",
+    "Property with Ocean Access / Intracoastal",
+    "Tear-downs / Land Value Only",
+    "Unpermitted Additions",
+    "Water/ Flood Damage",
+]
+
+LABEL_TO_KEY = {lbl: _slug(lbl) for lbl in SPECIAL_PREF_LABELS}
+KEY_TO_LABEL = {v: k for k, v in LABEL_TO_KEY.items()}
+
+# ✅ Alias mapping for listing.manual_special_preferences_norm variations (keep existing manual behavior)
+MANUAL_ALIASES = {
+    _slug("property needs a full rehab"): LABEL_TO_KEY["Property Needs a Full Rehab"],
+    _slug("property has code violations"): LABEL_TO_KEY["Property has Code Violations / Liens / Fines"],
+    _slug("property is fire damaged"): LABEL_TO_KEY["Property is Fire Damaged"],
+    _slug("no hoa"): LABEL_TO_KEY["NO HOA"],
+    _slug("mobile homes"): LABEL_TO_KEY["Mobile Homes"],
+    _slug("water/ flood damage"): LABEL_TO_KEY["Water/ Flood Damage"],
+    _slug("mold remediation needed"): LABEL_TO_KEY["Mold Remediation Needed"],
+    _slug("foundation / structural issues"): LABEL_TO_KEY["Property has Foundation / Structural Issues"],
+    # add more if your manual list uses shorter phrases
+}
+
+# Rule patterns (conservative; won’t “invent” presence)
+SPECIAL_PREF_PATTERNS = {
+    LABEL_TO_KEY["Property is Fire Damaged"]: [
+        r"\bfire\s*damage(d)?\b",
+        r"\bfire[-\s]?damaged\b",
+        r"\bsmoke\s*damage\b",
+        r"\bburn(?:t|ed)?\b",
+    ],
+    LABEL_TO_KEY["Property Needs a Full Rehab"]: [
+        r"\bfull\s+rehab\b",
+        r"\bgut\s+rehab\b",
+        r"\bneeds\s+(a\s+)?(full\s+)?rehab\b",
+        r"\bmajor\s+rehab\b",
+        r"\bcomplete\s+rehab\b",
+    ],
+    LABEL_TO_KEY["Property has Code Violations / Liens / Fines"]: [
+        r"\bcode\s+violation(s)?\b",
+        r"\blien(s)?\b",
+        r"\bfine(s)?\b",
+        r"\bviolation notice\b",
+    ],
+    LABEL_TO_KEY["NO HOA"]: [
+        r"\bno\s*hoa\b",
+        r"\bwithout\s+hoa\b",
+    ],
+    LABEL_TO_KEY["Water/ Flood Damage"]: [
+        r"\bwater\s+damage\b",
+        r"\bflood(?:ing)?\b",
+        r"\bwater\s+intrusion\b",
+    ],
+    LABEL_TO_KEY["Mold Remediation Needed"]: [
+        r"\bmold\b",
+        r"\bremediation\b",
+    ],
+    LABEL_TO_KEY["Mobile Homes"]: [
+        r"\bmobile\s+home(s)?\b",
+        r"\bmanufactured\s+home(s)?\b",
+    ],
+    LABEL_TO_KEY["Pool"]: [
+        r"\bpool\b",
+    ],
+    LABEL_TO_KEY["Garage"]: [
+        r"\bgarage\b",
+        r"\b2\s*car\s+garage\b",
+        r"\b1\s*car\s+garage\b",
+    ],
+    LABEL_TO_KEY["Tear-downs / Land Value Only"]: [
+        r"\btear\s*down\b",
+        r"\bteardown\b",
+        r"\bland\s+value\s+only\b",
+        r"\blot\s+value\b",
+    ],
+    LABEL_TO_KEY["Unpermitted Additions"]: [
+        r"\bunpermitted\b",
+        r"\bnon[-\s]?permitted\b",
+        r"\bwithout\s+permit(s)?\b",
+    ],
+    LABEL_TO_KEY["Eviction Needed/ In Progress"]: [
+        r"\beviction\b",
+        r"\bcash\s+for\s+keys\b",
+    ],
+    LABEL_TO_KEY["55 Plus Communities"]: [
+        r"\b55\+\b",
+        r"\b55\s*plus\b",
+        r"\bactive\s+adult\b",
+    ],
+    LABEL_TO_KEY["Bulk Property Packages"]: [
+        r"\bportfolio\b",
+        r"\bpackage\b",
+        r"\bbulk\b",
+        r"\bbundle\b",
+        r"\bmultiple\s+properties\b",
+    ],
+    LABEL_TO_KEY["Need to Buy Property Sight Unseen (Bad Tenants, Other Access Issues) - Videos or Pictures might be available case by case."]: [
+        r"\bsight\s+unseen\b",
+        r"\bno\s+access\b",
+        r"\btenant\s+occupied\b",
+        r"\boccupied\b",
+    ],
+    LABEL_TO_KEY["$1 Million Dollar Houses and Up"]: [
+        # handled by price too, but keep pattern in case email says it
+        r"\b1\s*million\b",
+        r"\b\$1,?000,?000\b",
+    ],
+}
+
+def collect_listing_text(listing: Dict[str, Any]) -> str:
+    ci = (listing.get("complete_info") or {})
+    chunks = [
+        ci.get("complete_info"),
+        ci.get("raw_description_excerpt"),
+        listing.get("post_content"),
+        " ".join(ci.get("marketing_tags") or []),
+    ]
+    return "\n".join([c for c in chunks if c]).strip()
+
+def detect_listing_special_prefs(listing: Dict[str, Any]) -> Tuple[Set[str], Dict[str, str]]:
+    """
+    Returns:
+      present_keys: set of canonical pref keys present in listing
+      evidence: key -> short evidence snippet (for logging)
+    """
+    present: Set[str] = set()
+    evidence: Dict[str, str] = {}
+
+    # 1) Manual prefs (do NOT break existing manual behavior)
+    for raw in (listing.get("manual_special_preferences_norm") or []):
+        k = MANUAL_ALIASES.get(_slug(raw), _slug(raw))
+        present.add(k)
+        evidence.setdefault(k, f"manual:{raw}")
+
+    # 2) Structured fields (safe signals)
+    ci = listing.get("complete_info") or {}
+    price = ci.get("list_price_usd") or listing.get("price")
+    if isinstance(price, (int, float)) and price >= 1_000_000:
+        k = LABEL_TO_KEY["$1 Million Dollar Houses and Up"]
+        present.add(k)
+        evidence.setdefault(k, f"price:{price}")
+
+    # NO HOA from structured has_hoa if available
+    has_hoa = ci.get("has_hoa")
+    if has_hoa is False:
+        k = LABEL_TO_KEY["NO HOA"]
+        present.add(k)
+        evidence.setdefault(k, "has_hoa:false")
+
+    # Mobile homes from structured boolean if available
+    if ci.get("is_mobile_home") is True:
+        k = LABEL_TO_KEY["Mobile Homes"]
+        present.add(k)
+        evidence.setdefault(k, "is_mobile_home:true")
+
+    # 3) Text scan (this is what will catch "Fire damage" in your example)
+    text = _norm(collect_listing_text(listing))
+    if text:
+        for k, patterns in SPECIAL_PREF_PATTERNS.items():
+            for pat in patterns:
+                m = re.search(pat, text, flags=re.IGNORECASE)
+                if m:
+                    present.add(k)
+                    # keep first evidence only (don’t spam logs)
+                    if k not in evidence:
+                        start = max(0, m.start() - 25)
+                        end = min(len(text), m.end() + 25)
+                        evidence[k] = f"text:...{text[start:end]}..."
+                    break
+
+    return present, evidence
+
+def normalize_buyer_prefs_kv(preferences_kv: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    out = []
+    for kv in preferences_kv or []:
+        label = (kv.get("label") or "").strip()
+        value = _norm(kv.get("value") or "")
+        if not label or not value:
+            continue
+        key = LABEL_TO_KEY.get(label, _slug(label))
+        out.append({"key": key, "label": label, "value": value})
+    return out
+
+def evaluate_special_prefs(
+    buyer_prefs_kv: List[Dict[str, str]],
+    listing_present: Set[str],
+    listing_evidence: Dict[str, str],
+) -> Tuple[bool, List[str], List[str]]:
+    """
+    Preserve your current idea:
+      - If there is at least one 'Only' selected, require at least one 'Only' to be PRESENT.
+      - 'Maybe' does NOT block.
+    Fix:
+      - 'No' is a HARD FAIL if listing indicates the pref is present.
+    """
+    prefs = normalize_buyer_prefs_kv(buyer_prefs_kv)
+
+    if not prefs:
+        return True, ["no special preferences set"], []
+
+    failed = []
+    reasons = []
+
+    # 1) HARD NEGATIVES FIRST
+    for p in prefs:
+        if p["value"] in ("no", "false", "0"):
+            if p["key"] in listing_present:
+                ev = listing_evidence.get(p["key"], "present")
+                failed.append(f"NO blocked: {p['label']} ({ev})")
+    if failed:
+        return False, [], failed
+
+    # 2) ONLY logic (keep existing behavior: at least one Only must match)
+    only_selected = [p for p in prefs if p["value"] == "only"]
+    if only_selected:
+        matched_any = False
+        for p in only_selected:
+            if p["key"] in listing_present:
+                matched_any = True
+                reasons.append(f"Qualified: ONLY matched -> {p['label']}")
+        if not matched_any:
+            failed.append("ONLY selected but none present")
+            return False, [], failed
+
+    # 3) Maybe/Yes are informative only (don’t block)
+    for p in prefs:
+        if p["value"] == "maybe":
+            reasons.append(f"Preference (Maybe): {p['label']}")
+
+    return True, reasons, []
+
+
+
 def apply_special_preference_rules(pref_checks: List[Dict[str, Any]]) -> Tuple[bool, float, List[str], List[str]]:
     """
-    Deterministic evaluation using AI-produced status.
-    Implements your rules:
+    UPDATED Qualification / Disqualification Rules (STRICT):
 
-    - No: if feature/concept is PRESENT => mismatch. Otherwise pass (ABSENT/UNKNOWN pass).
-    - Yes: must be PRESENT.
-    - Maybe: never blocks.
-    - Only:
-        * If exactly one Only => it must be PRESENT.
-        * If multiple Only => at least ONE of the Only preferences must be PRESENT.
-      (Still respecting any Yes/No rules.)
-    Returns: (match, confidence, reasons, failed_checks)
+    0) NO OVERRIDE (Hard Disqualify):
+       - If ANY "No" selection has status == PRESENT => DISQUALIFIED (overrides everything).
+
+    1) ONLY takes precedence (when ANY Only selections exist):
+       - Qualified if at least ONE "Only" is PRESENT.
+       - Disqualified if NONE of the "Only" selections are PRESENT.
+       - When Only exists, we DO NOT use Yes/Maybe to qualify (matches your rule b/c).
+
+    2) If there are NO Only selections:
+       - If there are Yes and/or Maybe selections:
+            Qualified if at least ONE Yes is PRESENT OR at least ONE Maybe is PRESENT.
+            (Yes/Maybe are OR; only one match needed.)
+            Disqualified if none match.
+       - If there are NO Yes and NO Maybe selections (i.e., only No selections exist):
+            Qualified as long as no "No" matched (rule 0 already enforced).
+
+    Confidence:
+      - If qualified due to a match (Only or Yes/Maybe), confidence = MAX confidence among the matching checks.
+      - If qualified due to only-No restrictions, confidence stays 1.0 (backward-safe behavior).
     """
     checks = pref_checks or []
 
-    def sel(c) -> str:
+    def sel(c: Dict[str, Any]) -> str:
         return str(c.get("selection") or "").strip().lower()
 
-    def status(c) -> str:
+    def status(c: Dict[str, Any]) -> str:
         return str(c.get("status") or "").strip().upper()
 
-    def conf(c) -> float:
+    def conf_raw(c: Dict[str, Any]) -> float:
         try:
             v = float(c.get("confidence_0_to_1") or 0.0)
-            # clamp
-            if v < 0: v = 0.0
-            if v > 1: v = 1.0
+            if v < 0:
+                v = 0.0
+            if v > 1:
+                v = 1.0
             return v
         except Exception:
             return 0.0
+
+    def conf_present(c: Dict[str, Any]) -> float:
+        """
+        Backward-safe: if PRESENT but confidence missing/0, treat as 1.0
+        (same effect as your previous `conf(c) or 1.0` behavior).
+        """
+        v = conf_raw(c)
+        return v if v > 0 else 1.0
 
     no_checks = [c for c in checks if sel(c) == "no"]
     yes_checks = [c for c in checks if sel(c) == "yes"]
@@ -1135,51 +1436,68 @@ def apply_special_preference_rules(pref_checks: List[Dict[str, Any]]) -> Tuple[b
     reasons: List[str] = []
     failed: List[str] = []
 
-    # confidence aggregation: keep it conservative only when something is positively confirmed PRESENT
-    overall_conf = 1.0
+    # ------------------------------------------------------------
+    # 0) "No" override: any PRESENT => disqualify immediately
+    # ------------------------------------------------------------
+    no_present = [c for c in no_checks if status(c) == "PRESENT"]
+    if no_present:
+        for c in no_present:
+            failed.append(f"Disqualified: 'No' matched (PRESENT): {c.get('label')}")
+        return (False, 1.0, reasons, failed)
 
-    # NO: only fails if PRESENT
-    for c in no_checks:
-        st = status(c)
-        if st == "PRESENT":
-            failed.append(f"No selected but feature present: {c.get('label')}")
-        # ABSENT/UNKNOWN => pass (do not block)
-
-    # YES: must be PRESENT
-    for c in yes_checks:
-        st = status(c)
-        if st != "PRESENT":
-            failed.append(f"Yes selected but not present/unknown: {c.get('label')}")
-        else:
-            overall_conf = min(overall_conf, conf(c) or 1.0)
-
-    # ONLY logic
-    if len(only_checks) == 1:
-        c = only_checks[0]
-        st = status(c)
-        if st != "PRESENT":
-            failed.append(f"Only selected (single) but not present/unknown: {c.get('label')}")
-        else:
-            overall_conf = min(overall_conf, conf(c) or 1.0)
-
-    elif len(only_checks) > 1:
+    # ------------------------------------------------------------
+    # 1) If ANY "Only" selections exist, they drive qualification
+    # ------------------------------------------------------------
+    if only_checks:
         present_only = [c for c in only_checks if status(c) == "PRESENT"]
-        if not present_only:
-            failed.append("Multiple 'Only' selected but none are present")
+        if present_only:
+            best_conf = max(conf_present(c) for c in present_only) if present_only else 1.0
+            matched_labels = [str(c.get("label") or "").strip() for c in present_only if str(c.get("label") or "").strip()]
+            reasons.append(
+                "Qualified: at least one 'Only' matched (PRESENT)"
+                + (f" -> {', '.join(matched_labels)}" if matched_labels else "")
+            )
+            return (True, float(best_conf), reasons, failed)
+
+        failed.append("Disqualified: 'Only' selections provided but NONE matched (PRESENT)")
+        return (False, 1.0, reasons, failed)
+
+    # ------------------------------------------------------------
+    # 2) No "Only": Yes/Maybe are OR-based qualifiers
+    # ------------------------------------------------------------
+    # If buyer provided ANY Yes/Maybe, at least one must match to qualify.
+    if yes_checks or maybe_checks:
+        present_yes = [c for c in yes_checks if status(c) == "PRESENT"]
+        present_maybe = [c for c in maybe_checks if status(c) == "PRESENT"]
+
+        if present_yes or present_maybe:
+            present_all = present_yes + present_maybe
+            best_conf = max(conf_present(c) for c in present_all) if present_all else 1.0
+
+            matched_yes_labels = [str(c.get("label") or "").strip() for c in present_yes if str(c.get("label") or "").strip()]
+            matched_maybe_labels = [str(c.get("label") or "").strip() for c in present_maybe if str(c.get("label") or "").strip()]
+
+            if matched_yes_labels:
+                reasons.append(f"Qualified: at least one 'Yes' matched (PRESENT) -> {', '.join(matched_yes_labels)}")
+            if matched_maybe_labels:
+                reasons.append(f"Qualified: at least one 'Maybe' matched (PRESENT) -> {', '.join(matched_maybe_labels)}")
+
+            return (True, float(best_conf), reasons, failed)
+
+        # none matched
+        if yes_checks and maybe_checks:
+            failed.append("Disqualified: No 'Yes' or 'Maybe' selections matched (PRESENT)")
+        elif yes_checks:
+            failed.append("Disqualified: No 'Yes' selections matched (PRESENT)")
         else:
-            # at least one is present: confidence driven by best present-only evidence
-            best_present = max(conf(c) for c in present_only)
-            overall_conf = min(overall_conf, best_present if best_present > 0 else 1.0)
+            failed.append("Disqualified: No 'Maybe' selections matched (PRESENT)")
+        return (False, 1.0, reasons, failed)
 
-    # MAYBE: never blocks (ignored completely)
-    _ = maybe_checks  # intentionally unused
-
-    if failed:
-        return (False, float(overall_conf), reasons, failed)
-
-    reasons.append("Special preferences passed")
-    return (True, float(overall_conf), reasons, failed)
-
+    # ------------------------------------------------------------
+    # 3) Only "No" restrictions existed (and none matched) => qualify
+    # ------------------------------------------------------------
+    reasons.append("Qualified: only 'No' restrictions set and none matched (PRESENT)")
+    return (True, 1.0, reasons, failed)
 
 # -------------------------------------------------------------------
 # Phase 1 enhancement END
@@ -2070,7 +2388,28 @@ def match_buyers(payload: MatchBuyersPayload):
         "manual_special_preferences": manual_prefs,
     }
 
-    
+    # ✅ Special-prefs deterministic detection for THIS listing (run once)
+    # We build a dict-shaped "listing_doc" because detect_listing_special_prefs expects dict.get(...)
+    listing_doc_for_sp = {
+        "complete_info": {
+            # put a safe text blob here for regex scanning
+            "complete_info": raw_excerpt,
+            "raw_description_excerpt": listing_ci.get("raw_description_excerpt"),
+            "marketing_tags": listing_ci.get("marketing_tags") or [],
+
+            # structured signals (only if present in your data)
+            "list_price_usd": listing_price,
+            "has_hoa": listing_ci.get("has_hoa"),
+            "is_mobile_home": listing_ci.get("is_mobile_home"),
+        },
+        "manual_special_preferences_norm": manual_prefs,
+        "price": listing_price,
+        # optional (only used if your collect_listing_text reads it)
+        "post_content": getattr(listing, "post_content", None),
+    }
+
+    listing_present, listing_evidence = detect_listing_special_prefs(listing_doc_for_sp)
+
 
 # -------------------------------------------------------------------
 # Phase 1 enhancement START
@@ -2141,6 +2480,26 @@ def match_buyers(payload: MatchBuyersPayload):
 
     for b in stage1_candidates:
         obj = buyer_bucket_obj(b)
+        # ✅ Special preferences deterministic pass (No/Only logic based on detected listing prefs)
+        ok_sp, reasons_sp, failed_sp = evaluate_special_prefs(
+            obj.get("preferences_kv", []),
+            listing_present,
+            listing_evidence,
+        )
+
+        # If special prefs fail deterministically, record + skip this buyer
+        if not ok_sp:
+            evaluations_all.append({
+                "buyer_mongo_id": obj["buyer_mongo_id"],
+                "match": False,
+                "confidence_0_to_1": 1.0,
+                "reasons": [],
+                "failed_checks": failed_sp,
+            })
+            continue
+
+        # carry forward to merge into final evaluation later
+        obj["_sp_reasons"] = reasons_sp
 
         # FAIL-FAST: No + manual pref present => reject
         pref_kv = obj.get("preferences_kv") or []
@@ -2185,11 +2544,14 @@ def match_buyers(payload: MatchBuyersPayload):
         prefs_kv = obj.get("preferences_kv") or []
         if not prefs_kv:
             matched_buyer_ids.append(obj["buyer_mongo_id"])
+            reasons_base = list(obj.get("_sp_reasons") or [])
+            reasons_base.append(f"Type matched ({reason}); no special preferences set; deterministic rules passed")
+
             evaluations_all.append({
                 "buyer_mongo_id": obj["buyer_mongo_id"],
                 "match": True,
                 "confidence_0_to_1": 1.0,
-                "reasons": [f"Type matched ({reason}); no special preferences set; deterministic rules passed"],
+                "reasons": reasons_base,
                 "failed_checks": [],
             })
             continue
@@ -2312,17 +2674,23 @@ def match_buyers(payload: MatchBuyersPayload):
 
 
             ok, conf, reasons, failed = apply_special_preference_rules(pref_checks)
-            final_match = bool(ok) and float(conf or 0) >= MIN_CONFIDENCE
-            
+            if SPECIAL_PREF_ENFORCE_MIN_CONFIDENCE:
+                final_match = bool(ok) and float(conf or 0) >= MIN_CONFIDENCE
+            else:
+                final_match = bool(ok)
 
+            extra_reasons = list(cand.get("_sp_reasons") or [])
 
             evaluations_all.append({
                 "buyer_mongo_id": bid,
                 "match": final_match,
                 "confidence_0_to_1": float(conf or 0),
-                "reasons": reasons,
+                "reasons": extra_reasons + (reasons or []),
                 "failed_checks": failed,
             })
+
+
+
 
             if final_match:
                 matched_buyer_ids.append(bid)
