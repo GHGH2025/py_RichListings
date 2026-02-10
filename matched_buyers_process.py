@@ -646,11 +646,7 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
             else:
                 price_str = ""
 
-            pics_link = (
-                getattr(pl, "other_images_dropbox_link", None)
-                or (getattr(pl, "complete_info", {}) or {}).get("other_images_source")
-                or ""
-            )
+            pics_link = getattr(pl, "other_images_dropbox_link", None) or ""
 
             images = getattr(pl, "images", None) or []
             first_image_url = images[0] if images else ""
