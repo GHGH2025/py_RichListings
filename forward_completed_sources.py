@@ -621,7 +621,7 @@ def forward_completed_source_emails(
 
         skipped_over_35 = [
             pl for pl in listings
-            if (pl.status or "").strip().lower() == "skipped"
+            if (pl.status or "").strip().lower() == "skipped_quota"
             and (getattr(pl, "over_35_percent", None) or "").strip().lower() == "found"
         ]
 
