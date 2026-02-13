@@ -69,7 +69,9 @@ ACCOUNTS = [
             "mitch.conyers@poplarhomebuyers.com",
             "mike.barone@outlook.com",
             "lorena@safetynetrealty.com",
-            "may@lpihomebuyers.com"
+            "may@lpihomebuyers.com",
+            "flrpmwholesalefl-gmail.com@shared1.ccsend.com",
+            "deals@onemotivatedseller.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
