@@ -51,7 +51,7 @@
 # api_app.py
 import os
 import time
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware  # ✅ add
 from pydantic import BaseModel
 from typing import Literal
@@ -62,7 +62,7 @@ from config_runtime import set_whatsapp_send_mode, get_whatsapp_send_mode
 from buyer_submissions_api import router as buyer_submissions_router
 from buyer_matching_api import router as buyer_matching_router
 
-from special_avails import snapshot_yesterday_special_avail
+from special_avails import snapshot_yesterday_special_avail, process_manny_special_avails
 
 
 START_TIME = float(os.getenv("APP_START_TIME", str(time.time())))
@@ -129,4 +129,25 @@ def run_snapshot_yesterday_special_avail():
         }
     except Exception as e:
         # You can also log here if you want
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tasks/run-manny-special-avails")
+def run_manny_special_avails(background_tasks: BackgroundTasks):
+    """
+    Trigger process_manny_special_avails() for Manny in the background.
+    Returns immediately without waiting for completion.
+    """
+    try:
+        background_tasks.add_task(
+            process_manny_special_avails,
+            manny_podio_item_ids=[2486909239],
+            sheet_urls=[
+                "https://docs.google.com/spreadsheets/d/1JosEwFm0XNPUACJIE44-r7xXQopxI4Bz3jLXdRNHavg/edit?gid=1583695700#gid=1583695700"
+            ],
+        )
+        return {
+            "ok": True,
+            "status": "started_process",
+        }
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
