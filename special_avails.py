@@ -927,6 +927,33 @@ def _podio_headers(access_token: str) -> Dict[str, str]:
     }
 
 
+def _parse_podio_created_on(item: Dict[str, Any]) -> Optional[datetime]:
+    """
+    Best-effort parse of Podio created_on/created_at to an aware UTC datetime.
+    Podio usually returns "YYYY-MM-DD HH:MM:SS" in UTC.
+    """
+    raw = item.get("created_on") or item.get("created_at")
+    if not raw:
+        return None
+
+    try:
+        # Handle ISO-like string with Z
+        if isinstance(raw, str) and raw.endswith("Z"):
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        # Handle "YYYY-MM-DD HH:MM:SS"
+        if isinstance(raw, str):
+            dt = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+            return dt.replace(tzinfo=timezone.utc)
+        # If it’s already a datetime, normalize to UTC if naive
+        if isinstance(raw, datetime):
+            if raw.tzinfo is None:
+                return raw.replace(tzinfo=timezone.utc)
+            return raw.astimezone(timezone.utc)
+    except Exception as e:
+        print(f"[Manny] Failed to parse created_on: {raw} ({e})")
+
+    return None
+
 def _fetch_active_properties_for_wholesaler(
     access_token: str,
     wholesaler_podio_item_id: int,
@@ -978,11 +1005,12 @@ def _fetch_active_properties_for_wholesaler(
 
             # Podio filter returns items with "item_id" (or sometimes "id")
             prop_id = item.get("item_id") or item.get("id")
+            created_on = _parse_podio_created_on(item)
             if not prop_id:
                 # if for some reason id is missing, still keep address
-                results.append({"address": addr, "podio_item_id": None})
+                results.append({"address": addr, "podio_item_id": None, "created_on": created_on})
             else:
-                results.append({"address": addr, "podio_item_id": prop_id})
+                results.append({"address": addr, "podio_item_id": prop_id, "created_on": created_on})
 
         total = data.get("total", 0)
         offset += len(batch)
@@ -1510,4 +1538,407 @@ def process_one_special_avail_matching() -> Dict[str, Any]:
         "unique_count": len(unique_full_addresses),
         "active_count": len(active_listings),
         "matches": match_results,
+    }
+
+
+
+MANNY_WEBHOOK_URL = os.getenv("MANNY_MATCH_WEBHOOK_URL", "").strip()  # or pass as arg
+# You will pass Manny's wholesaler Podio item IDs as a parameter.
+MANNY_MATCH_MODEL = "gpt-5-mini"
+
+def _to_est_date(dt: datetime) -> date:
+    """
+    Convert a datetime (any tz or naive) to a date in America/New_York.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    est = dt.astimezone(ZoneInfo("America/New_York"))
+    return est.date()
+
+
+def _business_days_between(start: date, end: date) -> int:
+    """
+    Count business days between start and end (exclusive of start, inclusive of end).
+    If end <= start, returns 0.
+    """
+    if end <= start:
+        return 0
+
+    delta_days = (end - start).days
+    full_weeks, extra_days = divmod(delta_days, 7)
+
+    business_days = full_weeks * 5
+
+    for i in range(extra_days):
+        day = start + timedelta(days=full_weeks * 7 + i + 1)  # start+1 .. start+delta
+        if day.weekday() < 5:  # 0–4 = Mon–Fri
+            business_days += 1
+
+    return business_days
+
+
+def _older_than_business_days(created_on: datetime, n_days: int = 3) -> bool:
+    """
+    True if created_on is more than `n_days` business days ago in EST.
+    """
+    created_date = _to_est_date(created_on)
+    today_est = datetime.now(ZoneInfo("America/New_York")).date()
+    bdays = _business_days_between(created_date, today_est)
+    return bdays > n_days  # strictly 'more than 3 business days ago'
+
+
+def _fetch_google_sheet_text(sheet_url: str, max_chars: int = 12000) -> str:
+    """
+    Fetches the *rendered* public Google Sheet HTML/text and returns a
+    plain-text version (all tabs combined). Truncates to max_chars to
+    keep prompts reasonable.
+    """
+    try:
+        resp = requests.get(sheet_url, timeout=20)
+        resp.raise_for_status()
+        text = resp.text or ""
+    except requests.RequestException as e:
+        print(f"[Manny] Failed to fetch Google Sheet: {e}")
+        return ""
+
+    # Very simple HTML tag strip; you can replace with BeautifulSoup if desired.
+    # We just want a big text blob with rows separated by newlines.
+    import re
+    # remove script/style
+    text = re.sub(r"<script.*?</script>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<style.*?</style>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    # replace <br> and <td>/<th> with newlines
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</tr\s*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</(td|th)\s*>", " | ", text, flags=re.IGNORECASE)
+    # strip remaining tags
+    text = re.sub(r"<[^>]+>", " ", text)
+    # normalize whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if len(text) > max_chars:
+        text = text[:max_chars] + " …(truncated)"
+
+    return text
+
+def _fetch_google_sheets_text(sheet_urls: List[str], max_chars: int = 24000) -> str:
+    """
+    Fetch and combine text from multiple public Google Sheet URLs.
+    Each sheet is truncated individually, then the combined result
+    is truncated to max_chars overall.
+    """
+    combined_parts: List[str] = []
+
+    for url in sheet_urls:
+        url = (url or "").strip()
+        if not url:
+            continue
+        txt = _fetch_google_sheet_text(url, max_chars=max_chars // max(1, len(sheet_urls)))
+        if txt:
+            combined_parts.append(f"[SHEET_START] {url}\n{txt}\n[SHEET_END]\n")
+
+    combined = "\n".join(combined_parts).strip()
+    if len(combined) > max_chars:
+        combined = combined[:max_chars] + " …(combined truncated)"
+
+    return combined
+
+def ai_match_address_in_sheet(
+    active_address: str,
+    sheet_text: str,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Use an LLM to check if `active_address` appears to be present in the sheet_text,
+    allowing for formatting differences, abbreviations, etc.
+
+    Returns:
+      {
+        "found": bool,
+        "reason": str,
+      }
+    """
+    active_address = (active_address or "").strip()
+    sheet_text = (sheet_text or "").strip()
+    model = model or MANNY_MATCH_MODEL
+
+    if not active_address or not sheet_text:
+        return {
+            "found": False,
+            "reason": "missing_active_address_or_sheet_text",
+        }
+
+    system_msg = {
+        "role": "system",
+        "content": (
+            "You are an assistant that matches real-estate property addresses.\n"
+            "You will be given ONE Podio active property address and the plain-text content of a Google Sheet\n"
+            "that contains multiple rows of properties.\n\n"
+            "Your task: decide whether ANY row in the sheet corresponds to the SAME physical property\n"
+            "as the Podio active address, even if formatting differs (abbreviations, missing 'USA', etc.).\n"
+            "If you are not reasonably confident, return found=false.\n\n"
+            "Return ONLY valid JSON:\n"
+            "{\n"
+            '  \"found\": true or false,\n'
+            '  \"reason\": \"short explanation\"\n'
+            "}\n"
+        ),
+    }
+
+    user_msg = {
+        "role": "user",
+        "content": (
+            "PODIO_ACTIVE_ADDRESS:\n"
+            f"{active_address}\n\n"
+            "SHEET_TEXT (multiple rows, may be truncated):\n"
+            f"{sheet_text}\n"
+        ),
+    }
+
+    kwargs: Dict[str, Any] = {
+        "model": model,
+        "messages": [system_msg, user_msg],
+        "response_format": {"type": "json_object"},
+    }
+    if model != "gpt-5-mini":
+        kwargs["temperature"] = 0
+
+    resp = client.chat.completions.create(**kwargs)
+    raw = resp.choices[0].message.content
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {
+            "found": False,
+            "reason": f"json_parse_error:{raw[:200]}",
+        }
+
+    found = bool(data.get("found", False))
+    reason = (data.get("reason") or "").strip()
+
+    return {
+        "found": found,
+        "reason": reason,
+    }
+
+def process_manny_special_avails(
+    manny_podio_item_ids: List[int],
+    sheet_urls: List[str],
+    webhook_url: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    1) Fetch ACTIVE properties from Podio for Manny (one or more wholesaler app item IDs).
+    2) Fetch Google Sheet public URL (all tabs text combined).
+    3) For each Podio active listing:
+         - First, cheap case-insensitive substring check in sheet_text.
+         - If not found, call OpenAI (ai_match_address_in_sheet) to fuzzy match.
+         - POST result to webhook with:
+             {podio_item_id, address, found, reason}
+    4) Return summary.
+
+    webhook_url: if None, uses MANNY_WEBHOOK_URL env var.
+    """
+    webhook_url = (webhook_url or MANNY_WEBHOOK_URL or "").strip()
+    print("webhook_url",webhook_url)
+    if not manny_podio_item_ids:
+        return {"ok": False, "error": "no_manny_podio_item_ids_provided"}
+
+    # 1) Fetch active properties from Podio
+    access_token = get_podio_access_token()
+    all_active: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    for pid in manny_podio_item_ids:
+        try:
+            props = _fetch_active_properties_for_wholesaler(access_token, int(pid))
+            all_active.extend(props)
+        except requests.RequestException as e:
+            msg = f"[Manny] request_error_for_id_{pid}: {e}"
+            print(msg)
+            errors.append(msg)
+
+    if not all_active:
+        return {
+            "ok": True,
+            "active_count": 0,
+            "webhook_url": webhook_url or None,
+            "errors": errors,
+        }
+
+    # 2) Fetch combined sheet text (from multiple URLs)
+    sheet_text = _fetch_google_sheets_text(sheet_urls)
+    if not sheet_text:
+        return {
+            "ok": False,
+            "error": "failed_to_fetch_sheet_text",
+            "active_count": len(all_active),
+            "errors": errors,
+        }
+
+    # # 2) Fetch sheet text once
+    # sheet_text = _fetch_google_sheet_text(sheet_url)
+    # if not sheet_text:
+    #     return {
+    #         "ok": False,
+    #         "error": "failed_to_fetch_sheet_text",
+    #         "active_count": len(all_active),
+    #         "errors": errors,
+    #     }
+
+    sheet_text_lower = sheet_text.lower()
+
+
+    # 3) Loop over active listings and match
+    results: List[Dict[str, Any]] = []
+    ai_calls = 0
+    webhook_failures = 0
+
+    # for item in all_active:
+    #     addr = (item.get("address") or "").strip()
+    #     podio_item_id = item.get("podio_item_id")
+        
+
+    #     if not addr or not podio_item_id:
+    #         # skip if missing basics
+    #         results.append({
+    #             "podio_item_id": podio_item_id,
+    #             "address": addr,
+    #             "found": False,
+    #             "reason": "missing_address_or_podio_item_id",
+    #             "webhook_ok": False,
+    #         })
+    #         continue
+
+    #     # First: cheap substring check (case-insensitive)
+    #     addr_norm = addr.lower()
+    #     if addr_norm and addr_norm in sheet_text_lower:
+    #         found = True
+    #         reason = "simple_substring_match"
+    #     else:
+    #         # Fuzzy AI check
+    #         ai_calls += 1
+    #         ai_result = ai_match_address_in_sheet(
+    #             active_address=addr,
+    #             sheet_text=sheet_text,
+    #             model=model,
+    #         )
+    #         found = bool(ai_result.get("found", True))
+    #         reason = ai_result.get("reason") or "ai_no_reason"
+
+    #     payload = {
+    #         "podio_item_id": podio_item_id,
+    #         "address": addr,
+    #         "found": found,
+    #         "reason": reason,
+    #     }
+
+    #     print("podio_item_id",podio_item_id," - ",addr," - ",found)
+
+
+    #     webhook_ok = False
+    #     if webhook_url:
+    #         try:
+    #             resp = requests.post(webhook_url, json=payload, timeout=15)
+    #             webhook_ok = resp.status_code in (200, 201, 202)
+    #             if not webhook_ok:
+    #                 webhook_failures += 1
+    #                 print(
+    #                     f"[Manny] Webhook non-2xx ({resp.status_code}) "
+    #                     f"for podio_item_id={podio_item_id}, body={resp.text[:300]}"
+    #                 )
+    #         except requests.RequestException as e:
+    #             webhook_failures += 1
+    #             print(f"[Manny] Webhook request failed for {podio_item_id}: {e}")
+
+    #     payload["webhook_ok"] = webhook_ok
+    #     results.append(payload)
+
+
+    skipped_recent = 0
+
+    for item in all_active:
+        addr = (item.get("address") or "").strip()
+        podio_item_id = item.get("podio_item_id")
+        created_on = item.get("created_on")  # datetime or None
+
+        if not addr or not podio_item_id:
+            results.append({
+                "podio_item_id": podio_item_id,
+                "address": addr,
+                "found": False,
+                "reason": "missing_address_or_podio_item_id",
+                "webhook_ok": False,
+            })
+            continue
+
+        # ✅ NEW: only process if older than 3 business days
+        if not isinstance(created_on, datetime) or not _older_than_business_days(created_on, 3):
+            skipped_recent += 1
+            print("New",addr,created_on)
+            # Option 1: completely skip without logging
+            # continue
+
+            # Option 2 (recommended): include in results but mark as skipped
+            results.append({
+                "podio_item_id": podio_item_id,
+                "address": addr,
+                "found": False,
+                "reason": "skipped_too_recent_or_missing_created_on",
+                "webhook_ok": False,
+            })
+            continue
+
+        print("created_on",created_on," - ",addr)
+
+        addr_norm = addr.lower()
+        if addr_norm and addr_norm in sheet_text_lower:
+            found = True
+            reason = "simple_substring_match"
+        else:
+            ai_calls += 1
+            ai_result = ai_match_address_in_sheet(
+                active_address=addr,
+                sheet_text=sheet_text,
+                model=model,
+            )
+            found = bool(ai_result.get("found", True))
+            reason = ai_result.get("reason") or "ai_no_reason"
+
+        payload = {
+            "podio_item_id": podio_item_id,
+            "address": addr,
+            "found": found,
+            "reason": reason,
+        }
+
+        print("podio_item_id",podio_item_id," - ",addr," - ",found)
+
+        webhook_ok = False
+        if webhook_url:
+            try:
+                resp = requests.post(webhook_url, json=payload, timeout=15)
+                webhook_ok = resp.status_code in (200, 201, 202)
+                if not webhook_ok:
+                    webhook_failures += 1
+                    print(
+                        f"[Manny] Webhook non-2xx ({resp.status_code}) "
+                        f"for podio_item_id={podio_item_id}, body={resp.text[:300]}"
+                    )
+            except requests.RequestException as e:
+                webhook_failures += 1
+                print(f"[Manny] Webhook request failed for {podio_item_id}: {e}")
+
+        payload["webhook_ok"] = webhook_ok
+        results.append(payload)
+
+    return {
+        "ok": True,
+        "active_count": len(all_active),
+        "ai_calls": ai_calls,
+        "webhook_url": webhook_url or None,
+        "webhook_failures": webhook_failures,
+        "errors": errors,
+        "results": results,
     }
