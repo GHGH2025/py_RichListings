@@ -71,7 +71,8 @@ ACCOUNTS = [
             "lorena@safetynetrealty.com",
             "may@lpihomebuyers.com",
             "flrpmwholesalefl-gmail.com@shared1.ccsend.com",
-            "deals@onemotivatedseller.com"
+            "deals@onemotivatedseller.com",
+            "simon@stellarholdingsllc.ccsend.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
@@ -105,7 +106,8 @@ ACCOUNTS = [
             "deals@aoinvestments.ccsend.com",
             "info+hoodsyhomes.com@ec1.msgsndr.org",
             "lenny-riverwalkproperties.net@shared1.ccsend.com",
-            "judson@securehomeinvest.com"
+            "judson@securehomeinvest.com",
+            "simon@stellarholdingsllc.ccsend.com"
 
 
             # or: "*@oasispropertyinvestments.ccsend.com",

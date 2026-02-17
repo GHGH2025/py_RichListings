@@ -75,7 +75,8 @@ DEFAULT_WHOLESALER_BUCKET: Dict[str, List[str]] = {
     "Judson":["judson@securehomeinvest.com"],
     "Jerry_Vega":["tricountyflippers-gmail.com@shared1.ccsend.com"],
     "Mark_RPM_Wholesale":["flrpmwholesalefl-gmail.com@shared1.ccsend.com"],
-    "Jesus":["deals@onemotivatedseller.com"]
+    "Jesus":["deals@onemotivatedseller.com"],
+    "Simon":["simon@stellarholdingsllc.ccsend.com"]
 }
 
 DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
@@ -93,7 +94,8 @@ DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
     "Judson":[2937718049],
     "Jerry_Vega":[2098341539],
     "Mark_RPM_Wholesale":[3251963737],
-    "Jesus":[3204466987]
+    "Jesus":[3204466987],
+    "Simon":[3254339453]
     # "another@sender.com": [111111111, 222222222],
 }
 
@@ -1890,7 +1892,6 @@ def process_manny_special_avails(
             })
             continue
 
-        print("created_on",created_on," - ",addr)
 
         addr_norm = addr.lower()
         if addr_norm and addr_norm in sheet_text_lower:
@@ -1913,7 +1914,6 @@ def process_manny_special_avails(
             "reason": reason,
         }
 
-        print("podio_item_id",podio_item_id," - ",addr," - ",found)
 
         webhook_ok = False
         if webhook_url:
