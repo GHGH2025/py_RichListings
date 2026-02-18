@@ -6,7 +6,7 @@ import re
 import json
 import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from mongo_engine_conn import init_db
 from models import ParsedListing, DailyBaseCount
@@ -14,11 +14,13 @@ from dropboxImageUpload import handle_Link
 
 from dotenv import load_dotenv
 from openai import OpenAI
-
+import requests
+from bson import ObjectId
 load_dotenv()
 
 # Initialize OpenAI client using API key from .env
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+SKIPPED_LISTING_WEBHOOK_URL = os.getenv("SKIPPED_LISTING_WEBHOOK_URL")
 
 
 # Allowed regions we will post from
@@ -278,6 +280,97 @@ def _update_and_get_daily_base_count(base_count: int, now: datetime) -> int:
     return final_base_count
 
 
+def _to_jsonable(obj):
+    """
+    Recursively convert MongoEngine / BSON types into JSON-serializable values.
+    - datetime -> ISO string
+    - ObjectId -> str
+    - DBRef -> simple dict
+    - dict / list / tuple -> walk recursively
+    """
+    # datetime -> ISO 8601
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+
+    # ObjectId -> string
+    if isinstance(obj, ObjectId):
+        return str(obj)
+
+    # dict -> recurse
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+
+    # list / tuple -> recurse
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+
+    # anything else: leave as-is (must already be JSON-safe: str/int/float/bool/None)
+    return obj
+
+
+def _serialize_parsed_listing_for_webhook(pl: ParsedListing) -> Dict[str, Any]:
+    """
+    Turn a ParsedListing document into a JSON-serializable dict for webhooks.
+    Includes the full Mongo document (complete_info etc.), with ObjectIds → str.
+    """
+    raw = pl.to_mongo().to_dict()
+    jsonable = _to_jsonable(raw)
+    return jsonable
+
+def _send_skipped_listing_to_webhook(
+    pl: ParsedListing,
+    skip_type: str,
+    reason: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Send a skipped listing to the SKIPPED_LISTING_WEBHOOK_URL.
+
+    skip_type: e.g. "Do_Not_Post_City" or "POST_POLICY_35PC"
+    reason: short human-readable reason
+    extra: optional extra fields (e.g., quota numbers)
+    """
+    if not SKIPPED_LISTING_WEBHOOK_URL:
+        print("[skipped_listing] SKIPPED_LISTING_WEBHOOK_URL not set; skipping webhook send.")
+        return {"ok": False, "reason": "no_webhook_url"}
+
+    payload: Dict[str, Any] = {
+        "listing_id": str(pl.id),
+        "skip_type": skip_type,
+        "reason": reason,
+        "status": pl.status,
+        "region_bucket": getattr(pl, "region_bucket", None),
+        "rules_ai_rule_id": getattr(pl, "rules_ai_rule_id", None),
+        "rules_ai_version": getattr(pl, "rules_ai_version", None),
+        "rules_ai_reason": getattr(pl, "rules_ai_reason", None),
+        "data": _serialize_parsed_listing_for_webhook(pl),
+    }
+
+    if extra:
+        payload["extra"] = extra
+
+    try:
+        resp = requests.post(
+            SKIPPED_LISTING_WEBHOOK_URL,
+            json=payload,
+            timeout=15,
+        )
+        ok = resp.status_code in (200, 201, 202)
+        if not ok:
+            print(
+                f"[skipped_listing] Webhook non-2xx: {resp.status_code}, "
+                f"body={resp.text[:300]}"
+            )
+        return {
+            "ok": ok,
+            "status_code": resp.status_code,
+            "body": resp.text[:300],
+        }
+    except requests.RequestException as e:
+        print(f"[skipped_listing] Webhook request failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 def select_passed_listings_for_post(
     limit: Optional[int] = None,
     sort_by: str = "created_at",       # or "price", "updated_at", etc.
@@ -331,6 +424,17 @@ def select_passed_listings_for_post(
                 updates["set__skipped_or_posted_at"] = now
             pl.update(**updates)
             skipped_ids.append(str(pl.id))
+
+            # NEW: send full listing to webhook for Do_Not_Post_City
+            try:
+                _send_skipped_listing_to_webhook(
+                    pl,
+                    skip_type="Do_Not_Post_City",
+                    reason="Skipped due to Do Not Post City rule",
+                )
+            except Exception as e:
+                print(f"[skipped_listing] failed to send Do_Not_Post_City webhook for {pl.id}: {e}")
+
             # Do NOT consider this listing for region / 35% calculations
             continue
 
@@ -385,6 +489,20 @@ def select_passed_listings_for_post(
             updates["set__skipped_or_posted_at"] = now
         pl.update(**updates)
         skipped_ids.append(str(pl.id))
+
+        # NEW: send full listing to webhook for quota skip
+        try:
+            _send_skipped_listing_to_webhook(
+                pl,
+                skip_type="POST_POLICY_35PC",
+                reason="Skipped due to 35% rest_of_florida daily cap",
+                extra={
+                    "rest_cap": rest_cap,
+                    "final_base_count": final_base_count,
+                },
+            )
+        except Exception as e:
+            print(f"[skipped_listing] failed to send POST_POLICY_35PC webhook for {pl.id}: {e}")
 
     # 4) kept = all non_rest + up-to-cap rest → set to ready_for_image_processing
     kept = non_rest + rest_keep
