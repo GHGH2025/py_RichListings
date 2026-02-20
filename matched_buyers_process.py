@@ -648,8 +648,22 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
 
             pics_link = getattr(pl, "other_images_dropbox_link", None) or ""
 
+            # ---------- NEW: image suppression for Do_Not_Post / quota ----------
+            # If listing is a Do Not Post City or over 35% quota, do NOT include images
+            over_35_flag = (getattr(pl, "over_35_percent", "") or "").strip().lower()
+            dnp_city_flag = (getattr(pl, "do_not_post_city", "") or "").strip().lower()
+            skip_images_for_buyer = (over_35_flag == "found") or (dnp_city_flag == "found")
+            # --------------------------------------------------------------------
+
             images = getattr(pl, "images", None) or []
-            first_image_url = images[0] if images else ""
+
+            if skip_images_for_buyer:
+                # For these special cases, we force no image regardless of what we have
+                first_image_url = ""
+            else:
+                first_image_url = images[0] if images else ""
+
+            # first_image_url = images[0] if images else ""
 
             image_block_html = ""
             if first_image_url:
