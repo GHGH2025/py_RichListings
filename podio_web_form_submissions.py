@@ -192,3 +192,65 @@ def create_web_form_submission_item(
 
     item_id = data.get("item_id") if isinstance(data, dict) else None
     return item_id
+
+
+
+# update Logic below:
+
+def _field_clear(field_id: int) -> Dict[str, Any]:
+    # Podio clears a field if values is []
+    return {"field_id": field_id, "values": []}
+
+def update_web_form_submission_item(
+    *,
+    item_id: int,
+    name: str,
+    company: str,
+    email: str,
+    phone_call: str,
+    text_number: str,
+    city: str,
+    mongo_object_id: str,
+    property_html: Dict[str, str],
+    contact_preference: str = "",
+    counties_html: Optional[Dict[str, str]] = None,
+) -> bool:
+    if not item_id:
+        return False
+
+    counties_html = counties_html or {}
+
+    fields: List[Dict[str, Any]] = []
+
+    # Contact fields (set/clear)
+    fields.append(_field(FIELD_NAME, name) if name else _field_clear(FIELD_NAME))
+    fields.append(_field(FIELD_COMPANY, company) if company else _field_clear(FIELD_COMPANY))
+
+    fields.append(_email_field(FIELD_EMAIL, email) if email else _field_clear(FIELD_EMAIL))
+    fields.append(_phone_field(FIELD_PHONE_CALL, phone_call) if phone_call else _field_clear(FIELD_PHONE_CALL))
+    fields.append(_phone_field(FIELD_TEXT_NUMBER, text_number) if text_number else _field_clear(FIELD_TEXT_NUMBER))
+
+    fields.append(_field(FIELD_CONTACT_PREFERENCE, contact_preference) if contact_preference else _field_clear(FIELD_CONTACT_PREFERENCE))
+    fields.append(_field(FIELD_CITY, city) if city else _field_clear(FIELD_CITY))
+    fields.append(_field(FIELD_MONGO_OBJECT_ID, mongo_object_id) if mongo_object_id else _field_clear(FIELD_MONGO_OBJECT_ID))
+
+    # Property fields (set/clear to avoid old data lingering)
+    fields.append(_field(FIELD_MULTI_FAMILY, property_html.get("multiFamily")) if property_html.get("multiFamily") else _field_clear(FIELD_MULTI_FAMILY))
+    fields.append(_field(FIELD_CONDO, property_html.get("condo")) if property_html.get("condo") else _field_clear(FIELD_CONDO))
+    fields.append(_field(FIELD_LAND, property_html.get("land")) if property_html.get("land") else _field_clear(FIELD_LAND))
+    fields.append(_field(FIELD_COMMERCIAL, property_html.get("commercial")) if property_html.get("commercial") else _field_clear(FIELD_COMMERCIAL))
+    fields.append(_field(FIELD_SINGLE_FAMILY, property_html.get("singleFamily")) if property_html.get("singleFamily") else _field_clear(FIELD_SINGLE_FAMILY))
+    fields.append(_field(FIELD_TOWN_HOUSE, property_html.get("townhouse")) if property_html.get("townhouse") else _field_clear(FIELD_TOWN_HOUSE))
+
+    # Counties fields (set/clear)
+    fields.append(_field(FIELD_COUNTIES_MULTI_FAMILY, counties_html.get("multiFamily")) if counties_html.get("multiFamily") else _field_clear(FIELD_COUNTIES_MULTI_FAMILY))
+    fields.append(_field(FIELD_COUNTIES_SINGLE_FAMILY, counties_html.get("singleFamily")) if counties_html.get("singleFamily") else _field_clear(FIELD_COUNTIES_SINGLE_FAMILY))
+    fields.append(_field(FIELD_COUNTIES_TOWN_HOUSE, counties_html.get("townhouse")) if counties_html.get("townhouse") else _field_clear(FIELD_COUNTIES_TOWN_HOUSE))
+    fields.append(_field(FIELD_COUNTIES_COMMERCIAL, counties_html.get("commercial")) if counties_html.get("commercial") else _field_clear(FIELD_COUNTIES_COMMERCIAL))
+    fields.append(_field(FIELD_COUNTIES_LAND, counties_html.get("land")) if counties_html.get("land") else _field_clear(FIELD_COUNTIES_LAND))
+    fields.append(_field(FIELD_COUNTIES_CONDO, counties_html.get("condo")) if counties_html.get("condo") else _field_clear(FIELD_COUNTIES_CONDO))
+
+    payload = {"fields": fields}
+
+    data = _podio_request("PUT", f"/item/{int(item_id)}", json=payload)
+    return bool(data)
