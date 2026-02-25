@@ -1,3 +1,4 @@
+# buyer_submissions_formatter.py
 from html import escape
 from typing import Dict, Any, List, Optional
 

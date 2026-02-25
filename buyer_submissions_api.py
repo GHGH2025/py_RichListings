@@ -1,7 +1,17 @@
 # buyer_submissions_api.py
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException  # ✅ add HTTPException
+import re  # ✅ add
+from mongoengine.queryset.visitor import Q  # ✅ add
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
+import os
+import jwt  # pip install PyJWT
+from bson import ObjectId  # pip install pymongo (already usually present)
+
+import time
+from datetime import datetime, timedelta
+import json
+import requests
 
 from models import (
     WebFormBuyerSubmission,
@@ -11,12 +21,78 @@ from models import (
     BuyerPropertyLocation,
 )
 from buyer_submissions_formatter import build_all_property_html, build_all_counties_html
-from podio_web_form_submissions import create_web_form_submission_item
+# from podio_web_form_submissions import create_web_form_submission_item
+
+from podio_web_form_submissions import (
+    create_web_form_submission_item,
+    update_web_form_submission_item,   # ✅ NEW (you'll add below)
+)
 
 router = APIRouter(prefix="/api", tags=["buyer-submissions"])
 
 import json
 from html import escape  # add once at top (or keep near the block)
+
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+def _normalize_email(v: str) -> str:
+    return (v or "").strip().lower()
+
+def _normalize_us_phone(v: str) -> str:
+    digits = re.sub(r"\D", "", v or "")
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits
+
+def _safe_object_id(v: Optional[str]) -> Optional[ObjectId]:
+    try:
+        if not v:
+            return None
+        return ObjectId(str(v))
+    except Exception:
+        return None
+
+def _email_exists(email: str, exclude_mongo_id: Optional[str] = None) -> bool:
+    if not email:
+        return False
+    qs = WebFormBuyerSubmission.objects(contact__email__iexact=email)
+    ex = _safe_object_id(exclude_mongo_id)
+    if ex:
+        qs = qs.filter(id__ne=ex)
+    return qs.only("id").limit(1).count() > 0
+
+def _phone_exists(phone10: str, exclude_mongo_id: Optional[str] = None) -> bool:
+    if not phone10:
+        return False
+    qs = WebFormBuyerSubmission.objects(
+        Q(contact__call_whatsapp=phone10) |
+        Q(contact__text_number=phone10) |
+        Q(contact__phone_call=phone10)
+    )
+    ex = _safe_object_id(exclude_mongo_id)
+    if ex:
+        qs = qs.filter(id__ne=ex)
+    return qs.only("id").limit(1).count() > 0
+
+@router.get("/buyer-submissions/exists")
+def buyer_submission_exists(type: str, value: str, exclude_id: Optional[str] = None):
+    t = (type or "").strip().lower()
+    v = (value or "").strip()
+
+    if t not in ("email", "phone"):
+        raise HTTPException(status_code=400, detail="type must be 'email' or 'phone'")
+
+    if t == "email":
+        email = _normalize_email(v)
+        if not EMAIL_RE.match(email):
+            raise HTTPException(status_code=400, detail="Invalid email")
+        return {"ok": True, "type": "email", "exists": _email_exists(email, exclude_id)}
+
+    phone10 = _normalize_us_phone(v)
+    if len(phone10) != 10:
+        raise HTTPException(status_code=400, detail="Invalid US phone number")
+    return {"ok": True, "type": "phone", "exists": _phone_exists(phone10, exclude_id)}
+
 
 _DOLLAR_PREFIX = "__DOLLAR__"
 _DOT_TOKEN = "__DOT__"
@@ -265,26 +341,6 @@ def create_buyer_submission(payload: BuyerSubmissionPayload):
 
     property_html = build_all_property_html(props_dict)
 
-    # # Use your existing _clean_list so it's consistent and safe
-    # global_counties = _clean_list(global_loc_dict.get("counties") or global_loc_dict.get("county"))
-    # global_cities = _clean_list(global_loc_dict.get("cities") or global_loc_dict.get("city"))
-    # global_scope = str(global_loc_dict.get("scope") or "").strip()
-
-    # global_loc_lines = []
-    # if global_scope:
-    #     global_loc_lines.append(f"<p><b>Global scope:</b> {escape(global_scope)}</p>")
-    # if global_counties:
-    #     global_loc_lines.append(f"<p><b>Global counties:</b> {escape(', '.join(global_counties))}</p>")
-    # if global_cities:
-    #     global_loc_lines.append(f"<p><b>Global cities:</b> {escape(', '.join(global_cities))}</p>")
-
-    # global_loc_html = "\n".join(global_loc_lines).strip()
-
-    # if global_loc_html:
-    #     for k, v in property_html.items():
-    #         if v:
-    #             property_html[k] = v + "\n" + global_loc_html
-
 
     # ✅ UPDATED: include global location to avoid losing counties in Podio HTML
     counties_html = build_all_counties_html(props_dict, None)
@@ -303,14 +359,7 @@ def create_buyer_submission(payload: BuyerSubmissionPayload):
     loc_county_legacy = ""
     loc_city_legacy = ""
 
-    # if payload.location:
-    #     loc_scope = (payload.location.scope or "").strip()
-    #     loc_counties = [c.strip() for c in (payload.location.counties or []) if (c or "").strip()]
-    #     loc_cities = [c.strip() for c in (payload.location.cities or []) if (c or "").strip()]
-
-    #     # legacy strings (keep indexes working)
-    #     loc_county_legacy = (payload.location.county or "").strip() or (loc_counties[0] if loc_counties else "")
-    #     loc_city_legacy = (payload.location.city or "").strip() or (loc_cities[0] if loc_cities else "")
+  
 
     # ✅ NEW: derive from property-level locations
     loc_scope, loc_counties, loc_cities = _aggregate_location_from_properties(props_dict)
@@ -409,3 +458,328 @@ def create_buyer_submission(payload: BuyerSubmissionPayload):
         doc.podio_error = str(e)
         doc.save()
         return {"ok": True, "mongo_id": mongo_id, "podio_ok": False, "error": str(e)}
+
+
+
+# ----------------------------
+# Update-link + JWT settings
+# ----------------------------
+BUYER_UPDATE_JWT_SECRET = os.getenv("BUYER_UPDATE_JWT_SECRET", "")
+BUYER_UPDATE_LINK_BASE = os.getenv("BUYER_UPDATE_LINK_BASE", "https://wholesaledealfinder.ai/ai/")
+BUYER_UPDATE_EMAIL_API_URL = os.getenv(
+    "BUYER_UPDATE_EMAIL_API_URL",
+    "http://ec2-3-90-20-111.compute-1.amazonaws.com:8000/rich_ai_deal_Email"
+)
+BUYER_UPDATE_LINK_TTL_HOURS = int(os.getenv("BUYER_UPDATE_LINK_TTL_HOURS", "24"))
+
+def _require_update_secret():
+    if not BUYER_UPDATE_JWT_SECRET or len(BUYER_UPDATE_JWT_SECRET) < 16:
+        raise HTTPException(status_code=500, detail="Server misconfigured: missing BUYER_UPDATE_JWT_SECRET")
+
+def _find_submission_by_email_phone(email: str, phone10: str) -> Optional[WebFormBuyerSubmission]:
+    return WebFormBuyerSubmission.objects(
+        contact__email__iexact=email
+    ).filter(
+        Q(contact__call_whatsapp=phone10) |
+        Q(contact__text_number=phone10) |
+        Q(contact__phone_call=phone10)
+    ).order_by("-created_at").first()
+
+def _build_update_token(*, mongo_id: str, podio_item_id: int, email: str, phone10: str) -> str:
+    _require_update_secret()
+    now = int(time.time())
+    exp = now + (BUYER_UPDATE_LINK_TTL_HOURS * 3600)
+    payload = {
+        "mongo_id": mongo_id,
+        "podio_item_id": int(podio_item_id or 0),
+        "email": _normalize_email(email),
+        "phone": _normalize_us_phone(phone10),
+        "iat": now,
+        "exp": exp,
+    }
+    return jwt.encode(payload, BUYER_UPDATE_JWT_SECRET, algorithm="HS256")
+
+def _decode_update_token(token: str) -> Dict[str, Any]:
+    _require_update_secret()
+    try:
+        return jwt.decode(token, BUYER_UPDATE_JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="This update link has expired. Please request a new one.")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid update link. Please request a new one.")
+
+def _build_update_email_html(update_link: str) -> str:
+    # simple + clean, works in email clients
+    safe_link = escape(update_link)
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Update Your Buy Box</title>
+</head>
+<body style="margin:0;padding:0;background:#f6f6f6;font-family:Arial,Helvetica,sans-serif;color:#111;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f6f6f6;">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0"
+               style="width:600px;max-width:100%;background:#ffffff;border:1px solid #e6e6e6;border-radius:16px;overflow:hidden;">
+          <tr>
+            <td style="padding:28px 28px 10px 28px;background:#0b5cff;color:#fff;">
+              <div style="font-size:12px;letter-spacing:3px;font-weight:800;text-transform:uppercase;opacity:.9;">
+                WholesaleDealFinder.ai
+              </div>
+              <div style="font-size:26px;font-weight:900;line-height:1.2;margin-top:10px;">
+                Update Your Buy Box
+              </div>
+              <div style="font-size:13px;opacity:.95;margin-top:10px;line-height:1.5;">
+                Use the secure button below to open your existing profile and save changes.
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:22px 28px 28px 28px;">
+              <div style="font-size:14px;line-height:1.7;color:#333;">
+                <p style="margin:0 0 14px 0;">
+                  Click the button to open your saved preferences. A secure loader will appear while we fetch your profile.
+                </p>
+
+                <p style="margin:0 0 18px 0;">
+                  <a href="{safe_link}"
+                     style="display:inline-block;background:#0b5cff;color:#fff;text-decoration:none;
+                            padding:14px 18px;border-radius:12px;font-weight:900;letter-spacing:1px;
+                            text-transform:uppercase;">
+                    Open My Buy Box
+                  </a>
+                </p>
+
+                <p style="margin:0 0 8px 0;font-size:12px;color:#666;">
+                  If the button doesn’t work, copy/paste this link:
+                </p>
+                <p style="margin:0;font-size:12px;word-break:break-all;">
+                  <a href="{safe_link}" style="color:#0b5cff;text-decoration:underline;">{safe_link}</a>
+                </p>
+
+                <hr style="border:none;border-top:1px solid #eee;margin:22px 0;"/>
+
+                <p style="margin:0;font-size:12px;color:#777;line-height:1.6;">
+                  This link is secure and expires in {BUYER_UPDATE_LINK_TTL_HOURS} hours.
+                  If you didn’t request this, you can ignore this email.
+                </p>
+              </div>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+class UpdateLinkRequest(BaseModel):
+    email: str = ""
+    phone: str = ""
+
+class UpdateResolveRequest(BaseModel):
+    token: str = ""
+
+class UpdateSaveRequest(BaseModel):
+    token: str
+    payload: Any  # we’ll validate by reusing BuyerSubmissionPayload below
+
+
+# ✅ reuse your existing BuyerSubmissionPayload (already defined above in your file)
+# from your existing code:
+# class BuyerSubmissionPayload(BaseModel): ...
+
+@router.post("/buyer-submissions/update/request-link")
+def request_update_link(body: UpdateLinkRequest):
+    email = _normalize_email(body.email)
+    phone10 = _normalize_us_phone(body.phone)
+
+    if not EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Invalid email")
+    if len(phone10) != 10:
+        raise HTTPException(status_code=400, detail="Invalid US phone number")
+
+    doc = _find_submission_by_email_phone(email, phone10)
+    if not doc:
+        raise HTTPException(status_code=404, detail="No profile found for that email + phone number.")
+
+    if not doc.podio_item_id:
+        raise HTTPException(status_code=409, detail="Profile found, but Podio item_id is missing. Please contact support.")
+
+    token = _build_update_token(
+        mongo_id=str(doc.id),
+        podio_item_id=int(doc.podio_item_id),
+        email=doc.contact.email,
+        phone10=phone10,
+    )
+
+    base = BUYER_UPDATE_LINK_BASE.rstrip("/") + "/"
+    update_link = f"{base}?id={token}"
+
+    subject = "Your WholesaleDealFinder.ai Buy Box Update Link"
+    html = _build_update_email_html(update_link)
+
+    # Send via your existing email API
+    try:
+        resp = requests.post(
+            BUYER_UPDATE_EMAIL_API_URL,
+            json={"to": [email], "subject": subject, "body": html},
+            timeout=25,
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(f"Email API error {resp.status_code}: {resp.text}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send email. {str(e)}")
+
+    return {"ok": True, "sent_to": email}
+
+
+@router.post("/buyer-submissions/update/resolve")
+def resolve_update_link(body: UpdateResolveRequest):
+    token = (body.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing token")
+
+    claims = _decode_update_token(token)
+    mongo_id = claims.get("mongo_id")
+    email = _normalize_email(claims.get("email", ""))
+    phone10 = _normalize_us_phone(claims.get("phone", ""))
+
+    if not mongo_id or not email or len(phone10) != 10:
+        raise HTTPException(status_code=401, detail="Invalid update link payload.")
+
+    doc = WebFormBuyerSubmission.objects(id=_safe_object_id(mongo_id)).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+
+    # extra safety: ensure token still matches record
+    doc_email = _normalize_email(doc.contact.email)
+    doc_phone = _normalize_us_phone(doc.contact.call_whatsapp or doc.contact.text_number or doc.contact.phone_call)
+
+    if doc_email != email or doc_phone != phone10:
+        raise HTTPException(status_code=404, detail="Profile not found for this link.")
+
+    # Return the original request body we stored
+    payload = {}
+    try:
+        if doc.raw_payload_json:
+            payload = json.loads(doc.raw_payload_json)
+        elif doc.raw_payload:
+            payload = doc.raw_payload
+    except Exception:
+        payload = {}
+
+    return {
+        "ok": True,
+        "mongo_id": str(doc.id),
+        "podio_item_id": int(doc.podio_item_id or 0),
+        "submission": payload,
+    }
+
+
+@router.post("/buyer-submissions/update/save")
+def save_update(body: UpdateSaveRequest):
+    token = (body.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing token")
+
+    claims = _decode_update_token(token)
+    mongo_id = claims.get("mongo_id")
+    email = _normalize_email(claims.get("email", ""))
+    phone10 = _normalize_us_phone(claims.get("phone", ""))
+
+    if not mongo_id or not email or len(phone10) != 10:
+        raise HTTPException(status_code=401, detail="Invalid update link payload.")
+
+    doc = WebFormBuyerSubmission.objects(id=_safe_object_id(mongo_id)).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+
+    doc_email = _normalize_email(doc.contact.email)
+    doc_phone = _normalize_us_phone(doc.contact.call_whatsapp or doc.contact.text_number or doc.contact.phone_call)
+
+    if doc_email != email or doc_phone != phone10:
+        raise HTTPException(status_code=404, detail="Profile not found for this link.")
+
+    if not doc.podio_item_id:
+        raise HTTPException(status_code=409, detail="Podio item_id missing. Cannot update Podio.")
+
+    # Validate incoming payload using your existing BuyerSubmissionPayload model
+    try:
+        incoming = BuyerSubmissionPayload(**(body.payload or {}))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {str(e)}")
+
+    raw_original = incoming.model_dump() if hasattr(incoming, "model_dump") else incoming.dict()
+    raw_sanitized = mongo_safe_obj(raw_original)
+
+    props_dict = raw_original.get("properties") or {}
+    property_html = build_all_property_html(props_dict)
+    counties_html = build_all_counties_html(props_dict, None)
+
+    number = (incoming.contact.callWhatsapp or incoming.contact.textNumber or incoming.contact.phoneCall or "").strip()
+
+    contact_prefs = _normalized_contact_prefs(incoming.contact)
+    contact_pref_primary = (contact_prefs[0].strip().lower() if contact_prefs else "")
+
+    loc_scope, loc_counties, loc_cities = _aggregate_location_from_properties(props_dict)
+    loc_county_legacy = (loc_counties[0] if loc_counties else "")
+    loc_city_legacy = (loc_cities[0] if loc_cities else "")
+
+    # ---- Update Mongo doc (same record) ----
+    doc.contact.name = (incoming.contact.name or "").strip()
+    doc.contact.email = (incoming.contact.email or "").strip()
+
+    doc.contact.text_number = number
+    doc.contact.phone_call = number
+    doc.contact.call_whatsapp = number
+    doc.contact.preference = contact_pref_primary
+    doc.contact.preferences = contact_prefs
+
+    doc.location.scope = loc_scope
+    doc.location.counties = loc_counties
+    doc.location.cities = loc_cities
+    doc.location.county = loc_county_legacy
+    doc.location.city = loc_city_legacy
+
+    doc.multi_family = _to_embedded(incoming.properties.multiFamily)
+    doc.condo = _to_embedded(incoming.properties.condo)
+    doc.land = _to_embedded(incoming.properties.land)
+    doc.commercial = _to_embedded(incoming.properties.commercial)
+    doc.single_family = _to_embedded(incoming.properties.singleFamily)
+    doc.townhouse = _to_embedded(incoming.properties.townhouse)
+
+    doc.raw_payload = raw_sanitized
+    doc.raw_payload_json = json.dumps(raw_original, ensure_ascii=False)
+
+    doc.podio_property_html = property_html
+    doc.podio_counties_html = counties_html
+
+    doc.touch()
+    doc.save()
+
+    podio_city_str = ", ".join(loc_cities) if loc_cities else doc.location.city
+    podio_contact_pref_str = ", ".join(contact_prefs) if contact_prefs else doc.contact.preference
+
+    # ---- Update Podio item (same item_id) ----
+    ok = update_web_form_submission_item(
+        item_id=int(doc.podio_item_id),
+        name=doc.contact.name,
+        company=doc.contact.company or "",
+        email=doc.contact.email,
+        phone_call=doc.contact.phone_call,
+        text_number=doc.contact.text_number,
+        city=podio_city_str,
+        mongo_object_id=str(doc.id),
+        property_html=property_html,
+        contact_preference=podio_contact_pref_str,
+        counties_html=counties_html,
+    )
+
+    return {"ok": True, "mongo_id": str(doc.id), "podio_ok": bool(ok), "podio_item_id": int(doc.podio_item_id)}
+
