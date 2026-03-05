@@ -73,7 +73,8 @@ ACCOUNTS = [
             "flrpmwholesalefl-gmail.com@shared1.ccsend.com",
             "deals@onemotivatedseller.com",
             "simon@stellarholdingsllc.ccsend.com",
-            "info@5thavefinancialgroup.com"
+            "info@5thavefinancialgroup.com",
+            "info@f13deluxe.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
