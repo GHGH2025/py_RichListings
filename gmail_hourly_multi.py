@@ -109,7 +109,8 @@ ACCOUNTS = [
             "info+hoodsyhomes.com@ec1.msgsndr.org",
             "lenny-riverwalkproperties.net@shared1.ccsend.com",
             "judson@securehomeinvest.com",
-            "simon@stellarholdingsllc.ccsend.com"
+            "simon@stellarholdingsllc.ccsend.com",
+            "info@hoodsyhomes.com"
 
 
             # or: "*@oasispropertyinvestments.ccsend.com",
