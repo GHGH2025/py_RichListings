@@ -22,7 +22,7 @@ BUYER_TEMPLATE_PATH = os.getenv("BUYER_TEMPLATE_PATH", "buyer_notification_templ
 _PLACEHOLDER_RE = re.compile(r"{{\s*(\w+)\s*}}")
 POF_EMAIL_API_URL = os.getenv(
     "POF_EMAIL_API_URL",
-    "http://ec2-3-90-20-111.compute-1.amazonaws.com:8000/richEmail",
+    "http://ec2-3-90-20-111.compute-1.amazonaws.com:8000/rich_ai_deal_Email",
 )
 
 RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com")
