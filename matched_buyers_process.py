@@ -11,6 +11,7 @@ from datetime import datetime
 from ringcentral_auth import rc_auth_header
 from models import ParsedListing , WebFormBuyerSubmission
 
+BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL", "").strip()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -590,6 +591,59 @@ def send_sms_to_buyer(
             "ok": False,
             "error": f"sms_request_failed:{e}",
         }
+def _to_jsonable(obj):
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    return obj
+
+def _serialize_listing_for_webhook(pl: ParsedListing) -> Dict[str, Any]:
+    raw = pl.to_mongo().to_dict()
+    return _to_jsonable(raw)
+
+def _serialize_buyer_for_webhook(buyer: WebFormBuyerSubmission) -> Dict[str, Any]:
+    raw = buyer.to_mongo().to_dict()
+    return _to_jsonable(raw)
+
+def _send_non_text_email_buyer_to_webhook(
+    buyer: WebFormBuyerSubmission,
+    pl: ParsedListing,
+    reason: str = "buyer_preferences_not_text_or_email",
+) -> Dict[str, Any]:
+    if not BUYER_NON_TEXT_EMAIL_WEBHOOK_URL:
+        print("[buyer_webhook] BUYER_NON_TEXT_EMAIL_WEBHOOK_URL not set; skipping webhook send.")
+        return {"ok": False, "reason": "no_webhook_url"}
+
+    payload = {
+        "reason": reason,
+        "matched_buyer_id": str(buyer.id),
+        "buyer": _serialize_buyer_for_webhook(buyer),
+        "listing_id": str(pl.id),
+        "listing": _serialize_listing_for_webhook(pl),
+    }
+
+    try:
+        resp = requests.post(
+            BUYER_NON_TEXT_EMAIL_WEBHOOK_URL,
+            json=payload,
+            timeout=15,
+        )
+        ok = resp.status_code in (200, 201, 202)
+        if not ok:
+            print(f"[buyer_webhook] non-2xx: {resp.status_code}, body={resp.text[:300]}")
+        return {
+            "ok": ok,
+            "status_code": resp.status_code,
+            "body": resp.text[:300],
+        }
+    except requests.RequestException as e:
+        print(f"[buyer_webhook] request failed: {e}")
+        return {"ok": False, "error": str(e)}
 
 def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     """
@@ -707,6 +761,9 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
 
                 print("prefs", prefs)
 
+                can_text = ("text" in prefs) and bool(contact.text_number)
+                can_email = ("email" in prefs) and bool(contact.email)
+
                 # Base context for both SMS and Email
                 base_ctx = {
                     "first_name": first_name,
@@ -718,8 +775,17 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                     "image_block": image_block_html,
                 }
 
+                # ---- If neither text nor email preference is usable -> send webhook ----
+                if not can_text and not can_email:
+                    webhook_result = _send_non_text_email_buyer_to_webhook(
+                        buyer=buyer,
+                        pl=pl,
+                        reason="buyer_preferences_not_text_or_email",
+                    )
+                    print("webhook_result", webhook_result)
+
                 # ---- SMS send ----
-                if ("text" in prefs)  and contact.text_number:
+                if can_text:
                     ctx_sms = dict(base_ctx)
                     ctx_sms["description"] = sms_desc or email_desc or ""
                     ctx_sms["pics_block"] = pics_block_sms
@@ -741,7 +807,7 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                     # send_sms(contact.text_number, sms_body)
 
                 # ---- Email send ----
-                if ("email" in prefs) and contact.email:
+                if can_email:
                     ctx_email = dict(base_ctx)
                     ctx_email["description"] = email_desc or sms_desc or ""
                     ctx_email["pics_block"] = pics_block_email
@@ -765,10 +831,10 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                     # Example external API call:
                     # send_email_via_api(to=contact.email, subject=email_subject, html=html_body)
 
-                # For now, we skip "whatsapp" and "call" – can be implemented later.
-                else:
-                    # e.g., log or ignore
-                    pass
+                # # For now, we skip "whatsapp" and "call" – can be implemented later.
+                # else:
+                #     # e.g., log or ignore
+                #     pass
 
             # If we reached here without raising, mark listing as sent
             ParsedListing.objects(id=pl.id).update_one(
