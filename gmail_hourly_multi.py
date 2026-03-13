@@ -75,7 +75,8 @@ ACCOUNTS = [
             "simon@stellarholdingsllc.ccsend.com",
             "info@5thavefinancialgroup.com",
             "info@f13deluxe.com",
-            "oasispropertyinvestments@gmail.com"
+            "oasispropertyinvestments@gmail.com",
+            "invest.teamalpha-gmail.com@shared1.ccsend.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
@@ -111,7 +112,8 @@ ACCOUNTS = [
             "lenny-riverwalkproperties.net@shared1.ccsend.com",
             "judson@securehomeinvest.com",
             "simon@stellarholdingsllc.ccsend.com",
-            "info@hoodsyhomes.com"
+            "info@hoodsyhomes.com",
+            "dispo@sellwholesalehouses.com"
 
 
             # or: "*@oasispropertyinvestments.ccsend.com",
