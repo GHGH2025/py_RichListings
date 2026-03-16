@@ -476,16 +476,12 @@ def _require_update_secret():
     if not BUYER_UPDATE_JWT_SECRET or len(BUYER_UPDATE_JWT_SECRET) < 16:
         raise HTTPException(status_code=500, detail="Server misconfigured: missing BUYER_UPDATE_JWT_SECRET")
 
-def _find_submission_by_email_phone(email: str, phone10: str) -> Optional[WebFormBuyerSubmission]:
+def _find_submission_by_email(email: str) -> Optional[WebFormBuyerSubmission]:
     return WebFormBuyerSubmission.objects(
         contact__email__iexact=email
-    ).filter(
-        Q(contact__call_whatsapp=phone10) |
-        Q(contact__text_number=phone10) |
-        Q(contact__phone_call=phone10)
     ).order_by("-created_at").first()
 
-def _build_update_token(*, mongo_id: str, podio_item_id: int, email: str, phone10: str) -> str:
+def _build_update_token(*, mongo_id: str, podio_item_id: int, email: str) -> str:
     _require_update_secret()
     now = int(time.time())
     exp = now + (BUYER_UPDATE_LINK_TTL_HOURS * 3600)
@@ -493,7 +489,6 @@ def _build_update_token(*, mongo_id: str, podio_item_id: int, email: str, phone1
         "mongo_id": mongo_id,
         "podio_item_id": int(podio_item_id or 0),
         "email": _normalize_email(email),
-        "phone": _normalize_us_phone(phone10),
         "iat": now,
         "exp": exp,
     }
@@ -580,7 +575,6 @@ def _build_update_email_html(update_link: str) -> str:
 
 class UpdateLinkRequest(BaseModel):
     email: str = ""
-    phone: str = ""
 
 class UpdateResolveRequest(BaseModel):
     token: str = ""
@@ -597,16 +591,13 @@ class UpdateSaveRequest(BaseModel):
 @router.post("/buyer-submissions/update/request-link")
 def request_update_link(body: UpdateLinkRequest):
     email = _normalize_email(body.email)
-    phone10 = _normalize_us_phone(body.phone)
 
     if not EMAIL_RE.match(email):
         raise HTTPException(status_code=400, detail="Invalid email")
-    if len(phone10) != 10:
-        raise HTTPException(status_code=400, detail="Invalid US phone number")
 
-    doc = _find_submission_by_email_phone(email, phone10)
+    doc = _find_submission_by_email(email)
     if not doc:
-        raise HTTPException(status_code=404, detail="No profile found for that email + phone number.")
+        raise HTTPException(status_code=404, detail="No profile found for that email.")
 
     if not doc.podio_item_id:
         raise HTTPException(status_code=409, detail="Profile found, but Podio item_id is missing. Please contact support.")
@@ -615,7 +606,6 @@ def request_update_link(body: UpdateLinkRequest):
         mongo_id=str(doc.id),
         podio_item_id=int(doc.podio_item_id),
         email=doc.contact.email,
-        phone10=phone10,
     )
 
     base = BUYER_UPDATE_LINK_BASE.rstrip("/") + "/"
@@ -648,9 +638,8 @@ def resolve_update_link(body: UpdateResolveRequest):
     claims = _decode_update_token(token)
     mongo_id = claims.get("mongo_id")
     email = _normalize_email(claims.get("email", ""))
-    phone10 = _normalize_us_phone(claims.get("phone", ""))
 
-    if not mongo_id or not email or len(phone10) != 10:
+    if not mongo_id or not email:
         raise HTTPException(status_code=401, detail="Invalid update link payload.")
 
     doc = WebFormBuyerSubmission.objects(id=_safe_object_id(mongo_id)).first()
@@ -659,9 +648,8 @@ def resolve_update_link(body: UpdateResolveRequest):
 
     # extra safety: ensure token still matches record
     doc_email = _normalize_email(doc.contact.email)
-    doc_phone = _normalize_us_phone(doc.contact.call_whatsapp or doc.contact.text_number or doc.contact.phone_call)
 
-    if doc_email != email or doc_phone != phone10:
+    if doc_email != email:
         raise HTTPException(status_code=404, detail="Profile not found for this link.")
 
     # Return the original request body we stored
@@ -691,9 +679,8 @@ def save_update(body: UpdateSaveRequest):
     claims = _decode_update_token(token)
     mongo_id = claims.get("mongo_id")
     email = _normalize_email(claims.get("email", ""))
-    phone10 = _normalize_us_phone(claims.get("phone", ""))
 
-    if not mongo_id or not email or len(phone10) != 10:
+    if not mongo_id or not email:
         raise HTTPException(status_code=401, detail="Invalid update link payload.")
 
     doc = WebFormBuyerSubmission.objects(id=_safe_object_id(mongo_id)).first()
@@ -701,9 +688,8 @@ def save_update(body: UpdateSaveRequest):
         raise HTTPException(status_code=404, detail="Profile not found.")
 
     doc_email = _normalize_email(doc.contact.email)
-    doc_phone = _normalize_us_phone(doc.contact.call_whatsapp or doc.contact.text_number or doc.contact.phone_call)
 
-    if doc_email != email or doc_phone != phone10:
+    if doc_email != email:
         raise HTTPException(status_code=404, detail="Profile not found for this link.")
 
     if not doc.podio_item_id:
