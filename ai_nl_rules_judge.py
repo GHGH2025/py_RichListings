@@ -170,9 +170,10 @@ def _response_format() -> Dict[str, Any]:
                 "properties": {
                     "listing_status": {"type": "string", "enum": ["Passed", "Skipped"]},
                     "skip_reason": {"type": ["string", "null"]},
+                    "pass_reason": {"type": ["string", "null"]},
                     "matched_rule_id": {"type": ["string", "null"]}
                 },
-                "required": ["listing_status", "skip_reason", "matched_rule_id"]
+                "required": ["listing_status", "skip_reason", "matched_rule_id","pass_reason"]
             }
         }
     }
@@ -243,8 +244,10 @@ Evaluation Instructions:
 
 Important:
 - If listing is "Skipped", include a clear, detailed explanation in `skip_reason` showing why it was skipped and how the rule applies.
+- If a listing is "Passed," include the reason it passed for the corresponding rules.
 - Mention the rule logic (e.g., price threshold, property type, location).
 - If listing is "Passed", set `skip_reason` and `matched_rule_id` to null.
+- If listing is "Skipped", set `pass_reason` to null.
 
 {_response_format()}
 

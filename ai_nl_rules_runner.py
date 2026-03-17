@@ -44,6 +44,7 @@ def apply_ai_english_rules(rules_path: str, limit: int = 100) -> Dict[str, int]:
 
         status = result.get("listing_status")
         reason = result.get("skip_reason")
+        reasonP = result.get("pass_reason")
         ruleid = result.get("matched_rule_id")
         rules_version = str(rules_yaml.get("version")) if rules_yaml.get("version") is not None else None
 
@@ -64,7 +65,7 @@ def apply_ai_english_rules(rules_path: str, limit: int = 100) -> Dict[str, int]:
                 set__status="passed",
                 set__rules_ai_rule_id=None,
                 set__rules_ai_version=rules_version,
-                set__rules_ai_reason=None,
+                set__rules_ai_reason=reasonP,
                 set__skipped_or_posted_at=datetime.utcnow(),
                 set__updated_at=datetime.utcnow(),
             )
