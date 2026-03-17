@@ -1,3 +1,5 @@
 .env
 __pycache__/
 accounts/
+accounts/.gitignore
+temp_interactive_push.bat
