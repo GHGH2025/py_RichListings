@@ -67,7 +67,7 @@ DEFAULT_WHOLESALER_BUCKET: Dict[str, List[str]] = {
     "Willy":["sales-islandlivingrealty.com@shared1.ccsend.com"],
     "Craig":["craig@nowhomebuyers.com"],
     "John":["john@wholesalejax.com"],
-    "JC":["jc-quickturnproperties.com@shared1.ccsend.com","jc@stellarholdingsllc.ccsend.com"],
+    "JC":["m.mcgrane@stellarholdingsllc.ccsend.com"],
     "Todd":["tsims-southfloridacashhomebuyers.com@shared1.ccsend.com","kevin-titlerate.com@shared1.ccsend.com"],
     "Richard":["richard@oasispropertyinvestments.ccsend.com","oasispropertydispo@gmail.com","oasispropertyinvestments@gmail.com"],
     "Derek":["derek@marketing.vesta.app"],
