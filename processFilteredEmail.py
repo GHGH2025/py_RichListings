@@ -51,6 +51,7 @@ SENDER_LISTING_SLICES = {
     "acct1": [
         {"pattern": "jc-quickturnproperties.com@shared1.ccsend.com", "range": "1-1"},
         {"pattern": "jc@stellarholdingsllc.ccsend.com", "range": "1-1"},
+        {"pattern":"m.mcgrane@stellarholdingsllc.ccsend.com", "range":"1-1"},
         {"pattern": "tsims-southfloridacashhomebuyers.com@shared1.ccsend.com", "range": "0-0"},
         {"pattern": "kevin-titlerate.com@shared1.ccsend.com", "range": "0-0"}
     ],

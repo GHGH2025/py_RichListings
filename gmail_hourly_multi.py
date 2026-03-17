@@ -76,7 +76,8 @@ ACCOUNTS = [
             "info@5thavefinancialgroup.com",
             "info@f13deluxe.com",
             "oasispropertyinvestments@gmail.com",
-            "invest.teamalpha-gmail.com@shared1.ccsend.com"
+            "invest.teamalpha-gmail.com@shared1.ccsend.com",
+            "m.mcgrane@stellarholdingsllc.ccsend.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
