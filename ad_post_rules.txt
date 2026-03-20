@@ -7,7 +7,7 @@ Must do:
 - Immediately under the price line, if available, print ONLY the `other_images_dropbox_link` on its own line (no label, no formatting).
 - Use short, sales-friendly lines/bullets.
 - If a “wholesaler hint” is provided, use it only to guide tone/style. DO NOT print the name.
-- Special Preferences (MANDATORY INCLUSION):
+- Special Preferences (Include if and only if you find any of them):
   - You MUST identify any special preferences or additional information based on keywords in the listing (e.g. price $1M+, 55+ mentioned, wood frame, water/flood damage).
   - If the property matches any condition, you MUST include the exact phrase provided below in the final output. Do not skip them if present.
 
