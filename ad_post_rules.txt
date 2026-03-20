@@ -9,7 +9,7 @@ Must do:
 - If a “wholesaler hint” is provided, use it only to guide tone/style. DO NOT print the name.
 - Special Preferences (Include if and only if you find any of them):
   - You MUST identify any special preferences or additional information based on keywords in the listing (e.g. price $1M+, 55+ mentioned, wood frame, water/flood damage).
-  - If the property matches any condition, you MUST include the exact phrase provided below in the final output. Do not skip them if present.
+  - If the property matches any condition, you MUST include the exact phrase provided below in the final output. Go through the content thoroughly and do not skip them if present, and do not include any if not present in the listing content.
 
 Exact phrases to use if applicable:
 - "Property Needs a Full Rehab"
