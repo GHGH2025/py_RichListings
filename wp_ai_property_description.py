@@ -91,13 +91,14 @@ B) Exclude entirely (even if present in either source):
    - Emojis
    - Fluff/opinions: school zones, close to shopping, “great for investors”, “amazing”, “best”, etc.
 
-C) Include ONLY factual property features (omit unknown/empty):
+C) Include ALL extracted property features, amenities, and special preferences (omit unknown/empty):
    - Beds, baths, living area, lot size (sq ft and/or acres), year built
    - Construction/material (CBS/concrete block/etc.), condition ONLY if explicitly stated (e.g., “needs updates”, “needs full rehab”)
    - Occupancy (vacant/occupied) if explicitly stated
    - Unit mix if explicitly stated (e.g., duplex 2/1 + 2/1)
    - Rental income ONLY if explicitly stated as actual rent (do NOT include anything labeled “estimated”)
    - Comps ONLY if explicitly stated (never compute/infer comps)
+   - You MUST ALSO include ANY additional features, amenities, or special preferences found in the post_content or complete_info (e.g., pools, elevators, views, luxury features, "1 Million Dollar Houses and Up", "Property Needs a Full Rehab"). Do not drop any valid property features or matching special preferences if explicitly stated.
 
 D) Formatting requirements:
    - One fact per line, each wrapped in <p>…</p>
@@ -123,41 +124,7 @@ E) Orange highlighting (WordPress inline style):
       - If “mother-in-law suite”, “efficiency”, “attached 1/1”, “detached 1/1” (or equivalent) is explicitly stated,
         highlight that phrase/value.
 
-F) Special Preferences (MANDATORY INCLUSION):
-   - You MUST identify any special preferences or additional information based on keywords in the listing (e.g. price $1M+, 55+ mentioned, wood frame, water/flood damage).
-   - If the property matches any condition, you MUST include the exact phrase provided below as a feature line in the final output. Do not skip them if present.
-
-   Exact phrases to use if applicable:
-   - "Property Needs a Full Rehab"
-   - "Property has Code Violations / Liens / Fines"
-   - "Property is Fire Damaged"
-   - "Need to Buy Property Sight Unseen (Bad Tenants, Other Access Issues) - Videos or Pictures might be available case by case."
-   - "Property with Ocean Access / Intracoastal"
-   - "$1 Million Dollar Houses and Up" (Use this if the price is $1,000,000 or more)
-   - "55 Plus Communities" (Use this if 55+ or senior living is mentioned)
-   - "Frame Construction" (Use this if wood or frame construction is mentioned)
-   - "Bulk Property Packages"
-   - "Mold Remediation Needed"
-   - "Property has Foundation / Structural Issues"
-   - "Water/ Flood Damage"
-   - "Tear-downs / Land Value Only"
-   - "Unpermitted Additions"
-   - "Eviction Needed/ In Progress"
-   - "Post Occupancy Required (with escrow holdback and/ or rent)"
-   - "Pool"
-   - "Garage"
-   - "40/10 Year Inspection Certificate Failed"
-   - "40/10 Year Inspection Certificate Passed"
-   - "Property has Rental Restrictions"
-   - "Property has Special Assessments"
-   - "Located on Ocean Access / Intracoastal Way Only"
-   - "Located on Water Front Only"
-   - "Located on Golf Course Only"
-   - "40 Year Inspection Failed"
-   - "NO HOA"
-   - "Mobile Homes"
-
-G) Consistency:
+F) Consistency:
    - Do not contradict complete_info. If complete_info has a value, prefer it over post_content.
 
 Output:
