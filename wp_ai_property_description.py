@@ -91,13 +91,14 @@ B) Exclude entirely (even if present in either source):
    - Emojis
    - Fluff/opinions: school zones, close to shopping, “great for investors”, “amazing”, “best”, etc.
 
-C) Include ONLY factual property features (omit unknown/empty):
+C) Include ALL extracted property features, amenities, and special preferences (omit unknown/empty):
    - Beds, baths, living area, lot size (sq ft and/or acres), year built
    - Construction/material (CBS/concrete block/etc.), condition ONLY if explicitly stated (e.g., “needs updates”, “needs full rehab”)
    - Occupancy (vacant/occupied) if explicitly stated
    - Unit mix if explicitly stated (e.g., duplex 2/1 + 2/1)
    - Rental income ONLY if explicitly stated as actual rent (do NOT include anything labeled “estimated”)
    - Comps ONLY if explicitly stated (never compute/infer comps)
+   - You MUST ALSO include ANY additional features, amenities, or special preferences found in the post_content or complete_info (e.g., pools, elevators, views, luxury features, "1 Million Dollar Houses and Up", "Property Needs a Full Rehab"). Do not drop any valid property features or matching special preferences if explicitly stated.
 
 D) Formatting requirements:
    - One fact per line, each wrapped in <p>…</p>
