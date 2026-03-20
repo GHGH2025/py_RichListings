@@ -123,41 +123,7 @@ E) Orange highlighting (WordPress inline style):
       - If “mother-in-law suite”, “efficiency”, “attached 1/1”, “detached 1/1” (or equivalent) is explicitly stated,
         highlight that phrase/value.
 
-F) Special Preferences (MANDATORY INCLUSION):
-   - You MUST identify any special preferences or additional information based on keywords in the listing (e.g. price $1M+, 55+ mentioned, wood frame, water/flood damage).
-   - If the property matches any condition, you MUST include the exact phrase provided below as a feature line in the final output. Do not skip them if present.
-
-   Exact phrases to use if applicable:
-   - "Property Needs a Full Rehab"
-   - "Property has Code Violations / Liens / Fines"
-   - "Property is Fire Damaged"
-   - "Need to Buy Property Sight Unseen (Bad Tenants, Other Access Issues) - Videos or Pictures might be available case by case."
-   - "Property with Ocean Access / Intracoastal"
-   - "$1 Million Dollar Houses and Up" (Use this if the price is $1,000,000 or more)
-   - "55 Plus Communities" (Use this if 55+ or senior living is mentioned)
-   - "Frame Construction" (Use this if wood or frame construction is mentioned)
-   - "Bulk Property Packages"
-   - "Mold Remediation Needed"
-   - "Property has Foundation / Structural Issues"
-   - "Water/ Flood Damage"
-   - "Tear-downs / Land Value Only"
-   - "Unpermitted Additions"
-   - "Eviction Needed/ In Progress"
-   - "Post Occupancy Required (with escrow holdback and/ or rent)"
-   - "Pool"
-   - "Garage"
-   - "40/10 Year Inspection Certificate Failed"
-   - "40/10 Year Inspection Certificate Passed"
-   - "Property has Rental Restrictions"
-   - "Property has Special Assessments"
-   - "Located on Ocean Access / Intracoastal Way Only"
-   - "Located on Water Front Only"
-   - "Located on Golf Course Only"
-   - "40 Year Inspection Failed"
-   - "NO HOA"
-   - "Mobile Homes"
-
-G) Consistency:
+F) Consistency:
    - Do not contradict complete_info. If complete_info has a value, prefer it over post_content.
 
 Output:
