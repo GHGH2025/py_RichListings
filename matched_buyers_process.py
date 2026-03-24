@@ -645,6 +645,56 @@ def _send_non_text_email_buyer_to_webhook(
         print(f"[buyer_webhook] request failed: {e}")
         return {"ok": False, "error": str(e)}
 
+RINGCENTRAL_MMS_MAX_BYTES = 1_500_000  # RingCentral documented MMS attachment limit
+
+def _get_remote_file_size_bytes(url: str, timeout: int = 10) -> Optional[int]:
+    """
+    Return remote file size in bytes.
+
+    Strategy:
+    1) Try HEAD and read Content-Length
+    2) Fallback to streaming GET and count bytes up to the limit
+
+    Returns:
+        int  -> detected size in bytes
+        None -> could not determine size
+    """
+    if not url:
+        return None
+
+    # First try HEAD
+    try:
+        resp = requests.head(url, allow_redirects=True, timeout=timeout)
+        content_length = resp.headers.get("Content-Length")
+        if content_length and content_length.isdigit():
+            return int(content_length)
+    except requests.RequestException:
+        pass
+
+    # Fallback: stream the file and count bytes
+    try:
+        with requests.get(url, stream=True, allow_redirects=True, timeout=timeout) as resp:
+            resp.raise_for_status()
+
+            content_length = resp.headers.get("Content-Length")
+            if content_length and content_length.isdigit():
+                return int(content_length)
+
+            total = 0
+            for chunk in resp.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+                total += len(chunk)
+
+                # Early exit once we know it's too large
+                if total > RINGCENTRAL_MMS_MAX_BYTES:
+                    return total
+            print("total size",total)
+            return total
+
+    except requests.RequestException:
+        return None
+
 def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     """
     1) Pull ParsedListing where:
@@ -747,6 +797,31 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
             buyers = list(WebFormBuyerSubmission.objects(id__in=buyer_ids))
             print("buyers",buyers)
 
+            # Determine once per listing whether MMS image is allowed
+            sms_image_url = first_image_url
+            sms_image_size_bytes = None
+
+            if first_image_url:
+                sms_image_size_bytes = _get_remote_file_size_bytes(first_image_url)
+
+                if sms_image_size_bytes is None:
+                    # Conservative behavior: if size cannot be determined, send text only
+                    logging.warning(
+                        "Could not determine image size for listing %s image %s. Sending text-only SMS.",
+                        pl.id,
+                        first_image_url,
+                    )
+                    sms_image_url = None
+
+                elif sms_image_size_bytes > RINGCENTRAL_MMS_MAX_BYTES:
+                    logging.info(
+                        "Image too large for MMS for listing %s: %s bytes > %s. Sending text-only SMS.",
+                        pl.id,
+                        sms_image_size_bytes,
+                        RINGCENTRAL_MMS_MAX_BYTES,
+                    )
+                    sms_image_url = None
+
             for buyer in buyers:
                 contact = buyer.contact
                 full_name = (contact.name or "").strip()
@@ -797,7 +872,7 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                         to_number=contact.text_number,
                         sms_text=sms_body,
                         from_number="+17542001204",
-                        image_url=first_image_url,
+                        image_url=sms_image_url,
                     )
                     
 
