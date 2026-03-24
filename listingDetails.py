@@ -212,7 +212,12 @@ IMAGE_RULES_DEFAULT = """
   • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
     - If URLs are relative, include them as-is.
     - Cap to the first 12 unique URLs per listing.
-  • "other_images_source": if the listing includes a link to more photos (e.g., “View more photos”, "Click Here For Pictures", “Gallery”, Google Drive, Dropbox, MLS), return that single URL; otherwise null.
+  • "other_images_source": return a single URL ONLY when the listing has an EXPLICIT photo/gallery link for that listing itself.
+    - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
+        (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", Google Drive photo folder, Dropbox photo folder, MLS photo link).
+    - Do NOT infer from surrounding prose like "link to all the pics" if the link itself is just a generic webpage/newsletter/property page URL.
+    - Do NOT use generic newsletter/web-view links, landing pages, "view in browser", unsubscribe, mailto, call/text links, or general property detail pages unless they explicitly indicate photos/gallery.
+    - If the photo intent is not explicit from the link/button text or URL itself, return null.
 """.strip()
 
 IMAGE_RULES_NEAREST = """
@@ -225,8 +230,12 @@ IMAGE_RULES_NEAREST = """
       attach each image to the NEAREST property address in that section.
     - Ignore obvious non-property images (logos, social icons, tiny spacer GIFs, generic dividers/banners).
     - Cap to the first 12 unique URLs per listing.
-  • "other_images_source": if the listing includes a link whose purpose is clearly “more photos”
-    (e.g. gallery, drive/dropbox/MLS photo link), return that single URL; otherwise null.
+  • "other_images_source": return a single URL ONLY when the listing has an EXPLICIT photo/gallery link for that listing itself.
+    - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
+        (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", Google Drive photo folder, Dropbox photo folder, MLS photo link).
+    - Do NOT infer from surrounding prose like "link to all the pics" if the link itself is just a generic webpage/newsletter/property page URL.
+    - Do NOT use generic newsletter/web-view links, landing pages, "view in browser", unsubscribe, mailto, call/text links, or general property detail pages unless they explicitly indicate photos/gallery.
+    - If the photo intent is not explicit from the link/button text or URL itself, return null.
 """.strip()
 
 
