@@ -81,7 +81,8 @@ ACCOUNTS = [
             "ljinvestmentfirm-gmail.com@shared1.ccsend.com",
             "leodorta@buycashhome.com",
             "cac1979@215211166.mailchimpapp.com",
-            "mike@hambyhousing.com"
+            "mike@hambyhousing.com",
+            "john.mckinley09@gmail.com
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
