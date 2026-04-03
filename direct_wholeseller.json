@@ -256,5 +256,11 @@
     "email": "mike@hambyhousing.com",
     "phone": "850-607-3207",
     "updateFlagForPodio": "true"
+  },
+  "john.mckinley09@gmail.com":{
+    "name": "John Mckinley",
+    "email": "john.mckinley09@gmail.com",
+    "phone": "904-404-6551",
+    "updateFlagForPodio": "true"
   }
 }
