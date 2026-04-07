@@ -262,5 +262,11 @@
     "email": "john.mckinley09@gmail.com",
     "phone": "904-404-6551",
     "updateFlagForPodio": "true"
+  },
+  "charlesscott09@yahoo.com":{
+    "name": "Charles Scott",
+    "email": "charlesscott09@yahoo.com",
+    "phone": "",
+    "updateFlagForPodio": "true"
   }
 }
