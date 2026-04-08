@@ -268,5 +268,17 @@
     "email": "charlesscott09@yahoo.com",
     "phone": "",
     "updateFlagForPodio": "true"
+  },
+  "boris@paradisebeachteam.com":{
+    "name": "Boris",
+    "email": "boris@paradisebeachteam.com",
+    "phone": "954-800-1862",
+    "updateFlagForPodio": "true"
+  },
+  "arthurtamasi-gmail.com@shared1.ccsend.com":{
+    "name": "Arthur",
+    "email": "arthurtamasi@gmail.com",
+    "phone": "954-254-7860",
+    "updateFlagForPodio": "true"
   }
 }
