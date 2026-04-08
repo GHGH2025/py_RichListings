@@ -83,7 +83,8 @@ ACCOUNTS = [
             "cac1979@215211166.mailchimpapp.com",
             "mike@hambyhousing.com",
             "john.mckinley09@gmail.com",
-            "charlesscott09@yahoo.com"
+            "charlesscott09@yahoo.com",
+            "boris@paradisebeachteam.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
@@ -121,7 +122,8 @@ ACCOUNTS = [
             "simon@stellarholdingsllc.ccsend.com",
             "info@hoodsyhomes.com",
             "dispo@sellwholesalehouses.com",
-            "annie@camarottihomesllc.ccsend.com"
+            "annie@camarottihomesllc.ccsend.com",
+            "arthurtamasi-gmail.com@shared1.ccsend.com"
 
 
             # or: "*@oasispropertyinvestments.ccsend.com",
