@@ -64,7 +64,7 @@ _PODIO_ACCESS_TOKEN_EXPIRES_AT: float = 0.0
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MATCHER_MODEL = os.getenv("MATCHER_MODEL", "gpt-4o-mini")  # change if you want
 MATCHER_TEMPERATURE = float(os.getenv("MATCHER_TEMPERATURE", "0"))
-AI_BATCH_SIZE = int(os.getenv("MATCHER_AI_BATCH_SIZE", "25"))
+AI_BATCH_SIZE = int(os.getenv("MATCHER_AI_BATCH_SIZE", "8"))
 MIN_CONFIDENCE = float(os.getenv("MATCHER_MIN_CONFIDENCE", "0.60"))
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -1603,7 +1603,8 @@ def call_ai_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str,
     "Output requirements:\n"
     "- For every candidate buyer, you MUST return a preference_checks entry for every preferences_kv label.\n"
     "- Copy the preference label EXACTLY as provided in the candidate.\n"
-    "- Return ONLY JSON in this schema:\n"
+    "- Keep the 'evidence' field to 5 words or fewer (e.g. 'ocean access present', 'no evidence found').\n"
+    "- Return ONLY valid JSON in this schema:\n"
     "{\n"
     '  \"evaluations\": [\n'
     "    {\n"
@@ -1614,7 +1615,7 @@ def call_ai_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str,
     '          \"selection\": \"No|Yes|Maybe|Only\",\n'
     '          \"status\": \"PRESENT|ABSENT|UNKNOWN\",\n'
     '          \"confidence_0_to_1\": 0.0,\n'
-    '          \"evidence\": \"short text\"\n'
+    '          \"evidence\": \"max 5 words\"\n'
     "        }\n"
     "      ]\n"
     "    }\n"
@@ -1635,6 +1636,7 @@ def call_ai_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str,
                 {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
             ],
             temperature=MATCHER_TEMPERATURE,
+            response_format={"type": "json_object"},
         )
 
         content = resp.choices[0].message.content
