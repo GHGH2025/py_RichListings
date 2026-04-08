@@ -1640,18 +1640,18 @@ def call_ai_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str,
         )
 
         content = resp.choices[0].message.content
-        logger.info(
-            "[call_ai_matcher] raw AI response (%d chars):\n%s",
-            len(content or ""),
-            content,
-        )
+        # logger.info(
+        #     "[call_ai_matcher] raw AI response (%d chars):\n%s",
+        #     len(content or ""),
+        #     content,
+        # )
         try:
             return _extract_json_obj(content)
         except Exception as parse_err:
-            logger.error(
-                "[call_ai_matcher] JSON parse failed (%s). Full raw content dumped above.",
-                parse_err,
-            )
+            # logger.error(
+            #     "[call_ai_matcher] JSON parse failed (%s). Full raw content dumped above.",
+            #     parse_err,
+            # )
             raise RuntimeError(f"AI matcher failed: {str(parse_err)}")
 
     except Exception as e:
