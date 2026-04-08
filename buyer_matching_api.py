@@ -1251,6 +1251,35 @@ SPECIAL_PREF_PATTERNS = {
         r"\b1\s*million\b",
         r"\b\$1,?000,?000\b",
     ],
+    LABEL_TO_KEY["Property with Ocean Access / Intracoastal"]: [
+        r"\bocean\s+access\b",
+        r"\bintracoastal\b",
+        r"\bICW\b",
+        r"\bwaterfront\b",
+        r"\bwater\s*front\b",
+        r"\bon\s+(?:the\s+)?(?:canal|water)\b",
+    ],
+    LABEL_TO_KEY["Located on Ocean Access / Intracoastal Way Only"]: [
+        r"\bocean\s+access\b",
+        r"\bintracoastal\b",
+        r"\bICW\b",
+    ],
+    LABEL_TO_KEY["Located on Water Front Only"]: [
+        r"\bwaterfront\b",
+        r"\bwater\s*front\b",
+        r"\bon\s+(?:the\s+)?water\b",
+        r"\bcanal\s+front\b",
+    ],
+    LABEL_TO_KEY["Located on Beach Front Only"]: [
+        r"\bbeachfront\b",
+        r"\bbeach\s*front\b",
+        r"\bon\s+(?:the\s+)?beach\b",
+    ],
+    LABEL_TO_KEY["Located on Golf Course Only"]: [
+        r"\bgolf\s+course\b",
+        r"\bgolf\s+front\b",
+        r"\bon\s+(?:the\s+)?golf\b",
+    ],
 }
 
 def collect_listing_text(listing: Dict[str, Any]) -> str:
@@ -1298,6 +1327,24 @@ def detect_listing_special_prefs(listing: Dict[str, Any]) -> Tuple[Set[str], Dic
         k = LABEL_TO_KEY["Mobile Homes"]
         present.add(k)
         evidence.setdefault(k, "is_mobile_home:true")
+
+    # Water features from structured fields
+    water_feature = (ci.get("water_feature") or "").lower().replace(" ", "_")
+    is_on_water = ci.get("is_on_water")
+    if water_feature in ("ocean_access", "intracoastal"):
+        for lbl in ["Property with Ocean Access / Intracoastal", "Located on Ocean Access / Intracoastal Way Only"]:
+            k = LABEL_TO_KEY[lbl]
+            present.add(k)
+            evidence.setdefault(k, f"water_feature:{water_feature}")
+    if is_on_water is True:
+        k = LABEL_TO_KEY["Located on Water Front Only"]
+        present.add(k)
+        evidence.setdefault(k, "is_on_water:true")
+        # ocean_access / intracoastal imply waterfront too
+        if water_feature in ("ocean_access", "intracoastal"):
+            k = LABEL_TO_KEY["Property with Ocean Access / Intracoastal"]
+            present.add(k)
+            evidence.setdefault(k, f"is_on_water:true+water_feature:{water_feature}")
 
     # 3) Text scan (this is what will catch "Fire damage" in your example)
     text = _norm(collect_listing_text(listing))
@@ -1591,7 +1638,19 @@ def call_ai_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str,
         )
 
         content = resp.choices[0].message.content
-        return _extract_json_obj(content)
+        logger.info(
+            "[call_ai_matcher] raw AI response (%d chars):\n%s",
+            len(content or ""),
+            content,
+        )
+        try:
+            return _extract_json_obj(content)
+        except Exception as parse_err:
+            logger.error(
+                "[call_ai_matcher] JSON parse failed (%s). Full raw content dumped above.",
+                parse_err,
+            )
+            raise RuntimeError(f"AI matcher failed: {str(parse_err)}")
 
     except Exception as e:
         raise RuntimeError(f"AI matcher failed: {str(e)}")
