@@ -1,6 +1,6 @@
 {
   "sms": {
-    "body": "{{first_name}},\n\nIt's your AI Assistant - here with another deal for your consideration:\n\nAddress: {{address}}\n{{description}}\nPrice: {{price}}{{pics_block}}\n\nReply STOP to Opt Out\n"
+    "body": "{{first_name}},\n\nIt's your AI Assistant - here with another deal for your consideration:\n\nAddress: {{address}}\n{{description}}\nPrice: {{price}}{{pics_block}}\n\nNot a good match, let us know why!\nwww.WholesaleDealFinder.Ai/Fix\n\nWant to Update Your Buy Box?\nwww.WholesaleDealFinder.Ai/Update-My-BuyBox\n\nReply STOP to Opt Out\n"
   },
   "email": {
     "subject": "New deal for your review",
