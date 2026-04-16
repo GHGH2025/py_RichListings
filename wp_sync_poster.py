@@ -172,7 +172,7 @@ def _wp_post_create(body: Dict[str, Any]) -> Optional[int]:
     try:
         resp = requests.post(POST_URL, json=body, timeout=REQUEST_TIMEOUT)
         if resp.status_code != 200:
-            logger.error(
+            logging.error(
                 "WP POST failed | status=%s | response=%s",
                 resp.status_code,
                 resp.text[:1000]
@@ -181,7 +181,7 @@ def _wp_post_create(body: Dict[str, Any]) -> Optional[int]:
         try:
             data = resp.json()
         except Exception as e:
-            logger.error(
+            logging.error(
                 "WP invalid JSON response | error=%s | response=%s",
                 str(e),
                 resp.text[:1000]
@@ -197,10 +197,10 @@ def _wp_post_create(body: Dict[str, Any]) -> Optional[int]:
             d2 = data.get("data")
             if isinstance(d2, dict) and isinstance(d2.get("post_id"), int):
                 return d2["post_id"]
-        logger.error("WP unexpected response format: %s", data)
+        logging.error("WP unexpected response format: %s", data)
         return None
     except Exception:
-        logger.exception("WP request crashed (exception in _wp_post_create)")
+        logging.exception("WP request crashed (exception in _wp_post_create)")
         return None
 
 def _extract_first_post_id(get_json: Dict[str, Any]) -> Optional[int]:
@@ -275,7 +275,7 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
         try:
             desc = _trim(getattr(pl, "wp_property_description", None))
             if not desc:
-                logger.warning("Skipping listing (no description) | id=%s", pl.id)
+                logging.warning("Skipping listing (no description) | id=%s", pl.id)
                 # Skip if no description (contract says must exist)
                 results.append({"id": str(pl.id), "ok": False, "reason": "no_description"})
                 continue
@@ -311,12 +311,12 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
                     processed += 1
                     posted += 1
                 else:
-                    logger.error("WP POST failed | listing_id=%s", pl.id)
+                    logging.error("WP POST failed | listing_id=%s", pl.id)
                     results.append({"id": str(pl.id), "ok": False, "reason": "post_failed"})
                     errors += 1
 
         except Exception as e:
-            logger.exception("Unexpected error processing listing_id=%s", pl.id)
+            logging.exception("Unexpected error processing listing_id=%s", pl.id)
             results.append({"id": str(pl.id), "ok": False, "error": f"{type(e).__name__}: {e}"})
             errors += 1
 
