@@ -135,7 +135,7 @@ class ParsedListing(Document):
     wp_parsed_data = DictField()
 
     wp_status = StringField(
-        choices=("ready_to_process", "keys_generated", "description_generated","posted")
+        choices=("ready_to_process", "keys_generated", "description_generated","posted","failed")
     )
 
     wp_check = StringField(
