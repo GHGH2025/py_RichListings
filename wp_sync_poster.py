@@ -294,6 +294,22 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
             else:
                 # create
                 body = _build_post_body(pl)
+                # fail early if posttitle is missing
+                if not _trim(body.get("posttitle")):
+                    logging.error("Skipping listing (missing posttitle in WP body) | listing_id=%s", pl.id)
+                    pl.update(
+                        set__wp_status="failed",
+                        set__updated_at=datetime.utcnow(),
+                    )
+                    results.append({
+                        "id": str(pl.id),
+                        "ok": False,
+                        "status": "failed",
+                        "reason": "missing_posttitle",
+                    })
+                    processed += 1
+                    errors += 1
+                    continue
                 # pl.update(
                 #     set__wp_status="posted_temp",
                 #     set__updated_at=datetime.utcnow(),
