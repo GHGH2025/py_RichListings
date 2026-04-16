@@ -188,7 +188,8 @@ def run_ai_build_wp_property_description_for_posted():
 @repeat(every(5).minutes)
 def run_sync_wp_for_descriptions():
     logging.info("sync_wp_for_descriptions")
-    sync_wp_for_descriptions(limit=5, per_item_sleep_s=0.2)
+    result = sync_wp_for_descriptions(limit=5, per_item_sleep_s=0.2)
+    logging.info("run_sync_wp_for_descriptions: result=%s", result)
 
 @repeat(every(3).minutes)
 def run_direct_wholeseller_linking():
