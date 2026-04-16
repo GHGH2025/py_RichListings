@@ -171,8 +171,14 @@ def _wp_post_create(body: Dict[str, Any]) -> Optional[int]:
     try:
         resp = requests.post(POST_URL, json=body, timeout=REQUEST_TIMEOUT)
         if resp.status_code != 200:
+            print(f"[WP ERROR] POST failed | status={resp.status_code} | response={resp.text}")
             return None
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception as e:
+            print(f"[WP ERROR] Invalid JSON response | error={e} | response={resp.text}")
+            return None
+        # data = resp.json()
         # Expecting WP to return something with new post_id; common patterns:
         # { success: true, post_id: 123, ... } OR data/post_id inside data.
         if isinstance(data, dict):
@@ -182,8 +188,10 @@ def _wp_post_create(body: Dict[str, Any]) -> Optional[int]:
             d2 = data.get("data")
             if isinstance(d2, dict) and isinstance(d2.get("post_id"), int):
                 return d2["post_id"]
+        print(f"[WP ERROR] Unexpected response format: {data}")
         return None
     except Exception:
+        print(f"[WP EXCEPTION] WP request failed: {type(e).__name__}: {e}")
         return None
 
 def _extract_first_post_id(get_json: Dict[str, Any]) -> Optional[int]:
@@ -293,10 +301,12 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
                     processed += 1
                     posted += 1
                 else:
+                    print(f"[ERROR] WP POST failed for listing_id={pl.id}")
                     results.append({"id": str(pl.id), "ok": False, "reason": "post_failed"})
                     errors += 1
 
         except Exception as e:
+            print(f"[EXCEPTION] listing_id={pl.id} -> {type(e).__name__}: {e}")
             results.append({"id": str(pl.id), "ok": False, "error": f"{type(e).__name__}: {e}"})
             errors += 1
 
