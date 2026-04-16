@@ -7,6 +7,7 @@ import requests
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse, parse_qsl, urlunparse, urlencode
 from models import ParsedListing  # mongoengine document
+import logging
 
 WP_TOKEN = os.getenv("WP_API_TOKEN")  # <-- set in env
 WP_BASE  = os.getenv("WP_API_BASE", "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1")
@@ -171,12 +172,20 @@ def _wp_post_create(body: Dict[str, Any]) -> Optional[int]:
     try:
         resp = requests.post(POST_URL, json=body, timeout=REQUEST_TIMEOUT)
         if resp.status_code != 200:
-            print(f"[WP ERROR] POST failed | status={resp.status_code} | response={resp.text}")
+            logger.error(
+                "WP POST failed | status=%s | response=%s",
+                resp.status_code,
+                resp.text[:1000]
+            )
             return None
         try:
             data = resp.json()
         except Exception as e:
-            print(f"[WP ERROR] Invalid JSON response | error={e} | response={resp.text}")
+            logger.error(
+                "WP invalid JSON response | error=%s | response=%s",
+                str(e),
+                resp.text[:1000]
+            )
             return None
         # data = resp.json()
         # Expecting WP to return something with new post_id; common patterns:
@@ -188,10 +197,10 @@ def _wp_post_create(body: Dict[str, Any]) -> Optional[int]:
             d2 = data.get("data")
             if isinstance(d2, dict) and isinstance(d2.get("post_id"), int):
                 return d2["post_id"]
-        print(f"[WP ERROR] Unexpected response format: {data}")
+        logger.error("WP unexpected response format: %s", data)
         return None
     except Exception:
-        print(f"[WP EXCEPTION] WP request failed: {type(e).__name__}: {e}")
+        logger.exception("WP request crashed (exception in _wp_post_create)")
         return None
 
 def _extract_first_post_id(get_json: Dict[str, Any]) -> Optional[int]:
@@ -266,6 +275,7 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
         try:
             desc = _trim(getattr(pl, "wp_property_description", None))
             if not desc:
+                logger.warning("Skipping listing (no description) | id=%s", pl.id)
                 # Skip if no description (contract says must exist)
                 results.append({"id": str(pl.id), "ok": False, "reason": "no_description"})
                 continue
@@ -301,12 +311,12 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
                     processed += 1
                     posted += 1
                 else:
-                    print(f"[ERROR] WP POST failed for listing_id={pl.id}")
+                    logger.error("WP POST failed | listing_id=%s", pl.id)
                     results.append({"id": str(pl.id), "ok": False, "reason": "post_failed"})
                     errors += 1
 
         except Exception as e:
-            print(f"[EXCEPTION] listing_id={pl.id} -> {type(e).__name__}: {e}")
+            logger.exception("Unexpected error processing listing_id=%s", pl.id)
             results.append({"id": str(pl.id), "ok": False, "error": f"{type(e).__name__}: {e}"})
             errors += 1
 
