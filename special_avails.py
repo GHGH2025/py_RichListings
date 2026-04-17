@@ -82,7 +82,8 @@ DEFAULT_WHOLESALER_BUCKET: Dict[str, List[str]] = {
     "Max_Mudd":["dispo@sellwholesalehouses.com"],
     "Danny_Dickson":["info-rushproperties.net@shared1.ccsend.com"],
     "Fassioli":["ffassioli@peakregroup.ccsend.com"],
-    "Patrick": ["ljinvestmentfirm-gmail.com@shared1.ccsend.com"]
+    "Patrick": ["ljinvestmentfirm-gmail.com@shared1.ccsend.com"],
+    "Alex_Virelles": ["alex@exclusivepremierrealty.com"]
 }
 
 DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
@@ -107,7 +108,8 @@ DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
     "Max_Mudd":[1881820249],
     "Danny_Dickson":[3145803799],
     "Fassioli":[3109183303],
-    "Patrick": [1634654520]
+    "Patrick": [1634654520],
+    "Alex_Virelles": [3289553746]
     # "another@sender.com": [111111111, 222222222],
 }
 
