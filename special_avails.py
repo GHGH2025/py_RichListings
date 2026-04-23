@@ -90,7 +90,7 @@ DEFAULT_WHOLESALER_BUCKET: Dict[str, List[str]] = {
 DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
     # "sender_email": [podio_item_id_1, podio_item_id_2, ...]
     "Johnathan": [857496733, 778054254],
-    "David":[816254022],
+    "David":[816254022,3269947738],
     "Willy":[618782696],
     "Craig":[618782689],
     "John":[2119852479,2088424136],
