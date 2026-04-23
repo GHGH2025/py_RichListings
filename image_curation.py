@@ -107,11 +107,12 @@ Treat as valid "property photos" (KEEP = true) when the image clearly shows:
 
 What to SKIP (KEEP = false; image must NOT be treated as a property photo):
 - Company logos, QR codes, headshots/people/selfies, agent cards, business cards, signatures.
-- Screenshots of text, watermarked ads/flyers, memes, heavy text tiles, price/terms graphics.
+- Screenshots of text, ads/flyers, memes, heavy text tiles, price/terms graphics.
 - Any image that is primarily a marketing tile, flyer, banner, or logo, EVEN IF there is
   a property photo in the background. If the logo/text/branding covers a large part of
   the image or is the main focus, SKIP it and use a reason like "logo", "text tile",
   or "marketing banner".
+- A small company watermark/logo overlay on an otherwise valid property photo is OK — KEEP it. Only skip if the logo/branding is the main focus of the image.
 - Website/app listing screenshots (portal pages, app UIs, search results, etc.).
 - Generic maps (e.g., Google Maps with a pin), location diagrams, zoning diagrams,
   parcel drawings that are not actual photos.
