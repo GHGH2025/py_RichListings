@@ -143,16 +143,19 @@ def _geo_extract(geo: dict) -> dict:
     types = geo.get("types", []) or []
     comps = geo.get("address_components", []) or []
 
-    postal = route = None
+    postal = route = street_number = None
     for c in comps:
         ts = c.get("types", []) or []
         if "postal_code" in ts:
             postal = c.get("long_name") or c.get("short_name")
         elif "route" in ts:
             route = c.get("short_name") or c.get("long_name")
+        elif "street_number" in ts:
+            street_number = c.get("long_name") or c.get("short_name")
 
     is_full = ("premise" in types) or ("street_address" in types)
-    return {"pid": pid, "fa": fa, "postal": postal, "route": route, "is_full": is_full}
+    return {"pid": pid, "fa": fa, "postal": postal, "route": route,
+            "street_number": street_number, "is_full": is_full}
 
 
 def _ensure_geo(pl) -> Optional[dict]:
@@ -235,15 +238,19 @@ def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
         if hit:
             return hit
 
-    # 3) partial: formatted_address contains both postal and route (broad but useful)
+    # 3) partial: require street_number + route + postal in formatted_address
+    #    (skipped if street_number is missing to avoid false matches across
+    #     different addresses on the same street + postal — e.g. 1589 vs 1701 NW 6th Ave)
     postal = x.get("postal")
     route  = x.get("route")
-    if postal and route:
+    street_number = x.get("street_number")
+    if postal and route and street_number:
+        street_prefix = f"{street_number} {route}"   # e.g. "1701 NW 6th Ave"
         qs = (
             ParsedListing.objects(
                 base_q
+                & Q(geo_code_response__formatted_address__icontains=street_prefix)
                 & Q(geo_code_response__formatted_address__icontains=postal)
-                & Q(geo_code_response__formatted_address__icontains=route)
             )
             .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status", "geo_code_response")
             .order_by("-skipped_or_posted_at")
@@ -335,7 +342,7 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
                 set__status="skipped",
                 set__rules_ai_reason=_reason(
                     "duplicate found but price comparison unavailable",
-                    f"prev={prev_price}, curr={curr_price}"
+                    f"prev_id={prior.id} prev={prev_price}, curr={curr_price}"
                 ),
                 set__skipped_or_posted_at=_now(),
                 set__updated_at=_now(),
@@ -356,7 +363,7 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
                 set__status="skipped",
                 set__rules_ai_reason=_reason(
                     "duplicate found; price not low enough",
-                    f"drop={drop:.1%} (< 6%) prev={prev_price:.0f} -> curr={curr_price:.0f}"
+                    f"prev_id={prior.id} drop={drop:.1%} (< 6%) prev={prev_price:.0f} -> curr={curr_price:.0f}"
                 ),
                 set__skipped_or_posted_at=_now(),
                 set__updated_at=_now(),
