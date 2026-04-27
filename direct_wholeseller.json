@@ -334,5 +334,23 @@
     "email": "jpaul@7kidsandflipping.com",
     "phone": "850-357-4692",
     "updateFlagForPodio": "true"
+  },
+  "rami@yourtrustedbuyer.com":{
+    "name": "Rami Shahmram",
+    "email": "rami@yourtrustedbuyer.com",
+    "phone": "",
+    "updateFlagForPodio": "true"
+  },
+  "alex@diplomatpropertysolutionsllc.ccsend.com":{
+    "name": "Alex Virelles",
+    "email": "alex@exclusivepremierrealty.com",
+    "phone": "561-906-2229",
+    "updateFlagForPodio": "true"
+  },
+  "deals@lc.gregslistdeals.com":{
+    "name": "Gregory Cain",
+    "email": "deals@lc.gregslistdeals.com",
+    "phone": "941-263-2647",
+    "updateFlagForPodio": "true"
   }
 }

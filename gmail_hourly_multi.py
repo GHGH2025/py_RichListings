@@ -90,7 +90,9 @@ ACCOUNTS = [
             "alex@exclusivepremierrealty.com",
             "skylinelanddeals@gmail.com",
             "khaliq.king@71476798.mailchimpapp.com",
-            "jarednlarimer-gmail.com@shared1.ccsend.com"
+            "jarednlarimer-gmail.com@shared1.ccsend.com",
+            "alex@diplomatpropertysolutionsllc.ccsend.com",
+            "deals@lc.gregslistdeals.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
@@ -132,7 +134,8 @@ ACCOUNTS = [
             "arthurtamasi-gmail.com@shared1.ccsend.com",
             "info@smileehouse.com",
             "houseflipsforall@gmail.com",
-            "palmervilagi@freedomproperties23.com"
+            "palmervilagi@freedomproperties23.com",
+            "rami@yourtrustedbuyer.com"
 
 
             # or: "*@oasispropertyinvestments.ccsend.com",
