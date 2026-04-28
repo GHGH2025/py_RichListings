@@ -92,7 +92,8 @@ ACCOUNTS = [
             "khaliq.king@71476798.mailchimpapp.com",
             "jarednlarimer-gmail.com@shared1.ccsend.com",
             "alex@diplomatpropertysolutionsllc.ccsend.com",
-            "deals@lc.gregslistdeals.com"
+            "deals@lc.gregslistdeals.com",
+            "miami@southfloridainvestors.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
