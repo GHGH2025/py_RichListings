@@ -352,5 +352,11 @@
     "email": "deals@lc.gregslistdeals.com",
     "phone": "941-263-2647",
     "updateFlagForPodio": "true"
+  },
+  "miami@southfloridainvestors.com":{
+    "name": "Rich Urban",
+    "email": "miami@southfloridainvestors.com",
+    "phone": "305-741-3122",
+    "updateFlagForPodio": "true"
   }
 }
