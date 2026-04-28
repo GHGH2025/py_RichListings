@@ -25,7 +25,7 @@ ACCOUNTS = [
         "base_dir": os.path.join("accounts", "acct1"),
         "allowed_senders": [
             # leave empty to allow everyone, or add patterns:
-            "info-jefinancialholdings.com@shared1.ccsend.com ",               # name contains
+            "info-jefinancialholdings.com@shared1.ccsend.com",               # name contains
             "david@theligongroup.com",
             "talya@safetynetinv.com",
             "info@assetsbyalec.com",
