@@ -364,5 +364,11 @@
     "email": "jonathan.miamiproperties@gmail.com",
     "phone": "786-985-1143",
     "updateFlagForPodio": "false"
+  },
+  "frank@danandfranksellhouses.com":{
+    "name": "Frank",
+    "email": "frank@danandfranksellhouses.com",
+    "phone": "954-560-4663",
+    "updateFlagForPodio": "true"
   }
 }

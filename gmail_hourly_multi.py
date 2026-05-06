@@ -136,7 +136,8 @@ ACCOUNTS = [
             "info@smileehouse.com",
             "houseflipsforall@gmail.com",
             "palmervilagi@freedomproperties23.com",
-            "rami@yourtrustedbuyer.com"
+            "rami@yourtrustedbuyer.com",
+            "frank@danandfranksellhouses.com"
 
 
             # or: "*@oasispropertyinvestments.ccsend.com",
