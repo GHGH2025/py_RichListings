@@ -93,7 +93,8 @@ ACCOUNTS = [
             "jarednlarimer-gmail.com@shared1.ccsend.com",
             "alex@diplomatpropertysolutionsllc.ccsend.com",
             "deals@lc.gregslistdeals.com",
-            "miami@southfloridainvestors.com"
+            "miami@southfloridainvestors.com",
+            "vip@theligongroup.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain
