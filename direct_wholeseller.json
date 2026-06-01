@@ -376,5 +376,11 @@
     "email": "gene@bankonit.com",
     "phone": "954-816-4363",
     "updateFlagForPodio": "true"
+  },
+  "vip@theligongroup.com":{
+    "name": "David",
+    "email": "vip@theligongroup.com",
+    "phone": "754-800-4443",
+    "updateFlagForPodio": "false"
   }
 }
