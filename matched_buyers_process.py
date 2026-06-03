@@ -714,6 +714,11 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     email_subject = templates["email"].get("subject", "New deal for your review")
     email_template = templates["email"]["html"]
 
+    # listings = ParsedListing.objects(
+    #     buyer_send_status="des_generated",
+    #     matched_buyer_ids__ne=[]
+    # ).limit(limit)
+
     listings = (
         ParsedListing.objects(buyer_send_status="des_generated")
         .filter(__raw__={
@@ -788,6 +793,10 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                 pics_block_email = ""
 
             # ---- load matched buyers ----
+            # buyer_ids = [ObjectId(bid) for bid in (pl.matched_buyer_ids or []) if bid]
+            # if not buyer_ids:
+            #     raise ValueError("No matched_buyer_ids present")
+
             source_ids = (pl.re_matched_buyer_ids if getattr(pl, "rematch", False) else pl.matched_buyer_ids) or []
             buyer_ids = [ObjectId(bid) for bid in source_ids if bid]
             if not buyer_ids:
