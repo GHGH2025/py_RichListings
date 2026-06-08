@@ -94,7 +94,9 @@ ACCOUNTS = [
             "alex@diplomatpropertysolutionsllc.ccsend.com",
             "deals@lc.gregslistdeals.com",
             "miami@southfloridainvestors.com",
-            "vip@theligongroup.com"
+            "vip@theligongroup.com",
+            "rich@jointventurehere.com",
+            "investors@ecologicteam.com"
 
     #         # "agent@broker.com",            # exact email
     #         # "*@myfavdomain.com",           # any user at this domain

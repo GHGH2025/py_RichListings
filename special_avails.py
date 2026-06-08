@@ -85,6 +85,7 @@ DEFAULT_WHOLESALER_BUCKET: Dict[str, List[str]] = {
     "Patrick": ["ljinvestmentfirm-gmail.com@shared1.ccsend.com"],
     "Alex_Virelles": ["alex@exclusivepremierrealty.com","alex@diplomatpropertysolutionsllc.ccsend.com"],
     "Lenny":["lenny-riverwalkproperties.net@shared1.ccsend.com"],
+    "Ecologic Team":["investors@ecologicteam.com"]
 }
 
 DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {

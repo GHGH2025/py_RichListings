@@ -382,5 +382,17 @@
     "email": "vip@theligongroup.com",
     "phone": "754-800-4443",
     "updateFlagForPodio": "false"
+  },
+  "rich@jointventurehere.com":{
+    "name": "Rich Burdette",
+    "email": "rich@jointventurehere.com",
+    "phone": "754-200-1204",
+    "updateFlagForPodio": "true"
+  },
+  "investors@ecologicteam.com":{
+    "name": "Ecologic Team",
+    "email": "investors@ecologicteam.com",
+    "phone": "",
+    "updateFlagForPodio": "true"
   }
 }
