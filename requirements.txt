@@ -10,3 +10,7 @@ beautifulsoup4
 schedule
 langchain
 langchain-community
+fastapi
+uvicorn
+pydantic
+PyJWT
