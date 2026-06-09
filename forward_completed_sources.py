@@ -382,41 +382,15 @@
 
 
 import os
-import json
 from datetime import datetime
 from typing import Dict, List, Optional
 from mongoengine.queryset.visitor import Q
 
 from models import FilteredListingEmail, ParsedListing
 from forwardInline import forward_inline_html  # wherever you put your function
+from services.direct_wholesaler_service import get_wholesaler_map
 
 ALLOWED_FINALS = {"posted", "skipped", "image_curation_failed", "primary_image_failed","bypassed","skipped_quota"}
-
-# ------------ Direct Wholeseller config ------------
-DIRECT_WHOLESELLER_PATH = os.path.join(
-    os.path.dirname(__file__),
-    "direct_wholeseller.json"
-)
-
-# email (lowercased) -> config dict
-DIRECT_WHOLESELLER_MAP: Dict[str, dict] = {}
-
-try:
-    with open(DIRECT_WHOLESELLER_PATH, "r", encoding="utf-8") as f:
-        raw = json.load(f) or {}
-        if isinstance(raw, dict):
-            # normalize keys to lowercase emails
-            DIRECT_WHOLESELLER_MAP = {
-                str(k).strip().lower(): (v or {})
-                for k, v in raw.items()
-            }
-        else:
-            print("Warning: direct_wholeseller.json root is not an object; ignoring.")
-except FileNotFoundError:
-    print("Info: direct_wholeseller.json not found; Ai Direct Wholesaler Finder labeling disabled.")
-except Exception as e:
-    print(f"Warning: could not load direct_wholeseller.json: {e}")
-
 
 def _get_sender_email(fe: FilteredListingEmail) -> Optional[str]:
     """
@@ -438,16 +412,14 @@ def _get_sender_email(fe: FilteredListingEmail) -> Optional[str]:
 
 def _is_direct_wholeseller_sender(from_email: Optional[str]) -> bool:
     """
-    Check if this sender is configured as Direct Wholeseller with updateFlagForPodio == 'true'.
+    Check if this sender is configured as Direct Wholeseller with updateFlagForPodio enabled.
     """
     if not from_email:
         return False
-    cfg = DIRECT_WHOLESELLER_MAP.get(from_email.strip().lower())
+    cfg = get_wholesaler_map().get(from_email.strip().lower())
     if not cfg or not isinstance(cfg, dict):
         return False
-    flag = str(cfg.get("updateFlagForPodio", "")).strip().lower()
-    # JSON spec: 'true' is a string
-    return flag == "true"
+    return bool(cfg.get("updateFlagForPodio"))
 
 
 def _fmt_addr(pl: ParsedListing) -> str:

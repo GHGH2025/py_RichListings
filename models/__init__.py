@@ -432,3 +432,6 @@ class WebFormBuyerSubmission(Document):
 
     def touch(self):
         self.updated_at = datetime.utcnow()
+
+
+from .direct_wholesaler import DirectWholesaler

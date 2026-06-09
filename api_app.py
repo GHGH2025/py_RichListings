@@ -61,13 +61,21 @@ from config_runtime import set_whatsapp_send_mode, get_whatsapp_send_mode
 
 from buyer_submissions_api import router as buyer_submissions_router
 from buyer_matching_api import router as buyer_matching_router
+from routes.direct_wholesaler import router as direct_wholesaler_router
 
+from mongo_engine_conn import init_db
 from special_avails import snapshot_yesterday_special_avail, process_manny_special_avails
 
 
 START_TIME = float(os.getenv("APP_START_TIME", str(time.time())))
 
 app = FastAPI(title="Worker API", version="1.0.0")
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
 
 # ✅ CORS must be added before routers
 ALLOWED_ORIGINS = [
@@ -89,6 +97,7 @@ app.add_middleware(
 app.include_router(rc_media_router)
 app.include_router(buyer_submissions_router)
 app.include_router(buyer_matching_router)
+app.include_router(direct_wholesaler_router)
 
 
 class ModePayload(BaseModel):

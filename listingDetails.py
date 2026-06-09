@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from models import ParsedListing, FilteredListingEmail
 from ai_address_search_keys import update_parsed_listing_address_keys
 from google_formatter import get_street_and_city, geocode_response
+from services.direct_wholesaler_service import get_wholesaler_map
 
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -17,48 +18,6 @@ import logging
 # -------------------------
 # Load environment variables
 load_dotenv()
-
-# Path + loader for direct wholeseller config
-DIRECT_WHOLESELLER_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "direct_wholeseller.json",
-)
-
-def _load_direct_wholeseller_map() -> Dict[str, Any]:
-    """
-    Load direct_wholeseller.json as:
-    {
-      "email1@example.com": { "name": "...", "phone": "...", "email": "...", "updateFlagForPodio" :"true/false" },
-      ...
-    }
-    Keys are normalized to lowercase for robust matching.
-    """
-    try:
-        with open(DIRECT_WHOLESELLER_PATH, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-
-        if not isinstance(raw, dict):
-            logging.warning("direct_wholeseller.json is not a dict; ignoring.")
-            return {}
-
-        out: Dict[str, Any] = {}
-        for k, v in raw.items():
-            if not isinstance(k, str):
-                continue
-            email_key = k.strip().lower()
-            if not email_key:
-                continue
-            out[email_key] = v
-        return out
-    except FileNotFoundError:
-        logging.info("direct_wholeseller.json not found at %s; skipping wholeseller overrides.", DIRECT_WHOLESELLER_PATH)
-    except Exception as e:
-        logging.exception("Failed to load direct_wholeseller.json: %s", e)
-    return {}
-
-# Loaded once at import
-DIRECT_WHOLESELLER_MAP: Dict[str, Any] = _load_direct_wholeseller_map()
-
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # supports structured outputs
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -451,6 +410,7 @@ def upsert_parsed_listings_from_html(
     )
     listings = result.get("listings", []) or []
     saved_ids: List[str] = []
+    wholesaler_map = get_wholesaler_map()
     
     # bounds
     start_i = 1
@@ -515,7 +475,7 @@ def upsert_parsed_listings_from_html(
             dw_info = None
             if sender:
                 # sender is already lowercased by _sender_email_safe
-                dw_info = DIRECT_WHOLESELLER_MAP.get(sender)
+                dw_info = wholesaler_map.get(sender)
 
             if dw_info and isinstance(dw_info, dict):
                 # Mark as not_processed for further handling elsewhere
@@ -539,9 +499,10 @@ def upsert_parsed_listings_from_html(
                         lst["agent_phone"] = str(phone)
                     if email:
                         lst["agent_email"] = email
-                    if updateFlagForPodio:
-                        # ensure string, but keep formatting flexible
-                        lst["updateFlagForPodio"] = updateFlagForPodio
+                    if updateFlagForPodio is not None:
+                        lst["updateFlagForPodio"] = (
+                            "true" if updateFlagForPodio else "false"
+                        )
 
                     
                 except Exception as e:
