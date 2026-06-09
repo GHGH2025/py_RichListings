@@ -63,6 +63,7 @@ from buyer_submissions_api import router as buyer_submissions_router
 from buyer_matching_api import router as buyer_matching_router
 from routes.direct_wholesaler import router as direct_wholesaler_router
 from routes.scraping_list import router as scraping_list_router
+from routes.special_avail_list import router as special_avail_list_router
 
 from mongo_engine_conn import init_db
 from special_avails import snapshot_yesterday_special_avail, process_manny_special_avails
@@ -100,6 +101,7 @@ app.include_router(buyer_submissions_router)
 app.include_router(buyer_matching_router)
 app.include_router(direct_wholesaler_router)
 app.include_router(scraping_list_router)
+app.include_router(special_avail_list_router)
 
 
 class ModePayload(BaseModel):

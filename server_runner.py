@@ -20,6 +20,7 @@ from forward_completed_sources import forward_completed_source_emails
 from whatsapp_sender import process_whatsapp_queue
 from mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing, SpecialAvail, ScrapingList
+from models.special_avail_list import SpecialAvailList
 from podio_direct_wholeseller import process_direct_wholeseller_batch,initialize_direct_wholeseller_flag
 from whatsapp_keepalive import send_keepalive_template, parse_recipients_env
 
@@ -279,6 +280,7 @@ if __name__ == "__main__":
         ParsedListing.ensure_indexes()
         WebFormBuyerSubmission.ensure_indexes()
         ScrapingList.ensure_indexes()
+        SpecialAvailList.ensure_indexes()
 
         # gmail_fetch_all()
     except Exception:
