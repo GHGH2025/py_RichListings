@@ -17,93 +17,13 @@ from emailExtract import extract_email_body_simple
 from forwardInline import forward_inline_html
 from mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing, WindowRange, FromInfo, InternalDate, Bodies
-# -------------------- CONFIGURE YOUR ACCOUNTS HERE --------------------
+from services.scraping_list_service import get_patterns_for_account
+
+# Gmail account OAuth paths — sender patterns live in MongoDB `scraping_list`.
 ACCOUNTS = [
-    # Example for acct1 (keep commented if not used)
     {
         "label": "acct1",
         "base_dir": os.path.join("accounts", "acct1"),
-        "allowed_senders": [
-            # leave empty to allow everyone, or add patterns:
-            "info-jefinancialholdings.com@shared1.ccsend.com",               # name contains
-            "david@theligongroup.com",
-            "talya@safetynetinv.com",
-            "info@assetsbyalec.com",
-            "todd@southfloridawholesalehomes.ccsend.com",
-            "tsims-southfloridacashhomebuyers.com@shared1.ccsend.com",
-            "kevin-titlerate.com@shared1.ccsend.com",
-            "jpaul@7kidsandflipping.com",
-            "the3minvestments-gmail.com@shared1.ccsend.com",
-            "tricountyflippers-gmail.com@shared1.ccsend.com",
-            # "jc-quickturnproperties.com@shared1.ccsend.com",
-            "erek@marketing.vesta.app",
-            "info@zcginvestments.com",
-            "john@wholesalejax.com",
-            "sales-islandlivingrealty.com@shared1.ccsend.com",
-            "re@1motivatedseller.com",
-            "carlos@ccjinvestmentsgroup.com",
-            "lenny-riverwalkproperties.net@shared1.ccsend.com",
-            "info@avainvestmentproperties.com",
-            "info-abccapitalgroupusa.com@shared1.ccsend.com",
-            "deals@allaboutrealestate.com",
-            "@homeventureinvestments.com",
-            "manny@homeventureinvestments.com",
-            "gene@bankonit.com",
-            "oviedomike@oviedomike.robly.com",
-            "dispositionsynergy-gmail.com@shared1.ccsend.com",
-            "dispositions@maxofferproperties.com",
-            "ryan@floridahomeownersolutions.com",
-            "sharonr-32westrealty.com@shared1.ccsend.com",
-            "sunny9444-hotmail.com@shared1.ccsend.com",
-            "sunny9444@hotmail.com",
-            "southfloridadispo@joehomebuyer.com",
-            "branden@prop-hunters.com",
-            "erniethetitleguy-gmail.com@shared1.ccsend.com",
-            "deals@aoinvestments.ccsend.com",
-            "ffassioli@peakregroup.ccsend.com",
-            # "jc@stellarholdingsllc.ccsend.com",
-            "offmarketdeals@encorehomeoffer.com",
-            "npabon34@gmail.com.send.mailchimpapp.com",
-            "thesimplehomebuyers@95925329.mailchimpapp.com",
-            "michaelzalkind@safetynetinv.com",
-            "mitch.conyers@poplarhomebuyers.com",
-            "mike.barone@outlook.com",
-            "lorena@safetynetrealty.com",
-            "may@lpihomebuyers.com",
-            "flrpmwholesalefl-gmail.com@shared1.ccsend.com",
-            "deals@onemotivatedseller.com",
-            "simon@stellarholdingsllc.ccsend.com",
-            "info@5thavefinancialgroup.com",
-            "info@f13deluxe.com",
-            "oasispropertyinvestments@gmail.com",
-            "invest.teamalpha-gmail.com@shared1.ccsend.com",
-            "m.mcgrane@stellarholdingsllc.ccsend.com",
-            "ljinvestmentfirm-gmail.com@shared1.ccsend.com",
-            "leodorta@buycashhome.com",
-            "cac1979@215211166.mailchimpapp.com",
-            "mike@hambyhousing.com",
-            "john.mckinley09@gmail.com",
-            "charlesscott09@yahoo.com",
-            "boris@paradisebeachteam.com",
-            "akotinvestments@115874394.mailchimpapp.com",
-            "akotinvestments@gmail.com",
-            "alex@exclusivepremierrealty.com",
-            "skylinelanddeals@gmail.com",
-            "khaliq.king@71476798.mailchimpapp.com",
-            "jarednlarimer-gmail.com@shared1.ccsend.com",
-            "alex@diplomatpropertysolutionsllc.ccsend.com",
-            "deals@lc.gregslistdeals.com",
-            "miami@southfloridainvestors.com",
-            "vip@theligongroup.com",
-            "rich@jointventurehere.com",
-            "investors@ecologicteam.com"
-
-    #         # "agent@broker.com",            # exact email
-    #         # "*@myfavdomain.com",           # any user at this domain
-        ],
-        "skip_senders": [
-            # optional blocklist patterns (checked after allow)
-        ],
         "only_inbox": True,
         "fallback_lookback_min": 60,
         "credentials_filename": "credentials.json",
@@ -113,65 +33,12 @@ ACCOUNTS = [
     {
         "label": "acct2",
         "base_dir": os.path.join("accounts", "acct2"),
-        "allowed_senders": [
-            # examples:
-            "richard@oasispropertyinvestments.ccsend.com",
-            "oasispropertydispo@gmail.com",
-            "alex@lexicorealty.ccsend.com",
-            # "iwantacheaphousenow-gmail.com@shared1.ccsend.com",
-            "craig@nowhomebuyers.com",
-            "ctorres@spectrumpropertygroup.com",
-            "ryan@floridahomeownersolutions.com",
-            "ffassioli@peakregroup.ccsend.com",
-            "sguerrero-housingig.com@shared1.ccsend.com",
-            "erniethetitleguy-gmail.com@shared1.ccsend.com",
-            "info-rushproperties.net@shared1.ccsend.com",
-            "cody@graystoneig.com",
-            "deals@aoinvestments.ccsend.com",
-            "info+hoodsyhomes.com@ec1.msgsndr.org",
-            "lenny-riverwalkproperties.net@shared1.ccsend.com",
-            "judson@securehomeinvest.com",
-            "simon@stellarholdingsllc.ccsend.com",
-            "info@hoodsyhomes.com",
-            "dispo@sellwholesalehouses.com",
-            "annie@camarottihomesllc.ccsend.com",
-            "arthurtamasi-gmail.com@shared1.ccsend.com",
-            "info@smileehouse.com",
-            "houseflipsforall@gmail.com",
-            "palmervilagi@freedomproperties23.com",
-            "rami@yourtrustedbuyer.com",
-            "frank@danandfranksellhouses.com"
-
-
-            # or: "*@oasispropertyinvestments.ccsend.com",
-        ],
-        "skip_senders": [
-            # e.g., "noreply@*"
-        ],
         "only_inbox": True,
         "fallback_lookback_min": 60,
         "credentials_filename": "credentials.json",
         "token_filename": "token.json",
         "state_filename": "state.json",
     },
-    #     {
-    #     "label": "acct3",
-    #     "base_dir": os.path.join("accounts", "acct3"),
-    #     "allowed_senders": [
-    #         # examples:
-    #         # "richard@oasispropertyinvestments.ccsend.com",
-    #         "sparsh@concepttocode.in"
-    #         # or: "*@oasispropertyinvestments.ccsend.com",
-    #     ],
-    #     "skip_senders": [
-    #         # e.g., "noreply@*"
-    #     ],
-    #     "only_inbox": True,
-    #     "fallback_lookback_min": 60,
-    #     "credentials_filename": "credentials.json",
-    #     "token_filename": "token.json",
-    #     "state_filename": "state.json",
-    # },
 ]
 # Gmail read-only scope
 SCOPES = [
@@ -211,11 +78,17 @@ def _ensure_paths(acct: dict) -> AccountConfig:
     if not os.path.isabs(state_path):
         state_path = os.path.join(base_dir, state_path)
 
+    allowed_senders, skip_senders = get_patterns_for_account(acct["label"])
+    if acct.get("allowed_senders"):
+        allowed_senders = [s.strip() for s in acct.get("allowed_senders", []) if s.strip()]
+    if acct.get("skip_senders"):
+        skip_senders = [s.strip() for s in acct.get("skip_senders", []) if s.strip()]
+
     return AccountConfig(
         label=acct["label"],
         base_dir=base_dir,
-        allowed_senders=[s.strip() for s in acct.get("allowed_senders", []) if s.strip()],
-        skip_senders=[s.strip() for s in acct.get("skip_senders", []) if s.strip()],
+        allowed_senders=allowed_senders,
+        skip_senders=skip_senders,
         only_inbox=acct["only_inbox"],
         fallback_lookback_min=acct.get("fallback_lookback_min", 60),
         credentials_path=cred_path,

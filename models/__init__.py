@@ -435,3 +435,4 @@ class WebFormBuyerSubmission(Document):
 
 
 from .direct_wholesaler import DirectWholesaler
+from .scraping_list import ScrapingList
