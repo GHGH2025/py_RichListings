@@ -166,6 +166,12 @@ def _response_format() -> Dict[str, Any]:
 
 
 
+def _address_starts_with_number(address: str) -> bool:
+    """True when the street address begins with a digit (e.g. '1234 Main St')."""
+    s = (address or "").strip()
+    return bool(s) and s[0].isdigit()
+
+
 IMAGE_RULES_DEFAULT = """
 - For each listing, populate image fields:
   • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
@@ -213,6 +219,7 @@ OUTPUT CONTRACT (must follow exactly):
 - For "list_price_usd", NEVER use ARV / "after repair value" / "estimated value" numbers. Only use the actual asking / purchase / contract price the property is being offered at.
 
 Rules:
+- Do NOT extract a listing when its address starts with a number (e.g. skip "1234 India Street"; include "India Street").
 - DO NOT GUESS. Only return values explicitly present in the HTML (or safe numeric conversions/derivations described below).
 - If a field is missing/unclear, return null or "unknown" (for enums).
 - Normalize numbers: strip $ and commas. Convert acres->sqft (1 acre = 43560 sqft) when only acres given.
@@ -437,6 +444,10 @@ def upsert_parsed_listings_from_html(
             city  = (lst.get("city") or "").strip()
             state = (lst.get("state") or "").strip()
             zip_  = (lst.get("zip") or "").strip()
+
+            if _address_starts_with_number(addr):
+                status_for_insert = "bypassed"
+
             # ✨ NEW: try to normalize with Google
             geo_js = None
             try:
