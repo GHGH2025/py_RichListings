@@ -1,5 +1,5 @@
-version: 2
-updated: "2026-06-11"
+version: 1
+updated: "2025-09-05"
 
 policy: |
   Apply the rules below IN ORDER. Stop at the first rule that applies and is not exempted by its “Unless” line.
@@ -9,14 +9,8 @@ policy: |
   “South Florida Tri-County” means Miami-Dade, Broward, or Palm Beach.
   “Rest of Florida” means Florida locations outside the South Florida Tri-County (including St. Lucie and Fort Pierce).
   For condos, “HOA fee” means the monthly HOA fee plus any monthly assessments; if both are present, sum them.
-  An address “starts with a number” when the address field begins with a digit after trimming whitespace (e.g. "1234 India Street" yes; "India Street" no).
 
 rules:
-  - id: R0
-    text: >
-      Skip any listing whose address starts with a number.
-      Example: "1234 India Street" => skip; "India Street" => pass this rule.
-
   - id: R1
     text: >
       No 2-bed property over $250,000 in South Florida Tri-County unless they are on the water.
