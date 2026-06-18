@@ -7,6 +7,7 @@ openai
 PyYAML
 dropbox
 beautifulsoup4
+html2text
 schedule
 langchain
 langchain-community
@@ -14,3 +15,7 @@ fastapi
 uvicorn
 pydantic
 PyJWT
+tzdata
+boto3
+requests
+twilio

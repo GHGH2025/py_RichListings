@@ -16,6 +16,10 @@ import re
 from podio_direct_wholeseller import get_podio_access_token  # <-- make sure this import path is correct
 
 from openai import OpenAI
+from services.special_avail_list_service import (
+    get_wholesaler_config,
+    get_wholesaler_podio_bucket,
+)
 
 MATCH_MODEL = os.getenv("OPENAI_MATCH_MODEL", "gpt-4.1-mini")
 MATCH_WEBHOOK_URL = os.getenv("SPECIAL_AVAIL_MATCH_WEBHOOK_URL", "").strip()
@@ -39,201 +43,6 @@ if not PODIO_STATUS_ACTIVE_OPTION_ID:
 PODIO_STATUS_ACTIVE_OPTION_ID = int(PODIO_STATUS_ACTIVE_OPTION_ID)
 
 
-# -------------------------
-# CONFIG: dynamic sender bucket
-# -------------------------
-# Recommended: store JSON in env so you can update without code changes.
-# Example value:
-# WHOLESALER_SENDER_BUCKET_JSON='[
-#   {"email":"deals@aoinvestments.ccsend.com","podio_item_id":123},
-#   {"email":"foo@bar.com","podio_item_id":456}
-# ]'
-WHOLESALER_SENDER_BUCKET_JSON = os.getenv("WHOLESALER_SENDER_BUCKET_JSON", "").strip()
-
-
-# DEFAULT_WHOLESALER_BUCKET: Dict[str, str] = {
-#     # "sender_email": "podio_item_id"
-#    "info-jefinancialholdings.com@shared1.ccsend.com":857496733,
-#     "another@sender.com": 778054254,
-# }
-
-DEFAULT_WHOLESALER_BUCKET: Dict[str, List[str]] = {
-    "Johnathan": [
-        "info-jefinancialholdings.com@shared1.ccsend.com",
-    ],
-    "David": [
-        "david@theligongroup.com",
-    ],
-    "Willy":["sales-islandlivingrealty.com@shared1.ccsend.com"],
-    "Craig":["craig@nowhomebuyers.com"],
-    "John":["john@wholesalejax.com"],
-    "JC":["m.mcgrane@stellarholdingsllc.ccsend.com"],
-    "Todd":["tsims-southfloridacashhomebuyers.com@shared1.ccsend.com","kevin-titlerate.com@shared1.ccsend.com"],
-    "Richard":["richard@oasispropertyinvestments.ccsend.com","oasispropertydispo@gmail.com","oasispropertyinvestments@gmail.com"],
-    "Derek":["derek@marketing.vesta.app"],
-    "Mike_Barone":["mike.barone@outlook.com"],
-    "Judson":["judson@securehomeinvest.com"],
-    "Jerry_Vega":["tricountyflippers-gmail.com@shared1.ccsend.com"],
-    "Mark_RPM_Wholesale":["flrpmwholesalefl-gmail.com@shared1.ccsend.com","invest.teamalpha-gmail.com@shared1.ccsend.com"],
-    "Jesus":["deals@onemotivatedseller.com"],
-    "Simon":["simon@stellarholdingsllc.ccsend.com"],
-    "Ernie":["erniethetitleguy-gmail.com@shared1.ccsend.com"],
-    "Alex":["alex@lexicorealty.ccsend.com"],
-    "Max_Mudd":["dispo@sellwholesalehouses.com"],
-    "Danny_Dickson":["info-rushproperties.net@shared1.ccsend.com"],
-    "Fassioli":["ffassioli@peakregroup.ccsend.com"],
-    "Patrick": ["ljinvestmentfirm-gmail.com@shared1.ccsend.com"],
-    "Alex_Virelles": ["alex@exclusivepremierrealty.com","alex@diplomatpropertysolutionsllc.ccsend.com"],
-    "Lenny":["lenny-riverwalkproperties.net@shared1.ccsend.com"],
-    "Ecologic Team":["investors@ecologicteam.com"]
-}
-
-DEFAULT_WHOLESALER_BUCKET_PODIO: Dict[str, List[int]] = {
-    # "sender_email": [podio_item_id_1, podio_item_id_2, ...]
-    "Johnathan": [857496733, 778054254],
-    "David":[816254022,3269947738],
-    "Willy":[618782696],
-    "Craig":[618782689],
-    "John":[2119852479,2088424136],
-    "JC":[2084646293,1802627987],
-    "Todd":[618782750],
-    "Richard":[2083808740],
-    "Derek":[2775546975],
-    "Mike_Barone":[1854753148],
-    "Judson":[2937718049],
-    "Jerry_Vega":[2098341539],
-    "Mark_RPM_Wholesale":[3251963737],
-    "Jesus":[3204466987],
-    "Simon":[3254339453],
-    "Ernie":[3166266096],
-    "Alex":[2088423246],
-    "Max_Mudd":[1881820249],
-    "Danny_Dickson":[3145803799],
-    "Fassioli":[3109183303],
-    "Patrick": [1634654520],
-    "Alex_Virelles": [3289553746],
-    "Lenny":[816254056]
-    # "another@sender.com": [111111111, 222222222],
-}
-
-# def _load_wholesaler_bucket() -> Dict[str, str]:
-#     raw = (os.getenv("WHOLESALER_BUCKET_JSON") or "").strip()
-#     if not raw:
-#         # fallback to hardcoded
-#         return {k.lower().strip(): str(v).strip() for k, v in DEFAULT_WHOLESALER_BUCKET.items() if k and v}
-
-#     try:
-#         val = json.loads(raw)
-#         # If list of objects
-#         if isinstance(val, list):
-#             out: Dict[str, str] = {}
-#             for it in val:
-#                 if not isinstance(it, dict):
-#                     continue
-#                 email = (it.get("email") or "").strip().lower()
-#                 podio_item_id = str(it.get("podio_item_id") or "").strip()
-#                 if email and podio_item_id:
-#                     out[email] = podio_item_id
-#             return out
-
-#         # If dict mapping email->podio
-#         if isinstance(val, dict):
-#             out = {}
-#             for k, v in val.items():
-#                 email = str(k or "").strip().lower()
-#                 podio_item_id = str(v or "").strip()
-#                 if email and podio_item_id:
-#                     out[email] = podio_item_id
-#             return out
-
-#     except Exception:
-#         pass
-
-#     # If env is invalid JSON, fallback to hardcoded
-#     return {k.lower().strip(): str(v).strip() for k, v in DEFAULT_WHOLESALER_BUCKET.items() if k and v}
-
-
-
-def _load_wholesaler_config() -> Dict[str, List[str]]:
-    """
-    Returns config in the shape:
-      { wholesaler_name: [sender_email_1, sender_email_2, ...] }
-
-    If WHOLESALER_BUCKET_JSON is set, supports:
-
-    - Dict form:
-      {
-        "Johnathan": ["info@...", "alex@..."],
-        "David": ["david@..."]
-      }
-
-    - List form:
-      [
-        { "name": "Johnathan", "emails": ["info@...", "alex@..."] },
-        { "name": "David", "emails": ["david@..."] }
-      ]
-
-    Otherwise falls back to DEFAULT_WHOLESALER_BUCKET.
-    """
-    raw = (os.getenv("WHOLESALER_BUCKET_JSON") or "").strip()
-    cfg: Dict[str, List[str]] = {}
-
-    def _norm_email_list(val) -> List[str]:
-        out: List[str] = []
-        if isinstance(val, list):
-            src = val
-        else:
-            src = [val]
-        for v in src:
-            if not v:
-                continue
-            s = str(v).strip().lower()
-            if s:
-                out.append(s)
-        return out
-
-    # Try env JSON first
-    if raw:
-        try:
-            val = json.loads(raw)
-
-            # Case 1: dict mapping name -> emails/list
-            if isinstance(val, dict):
-                for name, emails in val.items():
-                    name_norm = (name or "").strip()
-                    email_list = _norm_email_list(emails)
-                    if name_norm and email_list:
-                        cfg[name_norm] = email_list
-                if cfg:
-                    return cfg
-
-            # Case 2: list of {name, emails}
-            if isinstance(val, list):
-                for it in val:
-                    if not isinstance(it, dict):
-                        continue
-                    name = (it.get("name") or "").strip()
-                    emails_raw = it.get("emails")
-                    email_list = _norm_email_list(emails_raw)
-                    if name and email_list:
-                        cfg[name] = email_list
-                if cfg:
-                    return cfg
-
-        except Exception:
-            # fall through to defaults
-            pass
-
-    # Fallback: DEFAULT_WHOLESALER_BUCKET
-    for name, emails in DEFAULT_WHOLESALER_BUCKET.items():
-        name_norm = (name or "").strip()
-        email_list = _norm_email_list(emails)
-        if name_norm and email_list:
-            cfg[name_norm] = email_list
-
-    return cfg
-
-
 def _build_sender_to_wholesaler(cfg: Dict[str, List[str]]) -> Dict[str, str]:
     """
     Reverse index: sender_email(lower) -> wholesaler_name
@@ -248,78 +57,6 @@ def _build_sender_to_wholesaler(cfg: Dict[str, List[str]]) -> Dict[str, str]:
     return mapping
 
 
-
-def _load_wholesaler_bucket() -> Dict[str, List[int]]:
-    """
-    Returns:
-      { wholesaler_name_lower: [podio_item_id_1, podio_item_id_2, ...] }
-    """
-    raw = (os.getenv("WHOLESALER_BUCKET_JSON") or "").strip()
-    out: Dict[str, List[int]] = {}
-
-    def _normalize_ids(val) -> List[int]:
-        if isinstance(val, list):
-            ids: List[int] = []
-            for v in val:
-                try:
-                    ids.append(int(v))
-                except (TypeError, ValueError):
-                    continue
-            return ids
-        # single scalar -> wrap as list
-        try:
-            return [int(val)]
-        except (TypeError, ValueError):
-            return []
-
-    # If no env, fall back to DEFAULT_WHOLESALER_BUCKET_PODIO
-    if not raw:
-        for name, ids in DEFAULT_WHOLESALER_BUCKET_PODIO.items():
-            name_norm = (name or "").strip().lower()
-            id_list = _normalize_ids(ids)
-            if name_norm and id_list:
-                out[name_norm] = id_list
-        return out
-
-    # Try to parse env JSON
-    try:
-        val = json.loads(raw)
-
-        # Case 1: list of objects
-        if isinstance(val, list):
-            for it in val:
-                if not isinstance(it, dict):
-                    continue
-                name = (it.get("name") or "").strip().lower()
-                if "podio_item_ids" in it:
-                    id_list = _normalize_ids(it.get("podio_item_ids"))
-                else:
-                    id_list = _normalize_ids(it.get("podio_item_id"))
-                if name and id_list:
-                    out[name] = id_list
-            return out
-
-        # Case 2: dict mapping name -> ids (list or scalar)
-        if isinstance(val, dict):
-            for k, v in val.items():
-                name = str(k or "").strip().lower()
-                id_list = _normalize_ids(v)
-                if name and id_list:
-                    out[name] = id_list
-            return out
-
-    except Exception:
-        # fall back silently to defaults if JSON invalid
-        pass
-
-    # Fallback: defaults again if env is invalid
-    for name, ids in DEFAULT_WHOLESALER_BUCKET_PODIO.items():
-        name_norm = (name or "").strip().lower()
-        id_list = _normalize_ids(ids)
-        if name_norm and id_list:
-            out[name_norm] = id_list
-
-    return out
 # -----------------------
 # DATE RANGE (YESTERDAY UTC)
 # -----------------------
@@ -532,51 +269,6 @@ def _norm_key(addr: str, city: str) -> Optional[Tuple[str, str]]:
 #         "items": items,
 #     }
 
-def _load_wholesaler_senders() -> List[str]:
-    """
-    Returns a list of sender emails (lowercased) for all wholesalers,
-    ignoring whether they have Podio item IDs or not.
-    
-    It reads WHOLESALER_BUCKET_JSON if present, otherwise falls back to
-    DEFAULT_WHOLESALER_BUCKET keys.
-    """
-    raw = (os.getenv("WHOLESALER_BUCKET_JSON") or "").strip()
-    senders: set[str] = set()
-
-    if raw:
-        try:
-            val = json.loads(raw)
-
-            # Case 1: list of objects: [{ "email": "...", "podio_item_ids": [...] }, ...]
-            if isinstance(val, list):
-                for it in val:
-                    if not isinstance(it, dict):
-                        continue
-                    email = (it.get("email") or "").strip().lower()
-                    if email:
-                        senders.add(email)
-
-            # Case 2: dict mapping email -> ids
-            elif isinstance(val, dict):
-                for k in val.keys():
-                    email = str(k or "").strip().lower()
-                    if email:
-                        senders.add(email)
-
-        except Exception:
-            # If JSON invalid, fall back to defaults below
-            pass
-
-    # # Fallback or merge with defaults
-    if not senders:
-        for email in DEFAULT_WHOLESALER_BUCKET.keys():
-            em = (email or "").strip().lower()
-            if em:
-                senders.add(em)
-
-    # return sorted list just for determinism
-    return sorted(senders)
-
 # def build_yesterday_unique_parsed_listings_for_wholesalers() -> Dict[str, Any]:
 #     """
 #     Per-wholesaler breakdown:
@@ -736,7 +428,7 @@ def build_yesterday_unique_parsed_listings_for_wholesalers() -> Dict[str, Any]:
     """
     init_db()
 
-    cfg = _load_wholesaler_config()  # { wholesaler_name: [email1, email2...] }
+    cfg = get_wholesaler_config()  # { wholesaler_name: [email1, email2...] }
     sender_to_wh = _build_sender_to_wholesaler(cfg)  # { email_lower: wholesaler_name }
     sender_emails = list(sender_to_wh.keys())
 
@@ -1079,8 +771,8 @@ def process_one_special_avail_with_active_listings() -> Dict[str, Any]:
     Worker-style step:
 
     1) Find ONE SpecialAvail with status="new" (oldest first).
-    2) Look up its wholesaler_name in DEFAULT_WHOLESALER_BUCKET_PODIO
-       (via _load_wholesaler_bucket).
+    2) Look up its wholesaler_name in special_avail_list
+       (via get_wholesaler_podio_bucket).
     3) For all mapped Podio wholesaler item IDs:
          - fetch ACTIVE properties from the Properties app
          - each property -> { "address": str, "podio_item_id": int | None }
@@ -1113,7 +805,7 @@ def process_one_special_avail_with_active_listings() -> Dict[str, Any]:
         }
 
     # 2) Load Podio bucket and find this wholesaler's Podio IDs
-    bucket = _load_wholesaler_bucket()  # { wholesaler_name_lower: [podio_id, ...] }
+    bucket = get_wholesaler_podio_bucket()  # { wholesaler_name_lower: [podio_id, ...] }
     podio_ids = bucket.get(wholesaler_key, [])
 
     if not podio_ids:
@@ -1200,7 +892,7 @@ def fetch_active_properties_for_wholesaler_bucket() -> Dict[str, Any]:
     """
     init_db()
 
-    bucket = _load_wholesaler_bucket()  # { wholesaler_name_lower: [podio_id, ...] }
+    bucket = get_wholesaler_podio_bucket()  # { wholesaler_name_lower: [podio_id, ...] }
     if not bucket:
         return {
             "ok": True,
