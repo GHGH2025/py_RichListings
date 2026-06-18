@@ -32,6 +32,8 @@ class FilteredListingEmail(Document):
             {"fields": ["from_info.email"], "name": "from_email"},
             {"fields": ["window.after_epoch", "window.before_epoch"], "name": "window_range"},
             {"fields": ["status"], "name": "status_idx"},  # optional but handy
+            {"fields": ["trace_id"], "name": "trace_id_idx"},
+            {"fields": ["pipeline_stage", "created_at"], "name": "pipeline_stage_created_idx"},
         ]
     }
 
@@ -65,6 +67,24 @@ class FilteredListingEmail(Document):
     forward_to           = StringField()
     forward_preface_text = StringField()
     forward_error        = StringField()
+
+    # pipeline observability
+    trace_id               = StringField()
+    pipeline_stage         = StringField(
+        choices=(
+            "queued", "processing", "parse", "dup30", "ai_rules", "post_policy",
+            "media_verify", "image_curation", "publish", "labeled", "error", "failed",
+        ),
+        null=True,
+    )
+    pipeline_processed_at  = DateTimeField()
+    pipeline_completed_at  = DateTimeField()
+    pipeline_attempts      = IntField(default=0)
+    last_pipeline_error    = StringField()
+    pipeline_token_usage   = DictField()
+    gmail_labels_applied   = ListField(StringField())
+    labeled_at             = DateTimeField()
+    dev                    = BooleanField(default=False)
 
     # audit
     created_at       = DateTimeField(default=datetime.utcnow)
