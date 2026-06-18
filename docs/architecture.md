@@ -4,7 +4,12 @@ This document describes the end-to-end architecture of the Python worker (`py_Ri
 
 For integration-specific deep dives, see:
 
-- [WhatsApp](./whatsapp.md)
+- [Media verification](./media_verify.md)
+- [30-day dedup](./dedup_30_day.md)
+- [Post selection](./post_selection.md)
+- [Image curation](./image_curation.md)
+- [WhatsApp ad generation](./whatsapp_ad_generation.md)
+- [WhatsApp delivery](./whatsapp.md)
 - [WordPress](./wordpress.md)
 - [Podio](./podio.md)
 - [Scraping list (sender patterns)](./scraping_list.md)
@@ -143,6 +148,8 @@ Listings move through a status machine in `parsed_listings`. Each stage is a sch
 
 ### Stage A — Media verification
 
+See [media_verify.md](./media_verify.md).
+
 | File | Function | Status transition |
 |------|----------|-------------------|
 | `ai_media_verify.py` | `verify_and_fill_missing_media_for_not_processed()` | `not_processed` → **`verified`** |
@@ -154,6 +161,8 @@ Listings move through a status machine in `parsed_listings`. Each stage is a sch
 **Schedule:** every 3 min
 
 ### Stage B — Duplicate detection (30-day rule)
+
+See [dedup_30_day.md](./dedup_30_day.md).
 
 | File | Function | Status transition |
 |------|----------|-------------------|
@@ -177,6 +186,8 @@ Rules defined in `ai_listing_rules.yaml`. Skipped listings record `rules_ai_rule
 
 ### Stage D — Post selection & quotas
 
+See [post_selection.md](./post_selection.md).
+
 | File | Function | Status transition |
 |------|----------|-------------------|
 | `post_selection.py` | `select_passed_listings_for_post()` | `passed` → **`ready_for_image_processing`**, **`skipped`**, or **`skipped_quota`** |
@@ -192,6 +203,8 @@ Policies applied:
 
 ### Stage E — Image curation
 
+See [image_curation.md](./image_curation.md).
+
 | File | Function | Status transition |
 |------|----------|-------------------|
 | `image_curation.py` | `process_listings_ready_for_image_processing()` | `ready_for_image_processing` → **`ready_for_primary_image_check`** (or `ready_to_post` if no images) |
@@ -206,6 +219,8 @@ Uses OpenAI vision models to filter/reorder images and validate the primary phot
 ## Phase 4 — Publishing & Distribution
 
 ### Stage F — WhatsApp ad generation & send
+
+Ad copy: [whatsapp_ad_generation.md](./whatsapp_ad_generation.md). Delivery: [whatsapp.md](./whatsapp.md).
 
 | File | Function | Effect |
 |------|----------|--------|
