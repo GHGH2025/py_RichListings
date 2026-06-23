@@ -340,6 +340,25 @@ def _render_template(template: str, context: Dict[str, Any]) -> str:
     return _PLACEHOLDER_RE.sub(_repl, template)
 
 
+SMS_SINGLE_SEGMENT_MAX_CHARS = 160
+
+
+def _render_sms_body(templates: Dict[str, Any], context: Dict[str, Any]) -> str:
+    """
+    Prefer the full SMS template when it fits in one segment (<=160 chars).
+    Otherwise fall back to body_short.
+    """
+    sms_templates = templates.get("sms") or {}
+    long_template = sms_templates.get("body") or ""
+    short_template = sms_templates.get("body_short") or long_template
+
+    long_body = _render_template(long_template, context)
+    if len(long_body) <= SMS_SINGLE_SEGMENT_MAX_CHARS:
+        return long_body
+
+    return _render_template(short_template, context)
+
+
 _templates_cache: Optional[Dict[str, Any]] = None
 
 
@@ -733,7 +752,6 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     """
 
     templates = _load_buyer_templates()
-    sms_template = templates["sms"]["body"]
     email_subject = templates["email"].get("subject", "New deal for your review")
     email_template = templates["email"]["html"]
 
@@ -900,7 +918,7 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                     deal_url = _create_deal_page(pl, buyer, ctx_sms)
                     ctx_sms["deal_url"] = deal_url
 
-                    sms_body = _render_template(sms_template, ctx_sms)
+                    sms_body = _render_sms_body(templates, ctx_sms)
 
                     print("sms_body", sms_body)
 
