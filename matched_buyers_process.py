@@ -26,7 +26,7 @@ POF_EMAIL_API_URL = os.getenv(
     "http://ec2-3-90-20-111.compute-1.amazonaws.com:8000/rich_ai_deal_Email",
 )
 
-RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com")
+RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com") 
 
 DEAL_PAGE_BASE_URL = os.getenv("DEAL_PAGE_BASE_URL", "https://deals.wholesaledealfinder.ai/deal")
 
