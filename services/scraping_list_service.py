@@ -8,11 +8,9 @@ from typing import Dict, List, Optional, Tuple
 from bson import ObjectId
 
 from models.scraping_list import ScrapingList
+from core.paths import data_path
 
-DEFAULT_SEED_PATH = os.path.join(
-  os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-  "scraping_list_seed.json",
-)
+DEFAULT_SEED_PATH = str(data_path("scraping_list_seed.json"))
 
 _CACHE_TTL_SECONDS = 60
 _cache: Dict[str, Tuple[List[str], List[str]]] = {}

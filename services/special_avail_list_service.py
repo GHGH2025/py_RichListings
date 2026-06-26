@@ -8,11 +8,9 @@ from typing import Dict, List, Optional
 from bson import ObjectId
 
 from models.special_avail_list import SpecialAvailList
+from core.paths import data_path
 
-DEFAULT_SEED_PATH = os.path.join(
-  os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-  "special_avail_list_seed.json",
-)
+DEFAULT_SEED_PATH = str(data_path("special_avail_list_seed.json"))
 
 _CACHE_TTL_SECONDS = 60
 _config_cache: Optional[Dict[str, List[str]]] = None
