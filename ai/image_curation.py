@@ -405,6 +405,11 @@ def process_primary_image_verification(
                     set__status=PRIMARY_PASS_STATUS,
                     set__updated_at=now,
                 )
+                try:
+                    from observability.pipeline_metrics import record_listing_stage
+                    record_listing_stage(str(pl.id), "primary_image", listing_status=PRIMARY_PASS_STATUS)
+                except Exception:
+                    pass
                 passed += 1
             else:
                 # Reject: at least one model said keep=False (or both)
@@ -427,6 +432,11 @@ def process_primary_image_verification(
                     set__status=PRIMARY_FAIL_STATUS,
                     set__updated_at=now,
                 )
+                try:
+                    from observability.pipeline_metrics import record_listing_stage
+                    record_listing_stage(str(pl.id), "primary_image_failed", listing_status=PRIMARY_FAIL_STATUS)
+                except Exception:
+                    pass
                 failed += 1
 
         except Exception as e:
@@ -536,6 +546,11 @@ def process_listings_ready_for_image_processing(limit: int = 100) -> Dict[str, i
                     set__status="ready_to_post",
                     set__updated_at=now,
                 )
+                try:
+                    from observability.pipeline_metrics import record_listing_stage
+                    record_listing_stage(str(pl.id), "ready_to_post", listing_status="ready_to_post")
+                except Exception:
+                    pass
                 no_images += 1
                 continue
 
@@ -565,6 +580,11 @@ def process_listings_ready_for_image_processing(limit: int = 100) -> Dict[str, i
                 set__status=MIDDLEWARE_STATUS_PRIMARY,
                 set__updated_at=now,
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "image_curation", listing_status=MIDDLEWARE_STATUS_PRIMARY)
+            except Exception:
+                pass
             done += 1
 
         except Exception as e:
@@ -574,6 +594,11 @@ def process_listings_ready_for_image_processing(limit: int = 100) -> Dict[str, i
                 set__status="image_curation_failed",
                 set__updated_at=now,
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "image_curation_failed", listing_status="image_curation_failed", skip_reason=str(e))
+            except Exception:
+                pass
             failed += 1
 
     return {"total": total, "curated": done, "no_images": no_images, "failed": failed}

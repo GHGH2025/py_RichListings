@@ -289,6 +289,11 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
                     set__post_id=found_id,
                     set__updated_at=datetime.utcnow(),
                 )
+                try:
+                    from observability.pipeline_metrics import record_listing_stage
+                    record_listing_stage(str(pl.id), "wp_already_found", wp_status="already_found")
+                except Exception:
+                    pass
                 results.append({"id": str(pl.id), "ok": True, "status": "already_found", "post_id": found_id})
                 processed += 1
                 already += 1
@@ -302,6 +307,11 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
                         set__wp_status="failed",
                         set__updated_at=datetime.utcnow(),
                     )
+                    try:
+                        from observability.pipeline_metrics import record_listing_stage
+                        record_listing_stage(str(pl.id), "wp_failed", wp_status="failed", detail="missing_posttitle")
+                    except Exception:
+                        pass
                     results.append({
                         "id": str(pl.id),
                         "ok": False,
@@ -324,6 +334,11 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
                         set__post_id=post_id,
                         set__updated_at=datetime.utcnow(),
                     )
+                    try:
+                        from observability.pipeline_metrics import record_listing_stage
+                        record_listing_stage(str(pl.id), "wp_synced", wp_status="posted")
+                    except Exception:
+                        pass
                     results.append({"id": str(pl.id), "ok": True, "status": "posted", "post_id": post_id})
                     processed += 1
                     posted += 1

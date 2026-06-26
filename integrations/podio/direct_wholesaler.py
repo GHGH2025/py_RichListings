@@ -900,6 +900,11 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
             ParsedListing.objects(id=listing.id).update_one(
             set__direct_wholeseller="processed"
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(listing.id), "podio_linked", direct_wholeseller="processed")
+            except Exception:
+                pass
             return True
 
         
@@ -930,6 +935,11 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
     ParsedListing.objects(id=listing.id).update_one(
         set__direct_wholeseller="processed"
     )
+    try:
+        from observability.pipeline_metrics import record_listing_stage
+        record_listing_stage(str(listing.id), "podio_linked", direct_wholeseller="processed")
+    except Exception:
+        pass
     logging.info(
         "Listing %s marked as direct_wholeseller='processed'",
         listing.id,

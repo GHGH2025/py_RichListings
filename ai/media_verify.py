@@ -409,6 +409,11 @@ def verify_and_fill_missing_media_for_not_processed(
                     set__wp_check="pending",
                     set__updated_at=_now(),
                 )
+                try:
+                    from observability.pipeline_metrics import record_listing_stage
+                    record_listing_stage(str(pl.id), "verified", listing_status="verified")
+                except Exception:
+                    pass
                 verified_direct += 1
                 return
 
@@ -447,6 +452,12 @@ def verify_and_fill_missing_media_for_not_processed(
             updates["set__updated_at"] = _now()
 
             ParsedListing.objects(id=pl.id).update_one(**updates)
+
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "verified", listing_status="verified")
+            except Exception:
+                pass
 
             if ("set__images" in updates) or ("set__other_images_source" in updates):
                 updated += 1

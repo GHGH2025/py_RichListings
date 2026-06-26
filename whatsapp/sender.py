@@ -29,16 +29,6 @@ GATEWAY_TIMEOUT = float(os.getenv("WHATSAPP_GATEWAY_TIMEOUT_SEC", "20"))
 # Optional auth header if your gateway requires it (leave empty if not used)
 GATEWAY_AUTH_KEY = os.getenv("WHATSAPP_GATEWAY_AUTH_KEY", "").strip()
 
-def _team_numbers() -> List[str]:
-    if not TEAM_NUMBERS_ENV:
-        return []
-    try:
-        val = json.loads(TEAM_NUMBERS_ENV)
-        if isinstance(val, list):
-            return [str(x).strip() for x in val if str(x).strip()]
-    except Exception:
-        pass
-    return [p.strip() for p in TEAM_NUMBERS_ENV.split(",") if p.strip()]
 
 def _parse_group_jids_env() -> List[str]:
     raw = os.getenv("WHATSAPP_GROUP_JIDS", "").strip()
@@ -231,6 +221,15 @@ def process_whatsapp_queue(limit: int = 100, dm_sleep_range: Tuple[float, float]
         ParsedListing.objects(id=pl.id).update_one(
             set__whatsapp_status=("sent" if ok else "failed")
         )
+        try:
+            from observability.pipeline_metrics import record_listing_stage
+            record_listing_stage(
+                str(pl.id),
+                "whatsapp_sent" if ok else "whatsapp_failed",
+                whatsapp_status="sent" if ok else "failed",
+            )
+        except Exception:
+            pass
         time.sleep(random.uniform(*dm_sleep_range))
         # if mode == "dm" and to_numbers:
         #     # honor your earlier pacing: 10–15s between *listings*
@@ -241,109 +240,3 @@ def process_whatsapp_queue(limit: int = 100, dm_sleep_range: Tuple[float, float]
 
     return {"total": total, "sent": sent, "failed": failed}
 
-# def send_listing_to_whatsapp(listing_id, to_numbers: List[str]) -> None:
-#     """
-#     Sends the listing via your external WhatsApp gateway.
-
-#     Body sent per recipient:
-#       {
-#         "to": "<E.164 or raw phone>",
-#         "text": "<post_content>",
-#         "imageUrl": "<first image URL or ''>"
-#       }
-#     """
-#     # if not to_numbers:
-#     #     logging.info("send_listing_to_whatsapp: no recipients provided; skipping")
-#     #     return
-
-#     pl = ParsedListing.objects(id=ObjectId(str(listing_id))).first()
-#     if not pl:
-#         raise ValueError(f"No listing found with ID: {listing_id}")
-
-#     text = (getattr(pl, "post_content", "") or "").strip()
-#     if not text:
-#         raise ValueError("post_content is empty; nothing to send")
-
-#     # img = _first_image_url(getattr(pl, "images", []) or [])
-
-#     # headers: Dict[str, Any] = {"Content-Type": "application/json"}
-#     # if GATEWAY_AUTH_KEY:
-#     #     headers["Authorization"] = f"Bearer {GATEWAY_AUTH_KEY}"
-
-#     # s = _session()
-
-#     # for raw_to in to_numbers:
-#     #     to = (raw_to or "").strip()
-#     #     if not to:
-#     #         continue
-
-#     #     payload = {
-#     #         "to": to,
-#     #         "text": text,
-#     #     }
-#     #     # Only include imageUrl when present
-#     #     if img:
-#     #         payload["imageUrl"] = img
-
-#     #     try:
-#     #         resp = s.post(GATEWAY_URL, json=payload, headers=headers, timeout=GATEWAY_TIMEOUT)
-#     #         if 200 <= resp.status_code < 300:
-#     #             logging.info("WhatsApp gateway OK: to=%s id=%s status=%s",
-#     #                          to, listing_id, resp.status_code)
-#     #         else:
-#     #             logging.warning("WhatsApp gateway NON-2xx: to=%s id=%s status=%s body=%s",
-#     #                             to, listing_id, resp.status_code, resp.text[:500])
-#     #     except requests.RequestException as e:
-#     #         logging.exception("WhatsApp gateway request failed: to=%s id=%s err=%s", to, listing_id, e)
-
-    
-#     img = _first_image_url(getattr(pl, "images", []) or [])
-#     s = _session()
-#     headers = _headers()
-
-#     mode = get_whatsapp_send_mode() 
-#     if mode == "group":
-#         if not GROUP_JIDS:
-#             logging.warning("Group mode selected but WHATSAPP_GROUP_JIDS is empty; skipping send.")
-#             return
-#         payload: Dict[str, Any] = {"jids": GROUP_JIDS, "text": text}
-#         if img:
-#             payload["imageUrl"] = img
-#         try:
-#             print("Group >>",GATEWAY_URL_GROUP)
-#             print("payload",payload)
-#             # resp = s.post(GATEWAY_URL_GROUP, json=payload, headers=headers, timeout=GATEWAY_TIMEOUT)
-#             # if 200 <= resp.status_code < 300:
-#             #     logging.info("WhatsApp GROUP send OK: jids=%s id=%s status=%s",
-#             #                  len(GROUP_JIDS), listing_id, resp.status_code)
-#             # else:
-#             #     logging.warning("WhatsApp GROUP send NON-2xx: status=%s body=%s",
-#             #                     resp.status_code, resp.text[:500])
-#         except requests.RequestException as e:
-#             logging.exception("WhatsApp GROUP send failed: id=%s err=%s", listing_id, e)
-#         return
-
-#     # default: DM mode
-#     if not to_numbers:
-#         logging.info("DM mode but no recipients provided; skipping")
-#         return
-
-#     for raw_to in to_numbers:
-#         to = (raw_to or "").strip()
-#         if not to:
-#             continue
-#         payload = {"to": to, "text": text}
-#         if img:
-#             payload["imageUrl"] = img
-#         try:
-#             print("DM >>",GATEWAY_URL_DM)
-#             print("payload",payload)
-#             # resp = s.post(GATEWAY_URL_DM, json=payload, headers=headers, timeout=GATEWAY_TIMEOUT)
-#             # if 200 <= resp.status_code < 300:
-#             #     logging.info("WhatsApp DM OK: to=%s id=%s status=%s",
-#             #                  to, listing_id, resp.status_code)
-#             # else:
-#             #     logging.warning("WhatsApp DM NON-2xx: to=%s id=%s status=%s body=%s",
-#             #                     to, listing_id, resp.status_code, resp.text[:500])
-#         except requests.RequestException as e:
-#             logging.exception("WhatsApp DM failed: to=%s id=%s err=%s", to, listing_id, e)

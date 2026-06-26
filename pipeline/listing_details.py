@@ -542,6 +542,11 @@ def upsert_parsed_listings_from_html(
             saved = q.only("id").first()
             if saved:
                 saved_ids.append(str(saved.id))
+                try:
+                    from observability.pipeline_metrics import record_listing_created
+                    record_listing_created(str(saved.id))
+                except Exception:
+                    pass
                 if addr and city:
                     try:
                         ADDRESS_KEYS_POOL.submit(_update_keys_async, str(saved.id), addr, city)

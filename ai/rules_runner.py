@@ -58,6 +58,11 @@ def apply_ai_english_rules(rules_path: str, limit: int = 100) -> Dict[str, int]:
                 set__skipped_or_posted_at=datetime.utcnow(),
                 set__updated_at=datetime.utcnow(),
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "rules_skipped", listing_status="skipped", skip_reason=reason)
+            except Exception:
+                pass
         else:
             passed += 1
             # Keep status for downstream steps, but store the AI pass decision
@@ -69,6 +74,11 @@ def apply_ai_english_rules(rules_path: str, limit: int = 100) -> Dict[str, int]:
                 set__skipped_or_posted_at=datetime.utcnow(),
                 set__updated_at=datetime.utcnow(),
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "rules", listing_status="passed")
+            except Exception:
+                pass
 
     return {"total": total, "passed": passed, "skipped": skipped}
 

@@ -195,6 +195,19 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
                 set__whatsapp_status="pending"
             )
 
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(
+                    str(pl.id),
+                    "posted",
+                    listing_status="posted",
+                    wp_status="ready_to_process",
+                    whatsapp_status="pending",
+                )
+                record_listing_stage(str(pl.id), "podio_webhook")
+            except Exception:
+                pass
+
             # NEW: best-effort webhook (does not affect flow)
             _post_listing_to_webhook(pl.id)
 

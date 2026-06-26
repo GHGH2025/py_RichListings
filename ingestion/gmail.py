@@ -362,6 +362,13 @@ def process_account(acct: AccountConfig) -> None:
         saved_id = str(saved.id) if saved else None
         print(f"[{acct.label}] saved filtered email ⇒ _id={saved_id}")
 
+        if saved_id:
+            try:
+                from observability.pipeline_metrics import record_email_ingested
+                record_email_ingested(saved_id)
+            except Exception:
+                pass
+
         # step to forward the complete email
 
         # forward_inline_html(

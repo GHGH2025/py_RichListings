@@ -607,6 +607,11 @@ def _process_batch(
                 set__wp_parsed_data=payload,
                 set__wp_status="keys_generated"
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "wp_keys", wp_status="keys_generated")
+            except Exception:
+                pass
             results_accum.append({
                 "id": str(getattr(pl, "id", "")),
                 "ok": True,

@@ -292,6 +292,11 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
                 set__skipped_or_posted_at=_now(),
                 set__updated_at=_now(),
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "dedup_skipped", listing_status="skipped", skip_reason="no address")
+            except Exception:
+                pass
             skipped += 1
             missing_addr += 1
             continue
@@ -331,6 +336,11 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
                 set__rules_ai_reason=None,
                 set__updated_at=_now(),
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "dedup", listing_status=NEXT_STATUS_ON_PASS)
+            except Exception:
+                pass
             processed += 1
             continue
 
@@ -347,6 +357,11 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
                 set__skipped_or_posted_at=_now(),
                 set__updated_at=_now(),
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "dedup_skipped", listing_status="skipped", skip_reason="price comparison unavailable")
+            except Exception:
+                pass
             skipped += 1
             continue
 
@@ -357,6 +372,11 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
                 set__rules_ai_reason=None,
                 set__updated_at=_now(),
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "dedup", listing_status=NEXT_STATUS_ON_PASS)
+            except Exception:
+                pass
             processed += 1
         else:
             pl.update(
@@ -368,6 +388,11 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
                 set__skipped_or_posted_at=_now(),
                 set__updated_at=_now(),
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "dedup_skipped", listing_status="skipped", skip_reason="duplicate; price not low enough")
+            except Exception:
+                pass
             skipped += 1
 
     return {

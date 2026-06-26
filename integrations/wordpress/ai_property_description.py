@@ -272,6 +272,11 @@ def _process_batch(
                 set__wp_property_description=payload["property_description_html"],
                 set__wp_status="des_generated"
             )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "wp_des", wp_status="des_generated")
+            except Exception:
+                pass
             results_accum.append({"id": str(pl.id), "ok": True})
         except Exception as e:
             results_accum.append({"id": str(getattr(pl, "id", "")), "ok": False, "error": f"{type(e).__name__}: {e}"})

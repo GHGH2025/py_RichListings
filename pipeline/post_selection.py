@@ -413,6 +413,11 @@ def select_passed_listings_for_post(
                 updates["set__skipped_or_posted_at"] = now
             pl.update(**updates)
             skipped_ids.append(str(pl.id))
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "post_selection_skipped", listing_status="skipped", skip_reason="Do Not Post City")
+            except Exception:
+                pass
 
             # NEW: send full listing to webhook for Do_Not_Post_City
             try:
@@ -452,6 +457,11 @@ def select_passed_listings_for_post(
             updates["set__skipped_or_posted_at"] = now
         pl.update(**updates)
         skipped_ids.append(str(pl.id))
+        try:
+            from observability.pipeline_metrics import record_listing_stage
+            record_listing_stage(str(pl.id), "post_selection_skipped", listing_status="skipped", skip_reason=REASON_BAD_REGION)
+        except Exception:
+            pass
 
     # 3) enforce 35% cap for rest_of_florida relative to NON-REST
     base_count = len(non_rest)  # current batch base count
@@ -478,6 +488,11 @@ def select_passed_listings_for_post(
             updates["set__skipped_or_posted_at"] = now
         pl.update(**updates)
         skipped_ids.append(str(pl.id))
+        try:
+            from observability.pipeline_metrics import record_listing_stage
+            record_listing_stage(str(pl.id), "post_selection_skipped", listing_status="skipped_quota", skip_reason="35% quota cap")
+        except Exception:
+            pass
 
         # NEW: send full listing to webhook for quota skip
         try:
@@ -527,6 +542,11 @@ def select_passed_listings_for_post(
 
         pl.update(**db_updates)
         kept_ids.append(str(pl.id))
+        try:
+            from observability.pipeline_metrics import record_listing_stage
+            record_listing_stage(str(pl.id), "post_selection", listing_status="ready_for_image_processing")
+        except Exception:
+            pass
 
     return {
         "total_candidates": len(candidates),
