@@ -12,11 +12,6 @@ policy: |
   An address “starts with a number” when the address field begins with a digit after trimming whitespace (e.g. "1234 India Street" yes; "India Street" no).
 
 rules:
-  - id: R0
-    text: >
-      Skip any listing whose address starts with a number.
-      Example: "1234 India Street" => skip; "India Street" => pass this rule.
-
   - id: R1
     text: >
       No 2-bed property over $250,000 in South Florida Tri-County unless they are on the water.
