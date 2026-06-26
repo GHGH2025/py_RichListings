@@ -9,7 +9,7 @@ import mimetypes
 from openai import OpenAI
 from datetime import datetime
 from ringcentral_auth import rc_auth_header
-from models import ParsedListing , WebFormBuyerSubmission
+from models import ParsedListing, WebFormBuyerSubmission, BuyerDealPage
 
 BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL", "").strip()
 
@@ -27,6 +27,9 @@ POF_EMAIL_API_URL = os.getenv(
 )
 
 RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com")
+
+DEAL_PAGE_BASE_URL = os.getenv("DEAL_PAGE_BASE_URL", "https://deals.wholesaledealfinder.ai/deal")
+
 # Standard RingCentral SMS/MMS endpoint
 RC_SMS_URL = f"{RC_SERVER_URL}/restapi/v1.0/account/~/extension/~/sms"
 
@@ -335,6 +338,25 @@ def _render_template(template: str, context: Dict[str, Any]) -> str:
         return "" if val is None else str(val)
 
     return _PLACEHOLDER_RE.sub(_repl, template)
+
+
+SMS_SINGLE_SEGMENT_MAX_CHARS = 160
+
+
+def _render_sms_body(templates: Dict[str, Any], context: Dict[str, Any]) -> str:
+    """
+    Prefer the full SMS template when it fits in one segment (<=160 chars).
+    Otherwise fall back to body_short.
+    """
+    sms_templates = templates.get("sms") or {}
+    long_template = sms_templates.get("body") or ""
+    short_template = sms_templates.get("body_short") or long_template
+
+    long_body = _render_template(long_template, context)
+    if len(long_body) <= SMS_SINGLE_SEGMENT_MAX_CHARS:
+        return long_body
+
+    return _render_template(short_template, context)
 
 
 _templates_cache: Optional[Dict[str, Any]] = None
@@ -695,6 +717,26 @@ def _get_remote_file_size_bytes(url: str, timeout: int = 10) -> Optional[int]:
     except requests.RequestException:
         return None
 
+def _create_deal_page(listing, buyer, context: dict) -> str:
+    """
+    Persist a BuyerDealPage snapshot for this listing+buyer pair.
+    Returns the full public URL: DEAL_PAGE_BASE_URL/<doc_id>
+    """
+    doc = BuyerDealPage(
+        listing_id    = str(listing.id),
+        buyer_id      = str(buyer.id),
+        first_name    = context.get("first_name", ""),
+        address       = context.get("address", ""),
+        price         = context.get("price", ""),
+        description   = context.get("description", ""),
+        pics_link     = context.get("pics_link", ""),
+        image_urls    = list(getattr(listing, "images", None) or []),
+        complete_info = dict(getattr(listing, "complete_info", None) or {}),
+    )
+    doc.save()
+    return f"{DEAL_PAGE_BASE_URL}/{doc.id}"
+
+
 def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     """
     1) Pull ParsedListing where:
@@ -710,7 +752,6 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     """
 
     templates = _load_buyer_templates()
-    sms_template = templates["sms"]["body"]
     email_subject = templates["email"].get("subject", "New deal for your review")
     email_template = templates["email"]["html"]
 
@@ -873,9 +914,13 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                     ctx_sms = dict(base_ctx)
                     ctx_sms["description"] = sms_desc or email_desc or ""
                     ctx_sms["pics_block"] = pics_block_sms
-                    sms_body = _render_template(sms_template, ctx_sms)
 
-                    print("sms_body",sms_body)
+                    deal_url = _create_deal_page(pl, buyer, ctx_sms)
+                    ctx_sms["deal_url"] = deal_url
+
+                    sms_body = _render_sms_body(templates, ctx_sms)
+
+                    print("sms_body", sms_body)
 
                     result = send_sms_to_buyer(
                         to_number=contact.text_number,

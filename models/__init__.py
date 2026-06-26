@@ -454,5 +454,27 @@ class WebFormBuyerSubmission(Document):
         self.updated_at = datetime.utcnow()
 
 
+class BuyerDealPage(Document):
+    meta = {
+        "collection": "buyer_deal_pages",
+        "indexes": [
+            {"fields": ["-created_at"], "name": "created_desc"},
+            {"fields": ["listing_id"], "name": "listing_id_idx"},
+            {"fields": ["buyer_id"], "name": "buyer_id_idx"},
+        ],
+    }
+
+    listing_id    = StringField(required=True)
+    buyer_id      = StringField()
+    first_name    = StringField()
+    address       = StringField()
+    price         = StringField()
+    description   = StringField()
+    pics_link     = StringField()
+    image_urls    = ListField(StringField(), default=list)
+    complete_info = DictField()
+    created_at    = DateTimeField(default=datetime.utcnow)
+
+
 from .direct_wholesaler import DirectWholesaler
 from .scraping_list import ScrapingList
