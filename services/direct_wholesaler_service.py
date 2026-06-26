@@ -9,11 +9,9 @@ from typing import Any, Dict, Optional
 from bson import ObjectId
 
 from models.direct_wholesaler import DirectWholesaler
+from core.paths import data_path
 
-DEFAULT_JSON_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "direct_wholeseller.json",
-)
+DEFAULT_JSON_PATH = str(data_path("direct_wholeseller.json"))
 
 _CACHE_TTL_SECONDS = 60
 _cache_map: Optional[Dict[str, dict]] = None

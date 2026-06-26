@@ -8,8 +8,9 @@ import requests
 import mimetypes
 from openai import OpenAI
 from datetime import datetime
-from ringcentral_auth import rc_auth_header
+from integrations.ringcentral_auth import rc_auth_header
 from models import ParsedListing, WebFormBuyerSubmission, BuyerDealPage
+from core.paths import resolve_project_path
 
 BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL", "").strip()
 
@@ -18,7 +19,9 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 DEFAULT_BUYER_DESC_MODEL = "gpt-4.1"  # or reuse OPENAI_MODEL
 
-BUYER_TEMPLATE_PATH = os.getenv("BUYER_TEMPLATE_PATH", "buyer_notification_templates.json")
+BUYER_TEMPLATE_PATH = str(
+    resolve_project_path(os.getenv("BUYER_TEMPLATE_PATH", "data/buyer_notification_templates.json"))
+)
 
 _PLACEHOLDER_RE = re.compile(r"{{\s*(\w+)\s*}}")
 POF_EMAIL_API_URL = os.getenv(
@@ -26,12 +29,12 @@ POF_EMAIL_API_URL = os.getenv(
     "http://ec2-3-90-20-111.compute-1.amazonaws.com:8000/rich_ai_deal_Email",
 )
 
-RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com") 
+RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com")
 
 DEAL_PAGE_BASE_URL = os.getenv("DEAL_PAGE_BASE_URL", "https://deals.wholesaledealfinder.ai/deal")
 
 # Standard RingCentral SMS/MMS endpoint
-RC_SMS_URL = f"{RC_SERVER_URL}/restapi/v1.0/account/~/extension/~/sms" 
+RC_SMS_URL = f"{RC_SERVER_URL}/restapi/v1.0/account/~/extension/~/sms"
 
 
 

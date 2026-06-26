@@ -4,42 +4,42 @@ import logging
 from schedule import every, repeat, run_pending
 
 # import your task entrypoints
-from gmail_hourly_multi import process_account, _ensure_paths, ACCOUNTS
-from processFilteredEmail import process_pending, reset_stale_processing_emails
-from process_dup30days import process_not_processed_with_duplicate_rule
-from ai_nl_rules_runner import apply_ai_english_rules
-from post_selection import select_passed_listings_for_post
-from ai_make_whatsapp_posts import make_whatsapp_posts_from_ready_to_post
-from wp_ai_mapper_catalog_first import ai_build_wp_payload_for_posted
-from wp_ai_property_description import ai_build_wp_property_description_for_posted
-from wp_sync_poster import sync_wp_for_descriptions
-from ai_media_verify import verify_and_fill_missing_media_for_not_processed
-from wp_price_red_pic_links import process_wp_price_and_media_updates
-from gmail_hourly_multi import build_service_by_account
-from forward_completed_sources import forward_completed_source_emails
-from whatsapp_sender import process_whatsapp_queue
-from mongo_engine_conn import init_db
+from ingestion.gmail import process_account, _ensure_paths, ACCOUNTS
+from pipeline.process_email import process_pending, reset_stale_processing_emails
+from pipeline.dedup import process_not_processed_with_duplicate_rule
+from ai.rules_runner import apply_ai_english_rules
+from pipeline.post_selection import select_passed_listings_for_post
+from ai.whatsapp_posts import make_whatsapp_posts_from_ready_to_post
+from integrations.wordpress.ai_mapper import ai_build_wp_payload_for_posted
+from integrations.wordpress.ai_property_description import ai_build_wp_property_description_for_posted
+from integrations.wordpress.sync_poster import sync_wp_for_descriptions
+from ai.media_verify import verify_and_fill_missing_media_for_not_processed
+from integrations.wordpress.price_media_updates import process_wp_price_and_media_updates
+from ingestion.gmail import build_service_by_account
+from ingestion.forward_completed import forward_completed_source_emails
+from whatsapp.sender import process_whatsapp_queue
+from db.mongo_engine_conn import init_db
 from models import FilteredListingEmail, ParsedListing, SpecialAvail, ScrapingList
 from models.special_avail_list import SpecialAvailList
-from podio_direct_wholeseller import process_direct_wholeseller_batch,initialize_direct_wholeseller_flag
-from whatsapp_keepalive import send_keepalive_template, parse_recipients_env
+from integrations.podio.direct_wholesaler import process_direct_wholeseller_batch,initialize_direct_wholeseller_flag
+from whatsapp.keepalive import send_keepalive_template, parse_recipients_env
 
-from image_curation import process_listings_ready_for_image_processing, process_primary_image_verification
-from special_avails import process_one_special_avail_with_active_listings,process_one_special_avail_matching
+from ai.image_curation import process_listings_ready_for_image_processing, process_primary_image_verification
+from special_avails.processor import process_one_special_avail_with_active_listings,process_one_special_avail_matching
 from models import WebFormBuyerSubmission
-from buyer_matching_api import process_pending_buyer_matching_batch
-from matched_buyers_process import process_pending_buyer_descriptions,process_buyer_sends
+from buyers.matching_api import process_pending_buyer_matching_batch
+from buyers.matched_process import process_pending_buyer_descriptions,process_buyer_sends
 
 import os
 
-
+from core.paths import data_path
 from dotenv import load_dotenv
 load_dotenv()
 import json
 import threading
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-from config_runtime import get_whatsapp_send_mode
+from config.runtime import get_whatsapp_send_mode
 
 import uvicorn  # NEW: FastAPI server
 
@@ -48,54 +48,6 @@ import uvicorn  # NEW: FastAPI server
 START_TIME = time.time()  # for uptime calculation
 os.environ["APP_START_TIME"] = str(START_TIME)  # used by api_app for consistent uptime
 BUYER_MATCHING_CRON_MINUTES = int(os.getenv("BUYER_MATCHING_CRON_MINUTES", "3"))
-
-# class StatusHandler(BaseHTTPRequestHandler):
-#     def do_GET(self):
-#         # Support both /server-sattus (as you requested) and /server-status (correct spelling)
-#         if self.path in ("/server-sattus", "/server-status"):
-#             self.send_response(200)
-#             self.send_header("Content-Type", "application/json")
-#             self.end_headers()
-
-#             response = {
-#                 "status": "working",
-#                 "uptime_seconds": int(time.time() - START_TIME),
-#             }
-
-#             self.wfile.write(json.dumps(response).encode("utf-8"))
-#         else:
-#             self.send_response(404)
-#             self.end_headers()
-
-#     def do_POST(self):
-#         if self.path == "/config/whatsapp-mode":
-#             length = int(self.headers.get("Content-Length", "0") or 0)
-#             body = self.rfile.read(length).decode("utf-8") if length else "{}"
-#             try:
-#                 data = json.loads(body or "{}")
-#                 mode = (data.get("mode") or "").strip().lower()
-#                 set_whatsapp_send_mode(mode)   # validates + persists
-#                 self.send_response(200)
-#                 self.send_header("Content-Type", "application/json")
-#                 self.end_headers()
-#                 self.wfile.write(json.dumps({"ok": True, "mode": get_whatsapp_send_mode()}).encode("utf-8"))
-#             except ValueError as ve:
-#                 self.send_response(400)
-#                 self.send_header("Content-Type", "application/json")
-#                 self.end_headers()
-#                 self.wfile.write(json.dumps({"ok": False, "error": str(ve)}).encode("utf-8"))
-#             except Exception as e:
-#                 self.send_response(500)
-#                 self.send_header("Content-Type", "application/json")
-#                 self.end_headers()
-#                 self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
-#         else:
-#             self.send_response(404)
-#             self.end_headers()
-
-#     # Avoid default noisy logging to stderr
-#     def log_message(self, format, *args):
-#         logging.info("StatusHandler: " + format % args)
 
 
 def gmail_fetch_all():
@@ -145,7 +97,7 @@ def run_process_dup30days():
 @repeat(every(5).minutes)
 def run_ai_nl_rules_runner():
     logging.info("ai_nl_rules_runner")
-    apply_ai_english_rules("ai_listing_rules.yaml", limit=50)
+    apply_ai_english_rules(str(data_path("ai_listing_rules.yaml")), limit=50)
 
 
 @repeat(every(10).minutes)
@@ -168,7 +120,7 @@ def run_process_primary_image_verification():
 @repeat(every(2).minutes)
 def run_make_whatsapp_posts_from_ready_to_post():
     logging.info("make_whatsapp_posts_from_ready_to_post")
-    make_whatsapp_posts_from_ready_to_post("ad_post_rules.txt", limit=5)
+    make_whatsapp_posts_from_ready_to_post(str(data_path("ad_post_rules.txt")), limit=5)
 
 @repeat(every(1).minutes)
 def run_process_whatsapp_queue():
