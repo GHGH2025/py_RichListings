@@ -488,11 +488,12 @@ class ListingPipelineMetric(Document):
     meta = {
         "collection": "pipeline_metrics",
         "indexes": [
-            {"fields": ["listing_id"], "unique": True, "name": "uniq_listing_metric"},
-            {"fields": ["-email_received_at"], "name": "email_received_desc"},
-            {"fields": ["current_stage", "-updated_at"], "name": "stage_updated_idx"},
-            {"fields": ["trace_id"], "name": "trace_id_idx"},
-            {"fields": ["gmail_message_id"], "name": "gmail_msg_idx"},
+            # Names align with default mongoengine index names already in MongoDB.
+            {"fields": ["listing_id"], "unique": True, "name": "listing_id_1"},
+            {"fields": ["-email_received_at"], "name": "email_received_at_-1"},
+            {"fields": ["current_stage", "-updated_at"], "name": "current_stage_1_updated_at_-1"},
+            {"fields": ["trace_id"], "name": "trace_id_1"},
+            {"fields": ["gmail_message_id"], "name": "gmail_message_id_1"},
         ],
     }
 
