@@ -1,4 +1,5 @@
 # server_runner.py
+import sys
 import time
 import logging
 import os
@@ -24,7 +25,7 @@ from integrations.wordpress.price_media_updates import process_wp_price_and_medi
 from ingestion.forward_completed import forward_completed_source_emails
 from whatsapp.sender import process_whatsapp_queue
 from db.mongo_engine_conn import init_db
-from models import FilteredListingEmail, ParsedListing, ScrapingList, WebFormBuyerSubmission
+from models import FilteredListingEmail, ParsedListing, ScrapingList, WebFormBuyerSubmission, ListingPipelineMetric
 from models.special_avail_list import SpecialAvailList
 from integrations.podio.direct_wholesaler import process_direct_wholeseller_batch
 from whatsapp.keepalive import send_keepalive_template, parse_recipients_env
@@ -261,6 +262,7 @@ def start_api_server(host: str = "0.0.0.0", port: int = 8000):
         logging.exception("FastAPI server crashed")
 
 if __name__ == "__main__":
+    logging.info("Starting server_runner with Python: %s", sys.executable)
     logging.info("Scheduler loop started")
 
     # One-time DB bootstrap
@@ -271,6 +273,7 @@ if __name__ == "__main__":
         WebFormBuyerSubmission.ensure_indexes()
         ScrapingList.ensure_indexes()
         SpecialAvailList.ensure_indexes()
+        ListingPipelineMetric.ensure_indexes()
 
         # gmail_fetch_all()
     except Exception:
