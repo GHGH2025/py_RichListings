@@ -1105,446 +1105,20 @@ def _find_best_ai_check_for_label(expected_label: str, ai_by_label: Dict[str, Di
     return None
 
 
-import re
-from typing import Dict, Any, List, Tuple, Set
+from buyers.special_preferences import (
+    SPECIAL_PREF_LABELS,
+    LABEL_TO_KEY,
+    KEY_TO_LABEL,
+    MANUAL_ALIASES,
+    detect_listing_special_prefs,
+    normalize_buyer_prefs_kv,
+    build_preference_checks,
+    apply_special_preference_rules,
+    evaluate_buyer_special_prefs,
+)
 
-def _norm(s: str) -> str:
-    s = (s or "").strip().lower()
-    s = re.sub(r"\s+", " ", s)
-    return s
-
-def _slug(s: str) -> str:
-    s = _norm(s)
-    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
-    return s
-
-# Your official labels (use exactly what the form uses)
-SPECIAL_PREF_LABELS = [
-    "$1 Million Dollar Houses and Up",
-    "40 Year Inspection Failed",
-    "40/10 Year Inspection Certificate Failed",
-    "40/10 Year Inspection Certificate Passed",
-    "55 Plus Communities",
-    "Bulk Property Packages",
-    "Eviction Needed/ In Progress",
-    "Frame Construction",
-    "Garage",
-    "Located on Beach Front Only",
-    "Located on Golf Course Only",
-    "Located on Ocean Access / Intracoastal Way Only",
-    "Located on Water Front Only",
-    "Mobile Homes",
-    "Mold Remediation Needed",
-    "Need to Buy Property Sight Unseen (Bad Tenants, Other Access Issues) - Videos or Pictures might be available case by case.",
-    "NO HOA",
-    "Pool",
-    "Post Occupancy Required (with escrow holdback and/ or rent)",
-    "Property has Code Violations / Liens / Fines",
-    "Property has Foundation / Structural Issues",
-    "Property has Rental Restrictions",
-    "Property has Special Assessments",
-    "Property is Fire Damaged",
-    "Property Needs a Full Rehab",
-    "Property with Ocean Access / Intracoastal",
-    "Tear-downs / Land Value Only",
-    "Unpermitted Additions",
-    "Water/ Flood Damage",
-]
-
-LABEL_TO_KEY = {lbl: _slug(lbl) for lbl in SPECIAL_PREF_LABELS}
-KEY_TO_LABEL = {v: k for k, v in LABEL_TO_KEY.items()}
-
-# ✅ Alias mapping for listing.manual_special_preferences_norm variations (keep existing manual behavior)
-MANUAL_ALIASES = {
-    _slug("property needs a full rehab"): LABEL_TO_KEY["Property Needs a Full Rehab"],
-    _slug("property has code violations"): LABEL_TO_KEY["Property has Code Violations / Liens / Fines"],
-    _slug("property is fire damaged"): LABEL_TO_KEY["Property is Fire Damaged"],
-    _slug("no hoa"): LABEL_TO_KEY["NO HOA"],
-    _slug("mobile homes"): LABEL_TO_KEY["Mobile Homes"],
-    _slug("water/ flood damage"): LABEL_TO_KEY["Water/ Flood Damage"],
-    _slug("mold remediation needed"): LABEL_TO_KEY["Mold Remediation Needed"],
-    _slug("foundation / structural issues"): LABEL_TO_KEY["Property has Foundation / Structural Issues"],
-    # add more if your manual list uses shorter phrases
-}
-
-# Rule patterns (conservative; won’t “invent” presence)
-SPECIAL_PREF_PATTERNS = {
-    LABEL_TO_KEY["Property is Fire Damaged"]: [
-        r"\bfire\s*damage(d)?\b",
-        r"\bfire[-\s]?damaged\b",
-        r"\bsmoke\s*damage\b",
-        r"\bburn(?:t|ed)?\b",
-    ],
-    LABEL_TO_KEY["Property Needs a Full Rehab"]: [
-        r"\bfull\s+rehab\b",
-        r"\bgut\s+rehab\b",
-        r"\bneeds\s+(a\s+)?(full\s+)?rehab\b",
-        r"\bmajor\s+rehab\b",
-        r"\bcomplete\s+rehab\b",
-    ],
-    LABEL_TO_KEY["Property has Code Violations / Liens / Fines"]: [
-        r"\bcode\s+violation(s)?\b",
-        r"\blien(s)?\b",
-        r"\bfine(s)?\b",
-        r"\bviolation notice\b",
-    ],
-    LABEL_TO_KEY["NO HOA"]: [
-        r"\bno\s*hoa\b",
-        r"\bwithout\s+hoa\b",
-    ],
-    LABEL_TO_KEY["Water/ Flood Damage"]: [
-        r"\bwater\s+damage\b",
-        r"\bflood(?:ing)?\b",
-        r"\bwater\s+intrusion\b",
-    ],
-    LABEL_TO_KEY["Mold Remediation Needed"]: [
-        r"\bmold\b",
-        r"\bremediation\b",
-    ],
-    LABEL_TO_KEY["Mobile Homes"]: [
-        r"\bmobile\s+home(s)?\b",
-        r"\bmanufactured\s+home(s)?\b",
-    ],
-    LABEL_TO_KEY["Pool"]: [
-        r"\bpool\b",
-    ],
-    LABEL_TO_KEY["Garage"]: [
-        r"\bgarage\b",
-        r"\b2\s*car\s+garage\b",
-        r"\b1\s*car\s+garage\b",
-    ],
-    LABEL_TO_KEY["Tear-downs / Land Value Only"]: [
-        r"\btear\s*down\b",
-        r"\bteardown\b",
-        r"\bland\s+value\s+only\b",
-        r"\blot\s+value\b",
-    ],
-    LABEL_TO_KEY["Unpermitted Additions"]: [
-        r"\bunpermitted\b",
-        r"\bnon[-\s]?permitted\b",
-        r"\bwithout\s+permit(s)?\b",
-    ],
-    LABEL_TO_KEY["Eviction Needed/ In Progress"]: [
-        r"\beviction\b",
-        r"\bcash\s+for\s+keys\b",
-    ],
-    LABEL_TO_KEY["55 Plus Communities"]: [
-        r"\b55\+\b",
-        r"\b55\s*plus\b",
-        r"\bactive\s+adult\b",
-    ],
-    LABEL_TO_KEY["Bulk Property Packages"]: [
-        r"\bportfolio\b",
-        r"\bpackage\b",
-        r"\bbulk\b",
-        r"\bbundle\b",
-        r"\bmultiple\s+properties\b",
-    ],
-    LABEL_TO_KEY["Need to Buy Property Sight Unseen (Bad Tenants, Other Access Issues) - Videos or Pictures might be available case by case."]: [
-        r"\bsight\s+unseen\b",
-        r"\bno\s+access\b",
-        r"\btenant\s+occupied\b",
-        r"\boccupied\b",
-    ],
-    LABEL_TO_KEY["$1 Million Dollar Houses and Up"]: [
-        # handled by price too, but keep pattern in case email says it
-        r"\b1\s*million\b",
-        r"\b\$1,?000,?000\b",
-    ],
-    LABEL_TO_KEY["Property with Ocean Access / Intracoastal"]: [
-        r"\bocean\s+access\b",
-        r"\bintracoastal\b",
-        r"\bICW\b",
-        r"\bwaterfront\b",
-        r"\bwater\s*front\b",
-        r"\bon\s+(?:the\s+)?(?:canal|water)\b",
-    ],
-    LABEL_TO_KEY["Located on Ocean Access / Intracoastal Way Only"]: [
-        r"\bocean\s+access\b",
-        r"\bintracoastal\b",
-        r"\bICW\b",
-    ],
-    LABEL_TO_KEY["Located on Water Front Only"]: [
-        r"\bwaterfront\b",
-        r"\bwater\s*front\b",
-        r"\bon\s+(?:the\s+)?water\b",
-        r"\bcanal\s+front\b",
-    ],
-    LABEL_TO_KEY["Located on Beach Front Only"]: [
-        r"\bbeachfront\b",
-        r"\bbeach\s*front\b",
-        r"\bon\s+(?:the\s+)?beach\b",
-    ],
-    LABEL_TO_KEY["Located on Golf Course Only"]: [
-        r"\bgolf\s+course\b",
-        r"\bgolf\s+front\b",
-        r"\bon\s+(?:the\s+)?golf\b",
-    ],
-}
-
-def collect_listing_text(listing: Dict[str, Any]) -> str:
-    ci = (listing.get("complete_info") or {})
-    chunks = [
-        ci.get("complete_info"),
-        ci.get("raw_description_excerpt"),
-        listing.get("post_content"),
-        " ".join(ci.get("marketing_tags") or []),
-    ]
-    return "\n".join([c for c in chunks if c]).strip()
-
-def detect_listing_special_prefs(listing: Dict[str, Any]) -> Tuple[Set[str], Dict[str, str]]:
-    """
-    Returns:
-      present_keys: set of canonical pref keys present in listing
-      evidence: key -> short evidence snippet (for logging)
-    """
-    present: Set[str] = set()
-    evidence: Dict[str, str] = {}
-
-    # 1) Manual prefs (do NOT break existing manual behavior)
-    for raw in (listing.get("manual_special_preferences_norm") or []):
-        k = MANUAL_ALIASES.get(_slug(raw), _slug(raw))
-        present.add(k)
-        evidence.setdefault(k, f"manual:{raw}")
-
-    # 2) Structured fields (safe signals)
-    ci = listing.get("complete_info") or {}
-    price = ci.get("list_price_usd") or listing.get("price")
-    if isinstance(price, (int, float)) and price >= 1_000_000:
-        k = LABEL_TO_KEY["$1 Million Dollar Houses and Up"]
-        present.add(k)
-        evidence.setdefault(k, f"price:{price}")
-
-    # NO HOA from structured has_hoa if available
-    has_hoa = ci.get("has_hoa")
-    if has_hoa is False:
-        k = LABEL_TO_KEY["NO HOA"]
-        present.add(k)
-        evidence.setdefault(k, "has_hoa:false")
-
-    # Mobile homes from structured boolean if available
-    if ci.get("is_mobile_home") is True:
-        k = LABEL_TO_KEY["Mobile Homes"]
-        present.add(k)
-        evidence.setdefault(k, "is_mobile_home:true")
-
-    # Water features from structured fields
-    water_feature = (ci.get("water_feature") or "").lower().replace(" ", "_")
-    is_on_water = ci.get("is_on_water")
-    if water_feature in ("ocean_access", "intracoastal"):
-        for lbl in ["Property with Ocean Access / Intracoastal", "Located on Ocean Access / Intracoastal Way Only"]:
-            k = LABEL_TO_KEY[lbl]
-            present.add(k)
-            evidence.setdefault(k, f"water_feature:{water_feature}")
-    if is_on_water is True:
-        k = LABEL_TO_KEY["Located on Water Front Only"]
-        present.add(k)
-        evidence.setdefault(k, "is_on_water:true")
-        # ocean_access / intracoastal imply waterfront too
-        if water_feature in ("ocean_access", "intracoastal"):
-            k = LABEL_TO_KEY["Property with Ocean Access / Intracoastal"]
-            present.add(k)
-            evidence.setdefault(k, f"is_on_water:true+water_feature:{water_feature}")
-
-    # 3) Text scan (this is what will catch "Fire damage" in your example)
-    text = _norm(collect_listing_text(listing))
-    if text:
-        for k, patterns in SPECIAL_PREF_PATTERNS.items():
-            for pat in patterns:
-                m = re.search(pat, text, flags=re.IGNORECASE)
-                if m:
-                    present.add(k)
-                    # keep first evidence only (don’t spam logs)
-                    if k not in evidence:
-                        start = max(0, m.start() - 25)
-                        end = min(len(text), m.end() + 25)
-                        evidence[k] = f"text:...{text[start:end]}..."
-                    break
-
-    return present, evidence
-
-def normalize_buyer_prefs_kv(preferences_kv: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    out = []
-    for kv in preferences_kv or []:
-        label = (kv.get("label") or "").strip()
-        value = _norm(kv.get("value") or "")
-        if not label or not value:
-            continue
-        key = LABEL_TO_KEY.get(label, _slug(label))
-        out.append({"key": key, "label": label, "value": value})
-    return out
-
-def evaluate_special_prefs(
-    buyer_prefs_kv: List[Dict[str, str]],
-    listing_present: Set[str],
-    listing_evidence: Dict[str, str],
-) -> Tuple[bool, List[str], List[str]]:
-    """
-    Preserve your current idea:
-      - If there is at least one 'Only' selected, require at least one 'Only' to be PRESENT.
-      - 'Maybe' does NOT block.
-    Fix:
-      - 'No' is a HARD FAIL if listing indicates the pref is present.
-    """
-    prefs = normalize_buyer_prefs_kv(buyer_prefs_kv)
-
-    if not prefs:
-        return True, ["no special preferences set"], []
-
-    failed = []
-    reasons = []
-
-    # 1) HARD NEGATIVES FIRST
-    for p in prefs:
-        if p["value"] in ("no", "false", "0"):
-            if p["key"] in listing_present:
-                ev = listing_evidence.get(p["key"], "present")
-                failed.append(f"NO blocked: {p['label']} ({ev})")
-    if failed:
-        return False, [], failed
-
-    # 2) ONLY logic (keep existing behavior: at least one Only must match)
-    only_selected = [p for p in prefs if p["value"] == "only"]
-    if only_selected:
-        matched_any = False
-        for p in only_selected:
-            if p["key"] in listing_present:
-                matched_any = True
-                reasons.append(f"Qualified: ONLY matched -> {p['label']}")
-        if not matched_any:
-            failed.append("ONLY selected but none present")
-            return False, [], failed
-
-    # 3) Maybe/Yes are informative only (don’t block)
-    for p in prefs:
-        if p["value"] == "maybe":
-            reasons.append(f"Preference (Maybe): {p['label']}")
-
-    return True, reasons, []
-
-
-
-def apply_special_preference_rules(pref_checks: List[Dict[str, Any]]) -> Tuple[bool, float, List[str], List[str]]:
-    """
-    UPDATED Qualification / Disqualification Rules (STRICT):
-
-    0) NO OVERRIDE (Hard Disqualify):
-       - If ANY "No" selection has status == PRESENT => DISQUALIFIED (overrides everything).
-
-    1) ONLY takes precedence (when ANY Only selections exist):
-       - Qualified if at least ONE "Only" is PRESENT.
-       - Disqualified if NONE of the "Only" selections are PRESENT.
-       - When Only exists, we DO NOT use Yes/Maybe to qualify (matches your rule b/c).
-
-    2) If there are NO Only selections:
-       - If there are Yes and/or Maybe selections:
-            Qualified if at least ONE Yes is PRESENT OR at least ONE Maybe is PRESENT.
-            (Yes/Maybe are OR; only one match needed.)
-            Disqualified if none match.
-       - If there are NO Yes and NO Maybe selections (i.e., only No selections exist):
-            Qualified as long as no "No" matched (rule 0 already enforced).
-
-    Confidence:
-      - If qualified due to a match (Only or Yes/Maybe), confidence = MAX confidence among the matching checks.
-      - If qualified due to only-No restrictions, confidence stays 1.0 (backward-safe behavior).
-    """
-    checks = pref_checks or []
-
-    def sel(c: Dict[str, Any]) -> str:
-        return str(c.get("selection") or "").strip().lower()
-
-    def status(c: Dict[str, Any]) -> str:
-        return str(c.get("status") or "").strip().upper()
-
-    def conf_raw(c: Dict[str, Any]) -> float:
-        try:
-            v = float(c.get("confidence_0_to_1") or 0.0)
-            if v < 0:
-                v = 0.0
-            if v > 1:
-                v = 1.0
-            return v
-        except Exception:
-            return 0.0
-
-    def conf_present(c: Dict[str, Any]) -> float:
-        """
-        Backward-safe: if PRESENT but confidence missing/0, treat as 1.0
-        (same effect as your previous `conf(c) or 1.0` behavior).
-        """
-        v = conf_raw(c)
-        return v if v > 0 else 1.0
-
-    no_checks = [c for c in checks if sel(c) == "no"]
-    yes_checks = [c for c in checks if sel(c) == "yes"]
-    maybe_checks = [c for c in checks if sel(c) == "maybe"]
-    only_checks = [c for c in checks if sel(c) == "only"]
-
-    reasons: List[str] = []
-    failed: List[str] = []
-
-    # ------------------------------------------------------------
-    # 0) "No" override: any PRESENT => disqualify immediately
-    # ------------------------------------------------------------
-    no_present = [c for c in no_checks if status(c) == "PRESENT"]
-    if no_present:
-        for c in no_present:
-            failed.append(f"Disqualified: 'No' matched (PRESENT): {c.get('label')}")
-        return (False, 1.0, reasons, failed)
-
-    # ------------------------------------------------------------
-    # 1) If ANY "Only" selections exist, they drive qualification
-    # ------------------------------------------------------------
-    if only_checks:
-        present_only = [c for c in only_checks if status(c) == "PRESENT"]
-        if present_only:
-            best_conf = max(conf_present(c) for c in present_only) if present_only else 1.0
-            matched_labels = [str(c.get("label") or "").strip() for c in present_only if str(c.get("label") or "").strip()]
-            reasons.append(
-                "Qualified: at least one 'Only' matched (PRESENT)"
-                + (f" -> {', '.join(matched_labels)}" if matched_labels else "")
-            )
-            return (True, float(best_conf), reasons, failed)
-
-        failed.append("Disqualified: 'Only' selections provided but NONE matched (PRESENT)")
-        return (False, 1.0, reasons, failed)
-
-    # ------------------------------------------------------------
-    # 2) No "Only": Yes/Maybe are OR-based qualifiers
-    # ------------------------------------------------------------
-    # If buyer provided ANY Yes/Maybe, at least one must match to qualify.
-    if yes_checks or maybe_checks:
-        present_yes = [c for c in yes_checks if status(c) == "PRESENT"]
-        present_maybe = [c for c in maybe_checks if status(c) == "PRESENT"]
-
-        if present_yes or present_maybe:
-            present_all = present_yes + present_maybe
-            best_conf = max(conf_present(c) for c in present_all) if present_all else 1.0
-
-            matched_yes_labels = [str(c.get("label") or "").strip() for c in present_yes if str(c.get("label") or "").strip()]
-            matched_maybe_labels = [str(c.get("label") or "").strip() for c in present_maybe if str(c.get("label") or "").strip()]
-
-            if matched_yes_labels:
-                reasons.append(f"Qualified: at least one 'Yes' matched (PRESENT) -> {', '.join(matched_yes_labels)}")
-            if matched_maybe_labels:
-                reasons.append(f"Qualified: at least one 'Maybe' matched (PRESENT) -> {', '.join(matched_maybe_labels)}")
-
-            return (True, float(best_conf), reasons, failed)
-
-        # none matched
-        if yes_checks and maybe_checks:
-            failed.append("Disqualified: No 'Yes' or 'Maybe' selections matched (PRESENT)")
-        elif yes_checks:
-            failed.append("Disqualified: No 'Yes' selections matched (PRESENT)")
-        else:
-            failed.append("Disqualified: No 'Maybe' selections matched (PRESENT)")
-        return (False, 1.0, reasons, failed)
-
-    # ------------------------------------------------------------
-    # 3) Only "No" restrictions existed (and none matched) => qualify
-    # ------------------------------------------------------------
-    reasons.append("Qualified: only 'No' restrictions set and none matched (PRESENT)")
-    return (True, 1.0, reasons, failed)
+# Backward-compatible alias used throughout this module
+evaluate_special_prefs = evaluate_buyer_special_prefs
 
 # -------------------------------------------------------------------
 # Phase 1 enhancement END
@@ -2452,20 +2026,10 @@ def match_buyers(payload: MatchBuyersPayload):
     # ✅ Special-prefs deterministic detection for THIS listing (run once)
     # We build a dict-shaped "listing_doc" because detect_listing_special_prefs expects dict.get(...)
     listing_doc_for_sp = {
-        "complete_info": {
-            # put a safe text blob here for regex scanning
-            "complete_info": raw_excerpt,
-            "raw_description_excerpt": listing_ci.get("raw_description_excerpt"),
-            "marketing_tags": listing_ci.get("marketing_tags") or [],
-
-            # structured signals (only if present in your data)
-            "list_price_usd": listing_price,
-            "has_hoa": listing_ci.get("has_hoa"),
-            "is_mobile_home": listing_ci.get("is_mobile_home"),
-        },
+        "complete_info": complete_info if isinstance(complete_info, dict) else {},
+        "extracted_special_preferences": list(getattr(listing, "extracted_special_preferences", None) or []),
         "manual_special_preferences_norm": manual_prefs,
         "price": listing_price,
-        # optional (only used if your collect_listing_text reads it)
         "post_content": getattr(listing, "post_content", None),
     }
 
@@ -2662,99 +2226,38 @@ def match_buyers(payload: MatchBuyersPayload):
 
 
 
-    # # Chunk AI calls
- 
-    for i in range(0, len(ai_candidates), AI_BATCH_SIZE):
-        batch = ai_candidates[i:i + AI_BATCH_SIZE]
-        if not batch:
-            continue
+    # Deterministic special-preference match (uses extracted_special_preferences from parse)
+    for cand in ai_candidates:
+        bid = cand["buyer_mongo_id"]
+        pref_checks = build_preference_checks(
+            cand.get("preferences_kv") or [],
+            listing_present,
+            listing_evidence,
+        )
+        for check in pref_checks:
+            lab = str(check.get("label") or "").strip()
+            if lab and manual_pref_present(lab, manual_prefs):
+                check["status"] = "PRESENT"
+                check["confidence_0_to_1"] = 1.0
+                check["evidence"] = "Manual special preferences override"
 
-        ai_result = call_ai_matcher(property_payload, batch)
-        batch_evals = ai_result.get("evaluations") or []
+        ok, conf, reasons, failed = apply_special_preference_rules(pref_checks)
+        if SPECIAL_PREF_ENFORCE_MIN_CONFIDENCE:
+            final_match = bool(ok) and float(conf or 0) >= MIN_CONFIDENCE
+        else:
+            final_match = bool(ok)
 
-        # Index by buyer id for safety
-        eval_by_id: Dict[str, Dict[str, Any]] = {}
-        for ev in batch_evals:
-            if isinstance(ev, dict) and ev.get("buyer_mongo_id"):
-                eval_by_id[str(ev["buyer_mongo_id"])] = ev
+        extra_reasons = list(cand.get("_sp_reasons") or [])
+        evaluations_all.append({
+            "buyer_mongo_id": bid,
+            "match": final_match,
+            "confidence_0_to_1": float(conf or 0),
+            "reasons": extra_reasons + (reasons or []),
+            "failed_checks": failed,
+        })
 
-        for cand in batch:
-            bid = cand["buyer_mongo_id"]
-            ev = eval_by_id.get(bid) or {}
-
-            expected = cand.get("preferences_kv") or []
-            expected_labels = [x.get("label") for x in expected if x.get("label") and x.get("value")]
-
-            ai_checks = ev.get("preference_checks") or []
-            ai_by_label = {}
-            for pc in ai_checks:
-                if isinstance(pc, dict) and pc.get("label"):
-                    ai_by_label[_norm_label(pc["label"])] = pc
-
-            # Build full check list (FAIL-CLOSED) + manual override to PRESENT
-            pref_checks = []
-            for x in expected:
-                lab = str(x.get("label") or "").strip()
-                sel = str(x.get("value") or "").strip()  # Yes/No/Maybe/Only
-                if not lab or not sel:
-                    continue
-
-                # ✅ B) Manual prefs override: if listing manual prefs imply this concept is PRESENT,
-                # force status=PRESENT regardless of AI output.
-                if manual_pref_present(lab, manual_prefs):
-                    pref_checks.append({
-                        "label": lab,
-                        "selection": sel,
-                        "status": "PRESENT",
-                        "confidence_0_to_1": 1.0,
-                        "evidence": "Manual special preferences override (listing indicates PRESENT)",
-                    })
-                    continue
-
-                pc = _find_best_ai_check_for_label(lab, ai_by_label)
-
-                if not pc:
-                    # missing from AI => UNKNOWN (so Yes/No/Only fail)
-                    pref_checks.append({
-                        "label": lab,
-                        "selection": sel,
-                        "status": "UNKNOWN",
-                        "confidence_0_to_1": 0.0,
-                        "evidence": "Missing from AI response",
-                    })
-                else:
-                    # ensure selection exists + keep output stable
-                    pc = dict(pc)  # avoid mutating ai_by_label contents
-                    pc["label"] = lab         # keep exact label from candidate (your system prompt asks for this)
-                    pc["selection"] = sel     # ensure correct selection
-                    pc.setdefault("confidence_0_to_1", 0.0)
-                    pc.setdefault("evidence", "")
-                    pref_checks.append(pc)
-
-
-
-
-            ok, conf, reasons, failed = apply_special_preference_rules(pref_checks)
-            if SPECIAL_PREF_ENFORCE_MIN_CONFIDENCE:
-                final_match = bool(ok) and float(conf or 0) >= MIN_CONFIDENCE
-            else:
-                final_match = bool(ok)
-
-            extra_reasons = list(cand.get("_sp_reasons") or [])
-
-            evaluations_all.append({
-                "buyer_mongo_id": bid,
-                "match": final_match,
-                "confidence_0_to_1": float(conf or 0),
-                "reasons": extra_reasons + (reasons or []),
-                "failed_checks": failed,
-            })
-
-
-
-
-            if final_match:
-                matched_buyer_ids.append(bid)
+        if final_match:
+            matched_buyer_ids.append(bid)
 
 # -------------------------------------------------------------------
 # Phase 1 enhancement END

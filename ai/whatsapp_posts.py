@@ -117,6 +117,10 @@ TASK:
 def _listing_payload(pl: ParsedListing) -> Dict[str, Any]:
     """Build a plain dict with everything the model might need, simply."""
     street = resolve_street_address(pl)
+    ci = dict(pl.complete_info or {})
+    # Internal buyer-matching flags — never include in WhatsApp post text
+    ci.pop("special_preferences_detected", None)
+
     d: Dict[str, Any] = {
         "account_label": pl.account_label,
         "gmail_message_id": pl.gmail_message_id,
@@ -133,7 +137,7 @@ def _listing_payload(pl: ParsedListing) -> Dict[str, Any]:
         "rules_ai_rule_id": pl.rules_ai_rule_id,
         "rules_ai_version": pl.rules_ai_version,
         "rules_ai_reason": pl.rules_ai_reason,
-        "complete_info": pl.complete_info or {},
+        "complete_info": ci,
     }
 
     # try to include sender display name as a tone hint (not to be printed)
