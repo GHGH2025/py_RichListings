@@ -1,5 +1,5 @@
 version: 2
-updated: "2026-06-11"
+updated: "2026-06-29"
 
 policy: |
   Apply the rules below IN ORDER. Stop at the first rule that applies and is not exempted by its “Unless” line.
@@ -9,7 +9,7 @@ policy: |
   “South Florida Tri-County” means Miami-Dade, Broward, or Palm Beach.
   “Rest of Florida” means Florida locations outside the South Florida Tri-County (including St. Lucie and Fort Pierce).
   For condos, “HOA fee” means the monthly HOA fee plus any monthly assessments; if both are present, sum them.
-  
+  An address “starts with a number” when the address field begins with a digit after trimming whitespace (e.g. "1234 India Street" yes; "India Street" no).
 
 rules:
   - id: R1
