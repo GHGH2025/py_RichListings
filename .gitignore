@@ -1,6 +1,5 @@
 .env
 __pycache__/
 accounts/
-logs/
 run-api.sh
 rich.pem

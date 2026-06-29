@@ -36,7 +36,6 @@ from buyers.matching_api import process_pending_buyer_matching_batch
 from buyers.matched_process import process_pending_buyer_descriptions, process_buyer_sends
 
 from core.paths import data_path
-from pipeline_v2.config import is_v2
 
 load_dotenv()
 
@@ -69,24 +68,6 @@ def safe_scheduled_job(fn):
     return wrapper
 
 
-def core_path_v1_only(fn):
-    """
-    Skip this job when PIPELINE_VERSION=v2.
-
-    Apply to the nine core email-to-WhatsApp crons so that PipelineV2's
-    end-to-end worker takes over when enabled.  The decorator is checked at
-    call time (not at import time) so the version can be toggled via .env
-    without restarting – or rather, a restart will pick up the new value.
-    """
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if is_v2():
-            logging.debug("%s: skipped (PIPELINE_VERSION=v2)", fn.__name__)
-            return
-        return fn(*args, **kwargs)
-    return wrapper
-
-
 def gmail_fetch_all():
     logging.info("gmail_fetch_all: start")
     for raw in ACCOUNTS:
@@ -112,14 +93,12 @@ def run_gmail_job():
 # schedule parse email to create listing every minute
 @repeat(every(1).minutes)
 @safe_scheduled_job
-@core_path_v1_only
 def run_process_email():
     logging.info("run_process_email")
     process_pending()
 
 @repeat(every(3).minutes)
 @safe_scheduled_job
-@core_path_v1_only
 def run_verify_and_fill_missing_media_for_not_processed():
     logging.info("verify_and_fill_missing_media_for_not_processed")
     verify_and_fill_missing_media_for_not_processed(limit=35, max_workers=8)
@@ -133,7 +112,6 @@ def run_process_wp_price_and_media_updates():
 # schedule parse email to create listing every 5 minute
 @repeat(every(1).minutes)
 @safe_scheduled_job
-@core_path_v1_only
 def run_process_dup30days():
     logging.info("process_dup30days")
     process_not_processed_with_duplicate_rule()
@@ -141,7 +119,6 @@ def run_process_dup30days():
 
 @repeat(every(5).minutes)
 @safe_scheduled_job
-@core_path_v1_only
 def run_ai_nl_rules_runner():
     logging.info("ai_nl_rules_runner")
     apply_ai_english_rules(str(data_path("ai_listing_rules.yaml")), limit=50)
@@ -149,7 +126,6 @@ def run_ai_nl_rules_runner():
 
 @repeat(every(10).minutes)
 @safe_scheduled_job
-@core_path_v1_only
 def run_select_passed_listings_for_post():
     logging.info("select_passed_listings_for_post")
     select_passed_listings_for_post(limit=200, sort_by="created_at", mark_ready_status=None)
@@ -157,14 +133,12 @@ def run_select_passed_listings_for_post():
 
 @repeat(every(2).minutes)
 @safe_scheduled_job
-@core_path_v1_only
 def run_process_listings_ready_for_image_processing():
     logging.info("process_listings_ready_for_image_processing")
     process_listings_ready_for_image_processing(limit=5)
 
 @repeat(every(2).minutes)
 @safe_scheduled_job
-@core_path_v1_only
 def run_process_primary_image_verification():
     logging.info("process_primary_image_verification")
     process_primary_image_verification(limit=5, model="gpt-5.1")
@@ -172,14 +146,12 @@ def run_process_primary_image_verification():
 
 @repeat(every(2).minutes)
 @safe_scheduled_job
-@core_path_v1_only
 def run_make_whatsapp_posts_from_ready_to_post():
     logging.info("make_whatsapp_posts_from_ready_to_post")
     make_whatsapp_posts_from_ready_to_post(str(data_path("ad_post_rules.txt")), limit=5)
 
 @repeat(every(1).minutes)
 @safe_scheduled_job
-@core_path_v1_only
 def run_process_whatsapp_queue():
     logging.info("process_whatsapp_queue")
     process_whatsapp_queue(limit=5)
@@ -317,22 +289,6 @@ if __name__ == "__main__":
     )
     api_thread.start()
     logging.info("FastAPI status available at http://0.0.0.0:%s/server-status", status_port)
-
-    # PipelineV2 – start the end-to-end email worker when PIPELINE_VERSION=v2
-    if is_v2():
-        from pipeline_v2 import runner as pipeline_v2_runner
-        v2_thread = threading.Thread(
-            name="pipeline-v2-runner",
-            target=pipeline_v2_runner.run_forever,
-            daemon=True,
-        )
-        v2_thread.start()
-        logging.info(
-            "PipelineV2 runner started (PIPELINE_VERSION=v2); "
-            "core-path v1 crons are disabled"
-        )
-    else:
-        logging.info("PipelineV2 runner NOT started (PIPELINE_VERSION=v1)")
 
     # Main scheduler loop
     try:
