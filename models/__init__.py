@@ -211,8 +211,9 @@ class ParsedListing(Document):
     # ✅ add these (required by your endpoint update_fields)
     manual_special_preferences_saved_at = DateTimeField(null=True)     # always updates when admin saves
     manual_special_preferences_rematch_at = DateTimeField(null=True)   # only updates when should_rematch=True
-        
 
+    # Buyer-form special prefs extracted from email at parse time (NOT shown in WhatsApp posts)
+    extracted_special_preferences = ListField(StringField(), default=list)
 
     primary_image_check = DictField(null=True)
 

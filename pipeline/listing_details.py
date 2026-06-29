@@ -9,6 +9,10 @@ from ai.address_keys import update_parsed_listing_address_keys
 from integrations.google_formatter import get_street_and_city, geocode_response
 from services.direct_wholesaler_service import get_wholesaler_map
 from pipeline.address_utils import resolve_street_address_from_fields
+from buyers.special_preferences import (
+    build_extraction_prompt_block,
+    finalize_extracted_special_preferences,
+)
 
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -133,6 +137,16 @@ def _listing_schema() -> Dict[str, Any]:
         # Images
         "images": {"type": "array", "items": {"type": "string"}},
         "other_images_source": {"type": ["string", "null"]},
+
+        # Internal buyer-matching flags (exact labels from buyer form — not for marketing posts)
+        "special_preferences_detected": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Canonical buyer-form special preference labels detected in this listing's email text. "
+                "Use ONLY exact labels from the allowed list. Omit if not clearly stated."
+            ),
+        },
     }
     return {
         "type": "object",
@@ -201,6 +215,7 @@ IMAGE_RULES_NEAREST = """
 
 def build_system_prompt(use_nearest_image_rules: bool = False) -> str:
     image_block = IMAGE_RULES_NEAREST if use_nearest_image_rules else IMAGE_RULES_DEFAULT
+    special_prefs_block = build_extraction_prompt_block()
     return f"""\
 You extract structured data from EMAIL Markdown Content containing MULTIPLE property listings, Process and return ALL listings addresses.
 Don't skip any address to process. 
@@ -241,6 +256,8 @@ Rules:
   • Do NOT paraphrase or normalize wording; preserve numbers, currency symbols, and units as written.
   • If extremely long, keep the first ~1800–2000 characters and append an ellipsis (…) at the end.
   • Do not mix content from different listings.
+
+{special_prefs_block}
 
   Agent / Wholesaler/ Sender Contact Details handling (important), Make sure to include:
 - First, scan the email for a single GLOBAL contact block (often in the header or footer) that contains any of: name, phone, email of the sender/agent/wholesaler.
@@ -463,6 +480,10 @@ def upsert_parsed_listings_from_html(
                 addr = resolved_addr
                 lst["address"] = addr
 
+            extracted_special_prefs = finalize_extracted_special_preferences(lst)
+            # Keep only in top-level DB field — not inside complete_info blob used for WhatsApp
+            lst.pop("special_preferences_detected", None)
+
             price_val = None
             if lst.get("list_price_usd") is not None:
                 try:
@@ -531,6 +552,7 @@ def upsert_parsed_listings_from_html(
                 "set__images": _clean_images(lst.get("images")),
                 "set__other_images_source": (lst.get("other_images_source") or "").strip() or None,
                 "set__complete_info": lst,
+                "set__extracted_special_preferences": extracted_special_prefs,
                 "set_on_insert__status": status_for_insert,  # brand-new only
                 "set__direct_wholeseller": direct_wholeseller_flag,
             }
