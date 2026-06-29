@@ -1,6 +1,0 @@
-2026-06-26 19:27:08 INFO venv ok: /d/Workspace/RichListings/py_RichListings/.venv/Scripts/python.exe
-2026-06-26 19:27:13 ERROR PM2 startup failed: virtualenv Python not found.
-2026-06-26 19:27:13 ERROR   Expected: /tmp/broken-venv-test/venv/bin/python
-2026-06-26 19:27:13 ERROR   Or:       /tmp/broken-venv-test/.venv/bin/python
-2026-06-26 19:27:13 ERROR   /tmp/broken-venv-test/venv exists but bin/python is missing or not executable.
-2026-06-26 19:27:13 ERROR   Fix: cd /tmp/broken-venv-test && python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
