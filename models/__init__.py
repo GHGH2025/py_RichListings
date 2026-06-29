@@ -545,6 +545,7 @@ class ListingPipelineMetric(Document):
     whatsapp_status = StringField()
     direct_wholeseller = StringField()
     skip_reason = StringField()
+    pipeline_version = StringField(default="v1")
 
     events = ListField(EmbeddedDocumentField(StageEvent), default=list)
 
