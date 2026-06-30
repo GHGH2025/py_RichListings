@@ -8,8 +8,10 @@ import requests
 import mimetypes
 from openai import OpenAI
 from datetime import datetime
-from ringcentral_auth import rc_auth_header
+from zoneinfo import ZoneInfo
+from integrations.ringcentral_auth import rc_auth_header
 from models import ParsedListing, WebFormBuyerSubmission, BuyerDealPage
+from core.paths import resolve_project_path
 
 BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL", "").strip()
 
@@ -18,7 +20,9 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 DEFAULT_BUYER_DESC_MODEL = "gpt-4.1"  # or reuse OPENAI_MODEL
 
-BUYER_TEMPLATE_PATH = os.getenv("BUYER_TEMPLATE_PATH", "buyer_notification_templates.json")
+BUYER_TEMPLATE_PATH = str(
+    resolve_project_path(os.getenv("BUYER_TEMPLATE_PATH", "data/buyer_notification_templates.json"))
+)
 
 _PLACEHOLDER_RE = re.compile(r"{{\s*(\w+)\s*}}")
 POF_EMAIL_API_URL = os.getenv(
@@ -26,12 +30,16 @@ POF_EMAIL_API_URL = os.getenv(
     "http://ec2-3-90-20-111.compute-1.amazonaws.com:8000/rich_ai_deal_Email",
 )
 
-RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com") 
+RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com")
 
 DEAL_PAGE_BASE_URL = os.getenv("DEAL_PAGE_BASE_URL", "https://deals.wholesaledealfinder.ai/deal")
 
+EASTERN = ZoneInfo("America/New_York")
+BUYER_SEND_WINDOW_START_HOUR = int(os.getenv("BUYER_SEND_WINDOW_START_HOUR", "7"))
+BUYER_SEND_WINDOW_END_HOUR = int(os.getenv("BUYER_SEND_WINDOW_END_HOUR", "19"))
+
 # Standard RingCentral SMS/MMS endpoint
-RC_SMS_URL = f"{RC_SERVER_URL}/restapi/v1.0/account/~/extension/~/sms" 
+RC_SMS_URL = f"{RC_SERVER_URL}/restapi/v1.0/account/~/extension/~/sms"
 
 
 
@@ -717,6 +725,12 @@ def _get_remote_file_size_bytes(url: str, timeout: int = 10) -> Optional[int]:
     except requests.RequestException:
         return None
 
+def _is_within_buyer_send_window() -> bool:
+    """True when current Florida/Eastern local time is within the send window (default 7am–7pm)."""
+    now_et = datetime.now(EASTERN)
+    return BUYER_SEND_WINDOW_START_HOUR <= now_et.hour < BUYER_SEND_WINDOW_END_HOUR
+
+
 def _create_deal_page(listing, buyer, context: dict) -> str:
     """
     Persist a BuyerDealPage snapshot for this listing+buyer pair.
@@ -750,6 +764,20 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
               * If email -> render Email HTML and call your email sender.
     3) Update listing.buyer_send_status -> 'sent' or 'send_failed'.
     """
+
+    if not _is_within_buyer_send_window():
+        logging.info(
+            "process_buyer_sends: skipped (outside %s–%s America/New_York send window)",
+            BUYER_SEND_WINDOW_START_HOUR,
+            BUYER_SEND_WINDOW_END_HOUR,
+        )
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "outside_send_window",
+            "processed": 0,
+            "failed": [],
+        }
 
     templates = _load_buyer_templates()
     email_subject = templates["email"].get("subject", "New deal for your review")

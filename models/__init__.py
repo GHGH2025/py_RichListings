@@ -211,8 +211,9 @@ class ParsedListing(Document):
     # ✅ add these (required by your endpoint update_fields)
     manual_special_preferences_saved_at = DateTimeField(null=True)     # always updates when admin saves
     manual_special_preferences_rematch_at = DateTimeField(null=True)   # only updates when should_rematch=True
-        
 
+    # Buyer-form special prefs extracted from email at parse time (NOT shown in WhatsApp posts)
+    extracted_special_preferences = ListField(StringField(), default=list)
 
     primary_image_check = DictField(null=True)
 
@@ -452,6 +453,104 @@ class WebFormBuyerSubmission(Document):
 
     def touch(self):
         self.updated_at = datetime.utcnow()
+
+
+class BuyerDealPage(Document):
+    meta = {
+        "collection": "buyer_deal_pages",
+        "indexes": [
+            {"fields": ["-created_at"], "name": "created_desc"},
+            {"fields": ["listing_id"], "name": "listing_id_idx"},
+            {"fields": ["buyer_id"], "name": "buyer_id_idx"},
+        ],
+    }
+
+    listing_id    = StringField(required=True)
+    buyer_id      = StringField()
+    first_name    = StringField()
+    address       = StringField()
+    price         = StringField()
+    description   = StringField()
+    pics_link     = StringField()
+    image_urls    = ListField(StringField(), default=list)
+    complete_info = DictField()
+    created_at    = DateTimeField(default=datetime.utcnow)
+
+
+class StageEvent(EmbeddedDocument):
+    stage = StringField(required=True)
+    status = StringField()
+    at = DateTimeField(required=True)
+    duration_sec = FloatField()
+    detail = StringField()
+
+
+class ListingPipelineMetric(Document):
+    meta = {
+        "collection": "pipeline_metrics",
+        "indexes": [
+            # Names align with default mongoengine index names already in MongoDB.
+            {"fields": ["listing_id"], "unique": True, "name": "listing_id_1"},
+            {"fields": ["-email_received_at"], "name": "email_received_at_-1"},
+            {"fields": ["current_stage", "-updated_at"], "name": "current_stage_1_updated_at_-1"},
+            {"fields": ["trace_id"], "name": "trace_id_1"},
+            {"fields": ["gmail_message_id"], "name": "gmail_message_id_1"},
+        ],
+    }
+
+    listing_id = StringField(required=True)
+    trace_id = StringField()
+    email_id = StringField()
+    account_label = StringField()
+    gmail_message_id = StringField()
+    list_index = IntField()
+
+    address_received = StringField()
+    city_received = StringField()
+    state_received = StringField()
+    zip_received = StringField()
+    full_address_received = StringField()
+
+    address_posted = StringField()
+    city_posted = StringField()
+    full_address_posted = StringField()
+    address_changed = BooleanField(default=False)
+
+    email_received_at = DateTimeField()
+    ingested_at = DateTimeField()
+    parsed_at = DateTimeField()
+    verified_at = DateTimeField()
+    dedup_at = DateTimeField()
+    rules_at = DateTimeField()
+    post_selection_at = DateTimeField()
+    image_curation_at = DateTimeField()
+    primary_image_at = DateTimeField()
+    ready_to_post_at = DateTimeField()
+    posted_at = DateTimeField()
+    podio_webhook_at = DateTimeField()
+    whatsapp_sent_at = DateTimeField()
+    podio_linked_at = DateTimeField()
+    wp_keys_at = DateTimeField()
+    wp_des_at = DateTimeField()
+    wp_synced_at = DateTimeField()
+
+    duration_to_parsed_sec = FloatField()
+    duration_to_posted_sec = FloatField()
+    duration_to_whatsapp_sec = FloatField()
+    duration_to_wp_sec = FloatField()
+    duration_to_podio_sec = FloatField()
+
+    current_stage = StringField()
+    listing_status = StringField()
+    wp_status = StringField()
+    whatsapp_status = StringField()
+    direct_wholeseller = StringField()
+    skip_reason = StringField()
+
+    events = ListField(EmbeddedDocumentField(StageEvent), default=list)
+
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
 
 
 from .direct_wholesaler import DirectWholesaler

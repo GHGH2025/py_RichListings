@@ -1,9 +1,0 @@
-{
-  "sms": {
-    "body": "{{first_name}},\n\nIt's your AI Assistant - here with another deal for your consideration:\n\nAddress: {{address}}\n{{description}}\nPrice: {{price}}{{pics_block}}\n\nFire Yourself! Let Our Ai Search Your Wholesalers Emails, Chats, & Websites for You! wholesaledealfinder.ai/add-your-wholesalers/ \nNot a good match, let us know why? WholesaleDealFinder.Ai/Fix \nWant to Update Your Buy Box? WholesaleDealFinder.Ai/Update-My-BuyBox\n\nReply STOP to OPT OUT"
-  },
-  "email": {
-    "subject": "New deal for your review",
-    "html": "<p>Hi {{first_name}},</p>\n<p>It's your AI Assistant - here with another deal for your consideration:</p>\n{{image_block}}\n<p><strong>Address:</strong> {{address}}</p>\n<p>{{description}}</p>\n<p><strong>Price:</strong> {{price}}</p>\n{{pics_block}}\n<p><strong>Fire Yourself!</strong> Let Our AI Search Your Wholesalers Emails, Chats, &amp; Websites for You!<br>\n<a href=\"https://wholesaledealfinder.ai/add-your-wholesalers/\" style=\"color:#ff6600;\">www.WholesaleDealFinder.Ai/Add-Your-Wholesalers</a></p>\n<p>Not a good match, let us know why?<br>\n<a href=\"https://www.WholesaleDealFinder.Ai/Fix\" style=\"color:#ff6600;\">www.WholesaleDealFinder.Ai/Fix</a></p>\n<p>Want to Update Your Buy Box?<br>\n<a href=\"https://www.WholesaleDealFinder.Ai/Update-My-BuyBox\" style=\"color:#ff6600;\">www.WholesaleDealFinder.Ai/Update-My-BuyBox</a></p>\n\n<p>Richard Burdette, Founder<br>\n<a href=\"https://www.WholesaleDealFinder.Ai\">WholesaleDealFinder.Ai</a><br>\nP: 754 200 1204</p>"
-  }
-}

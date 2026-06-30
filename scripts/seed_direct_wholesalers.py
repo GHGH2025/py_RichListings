@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from mongo_engine_conn import init_db
+from db.mongo_engine_conn import init_db
 from services.direct_wholesaler_service import DEFAULT_JSON_PATH, import_from_json
 
 
