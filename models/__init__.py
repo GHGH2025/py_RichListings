@@ -512,6 +512,28 @@ class BuyerDealEmailSend(Document):
     updated_at = DateTimeField(default=datetime.utcnow)
 
 
+class BuyerEmailBounceJobRun(Document):
+    """Persisted result of the daily buyer deal-email bounce reconciliation cron."""
+    meta = {
+        "collection": "buyer_email_bounce_job_runs",
+        "indexes": [
+            {"fields": ["-run_at"], "name": "run_at_desc"},
+            {"fields": ["target_date", "-run_at"], "name": "target_date_run_desc"},
+        ],
+    }
+
+    run_at = DateTimeField(required=True, default=datetime.utcnow)
+    target_date = StringField(required=True)
+    ok = BooleanField(default=False)
+    skipped = BooleanField(default=False)
+    reason = StringField()
+    checked_sends = IntField(default=0)
+    bounced_emails = IntField(default=0)
+    buyers_marked_invalid = IntField(default=0)
+    bounced_email_list = ListField(StringField(), default=list)
+    created_at = DateTimeField(default=datetime.utcnow)
+
+
 class StageEvent(EmbeddedDocument):
     stage = StringField(required=True)
     status = StringField()

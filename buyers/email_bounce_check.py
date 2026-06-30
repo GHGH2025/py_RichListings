@@ -17,7 +17,7 @@ from buyers.email_delivery_utils import (
     mark_buyer_email_invalid,
     normalize_email,
 )
-from models import BuyerDealEmailSend, WebFormBuyerSubmission
+from models import BuyerDealEmailSend, BuyerEmailBounceJobRun, WebFormBuyerSubmission
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -222,6 +222,23 @@ def _resolve_bounced_emails(
     return bounced
 
 
+def _persist_bounce_job_run(result: Dict[str, Any]) -> None:
+    try:
+        BuyerEmailBounceJobRun(
+            run_at=datetime.utcnow(),
+            target_date=str(result.get("date") or ""),
+            ok=bool(result.get("ok")),
+            skipped=bool(result.get("skipped")),
+            reason=str(result.get("reason") or ""),
+            checked_sends=int(result.get("checked_sends") or 0),
+            bounced_emails=int(result.get("bounced_emails") or 0),
+            buyers_marked_invalid=int(result.get("buyers_marked_invalid") or 0),
+            bounced_email_list=list(result.get("bounced_email_list") or []),
+        ).save()
+    except Exception:
+        logging.exception("Failed to persist buyer email bounce job run: %s", result)
+
+
 def _buyer_prefers_email(buyer_id: str) -> bool:
     buyer = WebFormBuyerSubmission.objects(id=buyer_id).only("contact").first()
     if not buyer or not buyer.contact:
@@ -253,7 +270,7 @@ def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
             "check_yesterday_buyer_email_bounces: no pending sends for %s (ET yesterday)",
             date_label,
         )
-        return {
+        result = {
             "ok": True,
             "date": date_label,
             "checked_sends": 0,
@@ -262,6 +279,8 @@ def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
             "skipped": True,
             "reason": "no_pending_sends",
         }
+        _persist_bounce_job_run(result)
+        return result
 
     candidate_emails = sorted({normalize_email(s.to_email) for s in sends if s.to_email})
     bounce_report = _fetch_bounce_report(
@@ -277,7 +296,7 @@ def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
                 inc__bounce_check_attempts=1,
                 set__updated_at=datetime.utcnow(),
             )
-        return {
+        result = {
             "ok": False,
             "date": date_label,
             "checked_sends": len(sends),
@@ -286,6 +305,8 @@ def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
             "skipped": True,
             "reason": "bounce_api_unavailable",
         }
+        _persist_bounce_job_run(result)
+        return result
 
     bounced_emails = _resolve_bounced_emails(bounce_report, candidate_emails)
     buyers_marked = 0
@@ -323,7 +344,7 @@ def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
         buyers_marked,
     )
 
-    return {
+    result = {
         "ok": True,
         "date": date_label,
         "checked_sends": len(sends),
@@ -331,3 +352,5 @@ def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
         "bounced_email_list": sorted(bounced_emails),
         "buyers_marked_invalid": buyers_marked,
     }
+    _persist_bounce_job_run(result)
+    return result
