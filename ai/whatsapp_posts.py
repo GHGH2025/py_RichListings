@@ -9,6 +9,10 @@ from openai import OpenAI
 from db.mongo_engine_conn import init_db
 from models import ParsedListing
 from pipeline.address_utils import resolve_street_address
+from pipeline.property_description import (
+    append_full_property_description,
+    get_verbatim_property_description,
+)
 import time, random
 import requests 
 from whatsapp.sender import send_listing_to_whatsapp
@@ -48,6 +52,7 @@ def _serialize_listing_full(pl) -> dict:
         "other_images_dropbox_link": getattr(pl, "other_images_dropbox_link", None),
         "post_content": pl.post_content,
         "complete_info": pl.complete_info or {},
+        "full_property_description": get_verbatim_property_description(pl.complete_info),
         "rules_ai_rule_id": pl.rules_ai_rule_id,
         "rules_ai_version": pl.rules_ai_version,
         "rules_ai_reason": pl.rules_ai_reason,
@@ -91,7 +96,9 @@ def _post_listing_to_webhook(pl_id) -> None:
         print(f"[webhook] failed: {e}")
 
 # System prompt keeps it dead simple and forces WhatsApp formatting
-SYSTEM_PROMPT = """You create short wholesale property posts for WHATSAPP.
+SYSTEM_PROMPT = """You create wholesale property post HEADERS for WHATSAPP.
+
+The full verbatim property description is appended automatically after your output — write only the header (address, price, dropbox link, optional brief highlights). Do NOT paste the full email text.
 
 Follow the human-written RULES exactly, but interpret **BOLD** as WhatsApp bold using *asterisks* (e.g., *text*).
 Use ONLY the values from the LISTING object provided. Do NOT invent data.
@@ -106,9 +113,10 @@ LISTING (full object we saved; use fields from complete_info first, fallback to 
 
 TASK:
 - Apply the RULES to this LISTING.
-- Produce a WhatsApp-friendly post:
+- Produce a WhatsApp-friendly post HEADER only:
   - Bold address and price using *asterisks* (WhatsApp style).
-  - Short, sales-friendly lines/bullets.
+  - Dropbox link under price when available.
+  - Optional brief highlight bullets — the full property description is appended separately.
 - Do NOT include any disallowed items from the rules (strip them if present in the source).
 - Use US dollar formatting for price (commas, no cents).
 - Return ONLY JSON: {{"post_content": "..."}}
@@ -188,6 +196,7 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
         try:
             listing_obj = _listing_payload(pl)
             post_text = _compose_post(rules_text, listing_obj)
+            post_text = append_full_property_description(post_text, pl.complete_info)
 
             pl.update(
                 set__post_content=post_text,

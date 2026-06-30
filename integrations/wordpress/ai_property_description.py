@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from bson import ObjectId
 from models import ParsedListing
+from pipeline.property_description import append_full_property_description_html
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -177,6 +178,7 @@ def ai_build_wp_property_description_for_listing(
     )
     data = json.loads(chat.choices[0].message.content)
     html = (data.get("property_description_html") or "").strip()
+    html = append_full_property_description_html(html, complete_info)
     notes = data.get("notes") or []
     return {"property_description_html": html, "notes": notes}
 

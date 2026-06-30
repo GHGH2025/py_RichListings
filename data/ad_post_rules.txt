@@ -1,26 +1,24 @@
-Write a short wholesale property post using ONLY the details provided.
+Write a wholesale property post header using ONLY the details provided.
+
+IMPORTANT: The full verbatim property description from `complete_info.complete_info` is appended automatically after your output. Focus your output on the header only — do NOT repeat the full email text.
 
 Must do:
-- Include the property description/details and the price if present.
 - **BOLD the full address line**.
 - **BOLD the price line** (e.g., **Price: $450,000**).
 - Immediately under the price line, if available, print ONLY the `other_images_dropbox_link` on its own line (no label, no formatting).
-- Use short, sales-friendly lines/bullets.
+- Optionally add a few short, sales-friendly highlight bullets for the most important facts (beds/baths/sqft, water, condition, comps) — keep this brief since the full description follows.
 - If a "wholesaler hint" is provided, use it only to guide tone/style. DO NOT print the name.
-- Factual Property Details (STRICT REQUIREMENT: Include if, and ONLY if, explicit evidence is found in the source text):
-  - You MUST identify and include ANY factual data, features, amenities, or conditions of the property clearly stated in the provided content (e.g., price $1M+, 55+ mentioned, wood/frame construction, water/flood damage, pool, garage, ocean access, full rehab needed, NO HOA, tear-down, mobile home, etc.).
-  - Extract and include all important real facts about the property so that no factual data is left or missed in the final content from the provided content.
-  - Comparables / Comps: If the source text explicitly includes comparables (e.g., "Comparables:", "Comps:", or a list of nearby sold/listed properties with addresses and prices), you MUST include them in the post. Format each comp as a bullet or short line showing the address, bed/bath, size, and sold/listed price. Do NOT invent or add comparables that are not explicitly stated in the source data.
-  - ANTI-HALLUCINATION RULE: It is STRICTLY FORBIDDEN to include any feature, condition, or detail if it is not explicitly mentioned or clearly implied by the source data. Do not guess, assume, or randomly apply features. Check the content thoroughly first, then only apply matching facts.
+- Comparables / Comps: If present in the source, you may include key comps as short bullets in the header section only.
+- ANTI-HALLUCINATION RULE: Do not invent any feature, condition, or detail not explicitly stated in the source data.
 
 Never include (omit if present in the source):
 - Escrow Amount or EMD
 - ARV / After Repair Value
 - COE / Close of Escrow / Closing Date / Any dates
 - Name of Title Company / Escrow Company / Closing Agent
-- Phone numbers (except the footer above)
+- Phone numbers
 - Email addresses
-- Websites or links of any kind
+- Websites or links of any kind (except `other_images_dropbox_link` on its own line under price)
 - QR Codes
 - Emojis
 - Company names
@@ -29,6 +27,6 @@ Never include (omit if present in the source):
 Formatting notes:
 - Use Markdown for bold (i.e., **text**).
 - Use US dollar formatting for price (no cents, with commas).
-- Only include fields that are present (do NOT invent). However, ensuring you strictly extract ALL real factual property details found in the source data does not violate this rule.
+- Only include fields that are present (do NOT invent).
 - If a field is unknown or missing, simply skip it (no "N/A").
 - Do NOT include any footer or contact info

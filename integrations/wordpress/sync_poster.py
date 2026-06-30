@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse, parse_qsl, urlunparse, urlencode
 from models import ParsedListing  # mongoengine document
 from pipeline.address_utils import resolve_street_address
+from pipeline.property_description import append_full_property_description_html
 import logging
 
 WP_TOKEN = os.getenv("WP_API_TOKEN")  # <-- set in env
@@ -106,8 +107,9 @@ def _build_post_body(pl: ParsedListing) -> Dict[str, Any]:
         body["posttitle"] = full_addr_line
         body["address"]   = full_addr_line
 
-    # description (HTML) from wp_property_description
+    # description (HTML) from wp_property_description + full verbatim text
     desc = _trim(getattr(pl, "wp_property_description", None))
+    desc = append_full_property_description_html(desc or "", getattr(pl, "complete_info", None) or {})
     if desc:
         body["postdesc"] = desc
 

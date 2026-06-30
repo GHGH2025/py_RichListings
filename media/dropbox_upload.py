@@ -4,7 +4,6 @@ import mimetypes
 import dropbox
 import re
 from dotenv import load_dotenv
-import shutil
 from dropbox.files import WriteMode
 from media.scrape_images import extract_image_links
 from media.check_direct_link import safe_filename_from_url,is_direct_image_url
