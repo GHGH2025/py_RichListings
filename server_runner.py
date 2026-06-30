@@ -25,7 +25,7 @@ from integrations.wordpress.price_media_updates import process_wp_price_and_medi
 from ingestion.forward_completed import forward_completed_source_emails
 from whatsapp.sender import process_whatsapp_queue
 from db.mongo_engine_conn import init_db
-from models import FilteredListingEmail, ParsedListing, ScrapingList, WebFormBuyerSubmission, ListingPipelineMetric
+from models import FilteredListingEmail, ParsedListing, ScrapingList, WebFormBuyerSubmission, ListingPipelineMetric, BuyerDealEmailSend
 from models.special_avail_list import SpecialAvailList
 from integrations.podio.direct_wholesaler import process_direct_wholeseller_batch
 from whatsapp.keepalive import send_keepalive_template, parse_recipients_env
@@ -34,6 +34,7 @@ from ai.image_curation import process_listings_ready_for_image_processing, proce
 from special_avails.processor import process_one_special_avail_with_active_listings, process_one_special_avail_matching
 from buyers.matching_api import process_pending_buyer_matching_batch
 from buyers.matched_process import process_pending_buyer_descriptions, process_buyer_sends
+from buyers.email_bounce_check import check_yesterday_buyer_email_bounces
 
 from core.paths import data_path
 
@@ -46,6 +47,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 START_TIME = time.time()  # for uptime calculation
 os.environ["APP_START_TIME"] = str(START_TIME)  # used by api_app for consistent uptime
 BUYER_MATCHING_CRON_MINUTES = int(os.getenv("BUYER_MATCHING_CRON_MINUTES", "3"))
+BUYER_EMAIL_BOUNCE_CHECK_TIME = os.getenv("BUYER_EMAIL_BOUNCE_CHECK_TIME", "06:00")
 
 
 def safe_scheduled_job(fn):
@@ -237,6 +239,13 @@ def run_process_buyer_sends():
     logging.info("process_buyer_sends")
     process_buyer_sends(limit=2)
 
+@repeat(every().day.at(BUYER_EMAIL_BOUNCE_CHECK_TIME))
+@safe_scheduled_job
+def run_check_yesterday_buyer_email_bounces():
+    logging.info("check_yesterday_buyer_email_bounces: start")
+    result = check_yesterday_buyer_email_bounces()
+    logging.info("check_yesterday_buyer_email_bounces: result=%s", result)
+
 # @repeat(every(15).hours)
 # def run_whatsapp_keepalive():
 #     logging.info("run_whatsapp_keepalive")
@@ -274,6 +283,7 @@ if __name__ == "__main__":
         ScrapingList.ensure_indexes()
         SpecialAvailList.ensure_indexes()
         ListingPipelineMetric.ensure_indexes()
+        BuyerDealEmailSend.ensure_indexes()
 
         # gmail_fetch_all()
     except Exception:

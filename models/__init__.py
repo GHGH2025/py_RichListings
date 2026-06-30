@@ -373,6 +373,9 @@ class BuyerContact(EmbeddedDocument):
     # ✅ NEW: store multi-select from frontend
     preferences = ListField(StringField(), default=list)
 
+    # Set True when deal-email API reports bounce / address-not-found; skips future email sends
+    is_invalid_email = BooleanField(default=False, db_field="isInValidEmail")
+
 
 class BuyerLocation(EmbeddedDocument):
     # legacy (kept for indexes + old logic)
@@ -475,6 +478,38 @@ class BuyerDealPage(Document):
     image_urls    = ListField(StringField(), default=list)
     complete_info = DictField()
     created_at    = DateTimeField(default=datetime.utcnow)
+
+
+class BuyerDealEmailSend(Document):
+    """Audit log for buyer deal notification emails (used by daily bounce reconciliation)."""
+    meta = {
+        "collection": "buyer_deal_email_sends",
+        "indexes": [
+            {"fields": ["-sent_at"], "name": "sent_at_desc"},
+            {"fields": ["bounce_check_status", "sent_at"], "name": "bounce_check_pending_sent"},
+            {"fields": ["buyer_id", "-sent_at"], "name": "buyer_sent_desc"},
+            {"fields": ["to_email", "-sent_at"], "name": "to_email_sent_desc"},
+        ],
+    }
+
+    buyer_id = StringField(required=True)
+    to_email = StringField(required=True)
+    listing_id = StringField()
+    subject = StringField()
+    sent_at = DateTimeField(required=True, default=datetime.utcnow)
+    send_ok = BooleanField(default=False)
+    message_id = StringField()
+    provider_status_code = IntField()
+    provider_response = DictField()
+    bounce_check_status = StringField(
+        choices=("pending", "clean", "bounced", "skipped"),
+        default="pending",
+    )
+    bounce_checked_at = DateTimeField()
+    bounce_check_attempts = IntField(default=0)
+    bounce_reason = StringField()
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
 
 
 class StageEvent(EmbeddedDocument):

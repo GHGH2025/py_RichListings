@@ -12,6 +12,11 @@ from zoneinfo import ZoneInfo
 from integrations.ringcentral_auth import rc_auth_header
 from models import ParsedListing, WebFormBuyerSubmission, BuyerDealPage
 from core.paths import resolve_project_path
+from buyers.email_delivery_utils import (
+    email_send_indicates_invalid_address,
+    mark_buyer_email_invalid,
+)
+from buyers.email_bounce_check import log_buyer_deal_email_send
 
 BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL", "").strip()
 
@@ -395,8 +400,6 @@ def _format_full_address(addr: str, city: str, state: str, zip_code: str) -> str
     return ", ".join(parts) if parts else ""
 
 
-
-
 def send_email_to_buyer(to_email: str, subject: str, html_body: str, timeout: int = 20) -> dict:
     """
     Send an email to a buyer using the external /pofEmail API.
@@ -411,7 +414,9 @@ def send_email_to_buyer(to_email: str, subject: str, html_body: str, timeout: in
         "ok": bool,
         "status_code": int | None,
         "response_text": str | None,
-        "error": str | None
+        "response_json": dict | None,
+        "error": str | None,
+        "invalid_email": bool,
       }
     """
     to_email = (to_email or "").strip()
@@ -423,7 +428,9 @@ def send_email_to_buyer(to_email: str, subject: str, html_body: str, timeout: in
             "ok": False,
             "status_code": None,
             "response_text": None,
+            "response_json": None,
             "error": "missing_to_email",
+            "invalid_email": False,
         }
 
     if not subject:
@@ -431,7 +438,9 @@ def send_email_to_buyer(to_email: str, subject: str, html_body: str, timeout: in
             "ok": False,
             "status_code": None,
             "response_text": None,
+            "response_json": None,
             "error": "missing_subject",
+            "invalid_email": False,
         }
 
     payload = {
@@ -446,8 +455,17 @@ def send_email_to_buyer(to_email: str, subject: str, html_body: str, timeout: in
             json=payload,
             timeout=timeout,
         )
-        print("resp",resp)
+        response_json: Optional[dict] = None
+        try:
+            parsed = resp.json()
+            if isinstance(parsed, dict):
+                response_json = parsed
+        except ValueError:
+            pass
+
         ok = resp.status_code in (200, 201, 202)
+        if response_json and response_json.get("success") is False:
+            ok = False
 
         if not ok:
             logging.warning(
@@ -456,12 +474,26 @@ def send_email_to_buyer(to_email: str, subject: str, html_body: str, timeout: in
                 resp.text[:500],
             )
 
-        return {
+        result = {
             "ok": ok,
             "status_code": resp.status_code,
             "response_text": resp.text,
+            "response_json": response_json,
             "error": None if ok else f"non_2xx_status:{resp.status_code}",
         }
+        if not ok and response_json:
+            api_err = response_json.get("error") or response_json.get("message") or response_json.get("detail")
+            if api_err:
+                result["error"] = str(api_err)
+
+        result["invalid_email"] = email_send_indicates_invalid_address(result)
+        if result["invalid_email"]:
+            logging.warning(
+                "send_email_to_buyer: invalid/bounced recipient detected for %s: %s",
+                to_email,
+                (result.get("error") or result.get("response_text") or "")[:300],
+            )
+        return result
 
     except requests.RequestException as e:
         logging.exception("send_email_to_buyer: request failed")
@@ -469,7 +501,9 @@ def send_email_to_buyer(to_email: str, subject: str, html_body: str, timeout: in
             "ok": False,
             "status_code": None,
             "response_text": None,
+            "response_json": None,
             "error": f"request_failed:{e}",
+            "invalid_email": False,
         }
 
 def _normalize_phone(num: str) -> str:
@@ -914,8 +948,17 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
 
                 print("prefs", prefs)
 
+                prefers_email = "email" in prefs
                 can_text = ("text" in prefs) and bool(contact.text_number)
-                can_email = ("email" in prefs) and bool(contact.email)
+                if prefers_email and getattr(contact, "is_invalid_email", False):
+                    logging.info(
+                        "Skipping email for buyer %s (%s): contact.is_invalid_email=True",
+                        buyer.id,
+                        contact.email,
+                    )
+                    can_email = False
+                else:
+                    can_email = prefers_email and bool(contact.email)
 
                 # Base context for both SMS and Email
                 base_ctx = {
@@ -979,9 +1022,18 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                     )
                     print("email_result",email_result)
 
-                    if not email_result.get("ok"):
-                        # handle/log failure if you want
+                    if email_result.get("invalid_email"):
+                        mark_buyer_email_invalid(buyer.id, reason="immediate_send_response")
+                    elif not email_result.get("ok"):
                         logging.warning("Buyer email failed for %s: %s", contact.email, email_result)
+
+                    log_buyer_deal_email_send(
+                        buyer_id=str(buyer.id),
+                        to_email=contact.email,
+                        listing_id=str(pl.id),
+                        subject=email_subject,
+                        send_result=email_result,
+                    )
 
                     # TODO: plug your actual Email sender here
                     # send_email_to_buyer(contact.email, email_subject, html_body)
