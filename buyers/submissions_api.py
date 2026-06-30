@@ -718,8 +718,14 @@ def save_update(body: UpdateSaveRequest):
     loc_city_legacy = (loc_cities[0] if loc_cities else "")
 
     # ---- Update Mongo doc (same record) ----
+    new_email = (incoming.contact.email or "").strip()
+    old_email = (doc.contact.email or "").strip()
+
     doc.contact.name = (incoming.contact.name or "").strip()
-    doc.contact.email = (incoming.contact.email or "").strip()
+    doc.contact.email = new_email
+
+    if _normalize_email(new_email) != _normalize_email(old_email):
+        doc.contact.is_invalid_email = False
 
     doc.contact.text_number = number
     doc.contact.phone_call = number
