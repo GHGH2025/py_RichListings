@@ -1,5 +1,7 @@
 # image_curation.py
+import base64
 import json
+import mimetypes
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -133,6 +135,43 @@ Return ONLY JSON with this exact structure:
 }
 """
 
+DROPBOX_PROPERTY_IMAGE_PROMPT = """
+You are a strict visual gatekeeper for a real estate Dropbox gallery.
+
+Look at the ACTUAL PIXELS in this image. The file is a valid image file, but most gallery folders
+also contain non-property images mixed in. Upload ONLY real property photographs.
+
+KEEP = true ONLY for genuine property photographs:
+- House / condo / building exterior (front, side, back, street view)
+- Interior rooms (kitchen, living room, bedroom, bathroom, hallway)
+- Yard, lot, land, driveway, garage, patio, pool area
+- Drone or aerial photos of the parcel or building
+- Google Street View style photos of the property on the street
+
+KEEP = false for EVERYTHING else, including:
+- Agent headshots, portraits, selfies, team photos, pictures of people as the main subject
+  (example: professional portrait of a man/woman in business attire on a plain background)
+- Company logos, team logos, brand marks, wordmarks — even if the logo contains a house icon
+  or property clipart (example: a graphic logo with a stylized house + company name)
+- White, black, or transparent logo variants on a plain/solid background
+- Marketing flyers, banners, text tiles, price graphics, QR codes, business cards
+- Maps, floor plans, documents, screenshots, website/app UI captures
+- Stock photos or interiors that are clearly not the subject property
+
+Critical rules:
+- A graphic logo with a house drawing is NOT a property photo — SKIP it.
+- A person portrait is NOT a property photo — SKIP it.
+- When unsure, SKIP (keep=false). Only keep clear property photographs.
+- A small watermark on an otherwise real property photo is OK.
+
+Return ONLY JSON:
+{
+  "url": "<same path as given>",
+  "keep": true or false,
+  "reason": "short reason, e.g. 'property exterior', 'kitchen', 'agent headshot', 'company logo'"
+}
+"""
+
 
 def _response_format() -> Dict[str, Any]:
     return {"type": "json_object"}
@@ -205,11 +244,34 @@ def classify_primary_image(url: str, model: Optional[str] = None) -> Dict[str, A
     return data
 
 
-def classify_single_image(url: str) -> Dict[str, Any]:
+def _normalize_classifier_result(data: Dict[str, Any], source: str) -> Dict[str, Any]:
+    if "url" not in data or not isinstance(data["url"], str):
+        data["url"] = source
+
+    keep_val = data.get("keep")
+    if not isinstance(keep_val, bool):
+        return {
+            "url": data["url"],
+            "keep": False,
+            "reason": f"invalid_keep_value: {keep_val!r}",
+        }
+
+    if not isinstance(data.get("reason"), str):
+        data["reason"] = ""
+
+    return data
+
+
+def _invoke_image_classifier(
+    *,
+    source_label: str,
+    image_ref: str,
+    prompt: str = CURATOR_CLASSIFIER_PROMPT,
+) -> Dict[str, Any]:
     content = [
-        {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
-        {"type": "text", "text": f"URL: {url}"},
-        {"type": "image_url", "image_url": {"url": url}},
+        {"type": "text", "text": prompt},
+        {"type": "text", "text": f"SOURCE: {source_label}"},
+        {"type": "image_url", "image_url": {"url": image_ref}},
     ]
 
     resp = client.chat.completions.create(
@@ -219,28 +281,38 @@ def classify_single_image(url: str) -> Dict[str, Any]:
         response_format={"type": "json_object"},
     )
 
-    raw = resp.choices[0].message.content
-    data = json.loads(raw)
+    data = json.loads(resp.choices[0].message.content)
+    return _normalize_classifier_result(data, source_label)
 
-    # --- basic schema validation ---
-    # Ensure url is present and correct-ish
-    if "url" not in data or not isinstance(data["url"], str):
-        data["url"] = url
 
-    # Ensure keep is a proper bool; if not, force skip
-    keep_val = data.get("keep")
-    if not isinstance(keep_val, bool):
+def classify_single_image(url: str) -> Dict[str, Any]:
+    return _invoke_image_classifier(source_label=url, image_ref=url)
+
+
+def classify_local_image(local_path: str, *, for_dropbox: bool = False) -> Dict[str, Any]:
+    """
+    Classify a local image by visually inspecting its pixels.
+    Uses a base64 data URL so staging files do not need to be publicly accessible.
+    """
+    content_type, _ = mimetypes.guess_type(local_path)
+    mime = (content_type or "image/jpeg").split(";")[0].strip()
+    if not mime.startswith("image/"):
         return {
-            "url": data["url"],
+            "url": local_path,
             "keep": False,
-            "reason": f"invalid_keep_value: {keep_val!r}",
+            "reason": "not_an_image",
         }
 
-    # Ensure reason is a string
-    if not isinstance(data.get("reason"), str):
-        data["reason"] = ""
+    with open(local_path, "rb") as image_file:
+        encoded = base64.b64encode(image_file.read()).decode("utf-8")
 
-    return data
+    data_url = f"data:{mime};base64,{encoded}"
+    prompt = DROPBOX_PROPERTY_IMAGE_PROMPT if for_dropbox else CURATOR_CLASSIFIER_PROMPT
+    return _invoke_image_classifier(
+        source_label=local_path,
+        image_ref=data_url,
+        prompt=prompt,
+    )
 
 
 def _filter_property_images(image_urls: List[str]):
