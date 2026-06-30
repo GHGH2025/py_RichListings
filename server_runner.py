@@ -25,7 +25,15 @@ from integrations.wordpress.price_media_updates import process_wp_price_and_medi
 from ingestion.forward_completed import forward_completed_source_emails
 from whatsapp.sender import process_whatsapp_queue
 from db.mongo_engine_conn import init_db
-from models import FilteredListingEmail, ParsedListing, ScrapingList, WebFormBuyerSubmission, ListingPipelineMetric, BuyerDealEmailSend
+from models import (
+    FilteredListingEmail,
+    ParsedListing,
+    ScrapingList,
+    WebFormBuyerSubmission,
+    ListingPipelineMetric,
+    BuyerDealEmailSend,
+    BuyerEmailBounceJobRun,
+)
 from models.special_avail_list import SpecialAvailList
 from integrations.podio.direct_wholesaler import process_direct_wholeseller_batch
 from whatsapp.keepalive import send_keepalive_template, parse_recipients_env
@@ -284,6 +292,7 @@ if __name__ == "__main__":
         SpecialAvailList.ensure_indexes()
         ListingPipelineMetric.ensure_indexes()
         BuyerDealEmailSend.ensure_indexes()
+        BuyerEmailBounceJobRun.ensure_indexes()
 
         # gmail_fetch_all()
     except Exception:
