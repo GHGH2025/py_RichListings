@@ -30,41 +30,6 @@ ALLOWED_EXTS = {
     ".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v"
 }
 
-VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v"}
-
-
-def _ai_image_filter_enabled() -> bool:
-    return os.getenv("DROPBOX_AI_IMAGE_FILTER", "true").strip().lower() in ("1", "true", "yes")
-
-
-def should_keep_local_media(local_path: str) -> tuple[bool, str]:
-    """
-    Return (keep, reason) for a downloaded file before Dropbox upload.  
-    Videos are always kept; images are classified with the same vision rules as image curation.
-    """
-    _, ext = os.path.splitext(local_path.lower())
-    if ext in VIDEO_EXTS:
-        return True, "video"
-
-    if not _ai_image_filter_enabled():
-        return True, "filter_disabled"
-
-    try:
-        from ai.image_curation import classify_local_image
-
-        result = classify_local_image(local_path, for_dropbox=True)
-        file_name = os.path.basename(local_path)
-        if result.get("keep") is True:
-            reason = (result.get("reason") or "property_photo").strip()
-            print(f"AI kept property image: {file_name} ({reason})")
-            return True, reason
-        reason = (result.get("reason") or "not_property_photo").strip()
-        print(f"AI rejected non-property image: {file_name} ({reason})")
-        return False, reason
-    except Exception as e:
-        print(f"AI image filter error for {os.path.basename(local_path)}: {e}")
-        return False, f"vision_error: {e}"
-
 ################################
 #handle dropbox links
 def process_dropbox_link(dropbox_link: str, dropbox_folder: str = "/PropertyListings"):
@@ -127,8 +92,7 @@ def process_dropbox_link(dropbox_link: str, dropbox_folder: str = "/PropertyList
                         dst.write(src.read())
                     try:
                         link = upload_to_dropbox(extract_path, dropbox_folder)
-                        if link:
-                            uploaded_links.append(link)
+                        uploaded_links.append(link)
                     except Exception as up_err:
                         print(f"Upload failed for {info.filename}: {up_err}")
 
@@ -175,8 +139,7 @@ def process_dropbox_link(dropbox_link: str, dropbox_folder: str = "/PropertyList
                 
                 try:
                     link = upload_to_dropbox(final_local_path, dropbox_folder)
-                    if link:
-                        uploaded_links.append(link)
+                    uploaded_links.append(link)
                 finally:
                     try:
                         os.remove(final_local_path)
@@ -210,10 +173,6 @@ def download_file_from_url(url, save_path):
 
 def upload_to_dropbox(local_path, dropbox_folder):
     file_name = os.path.basename(local_path)
-    keep, reason = should_keep_local_media(local_path)
-    if not keep:
-        print(f"Skipping non-property media for Dropbox: {file_name} ({reason})")
-        return None
 
     # Ensure the folder exists
     try:
@@ -228,7 +187,7 @@ def upload_to_dropbox(local_path, dropbox_folder):
     with open(local_path, "rb") as f:
         dbx.files_upload(f.read(), dropbox_file_path, mode=WriteMode("overwrite"))
 
-    print(f"Uploaded property media to Dropbox: {dropbox_file_path} ({reason})")
+    print(f"Uploaded {file_name} to Dropbox: {dropbox_file_path}")
 
     # Always return the folder's shared link
     return create_folder_shared_link(dropbox_folder)
@@ -431,22 +390,16 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
                 for chunk in r.iter_content(1024):
                     f.write(chunk)
 
-        keep, reason = should_keep_local_media(local_path)
-        if not keep:
-            print(f"Skipping non-property media for Dropbox: {file_name} ({reason})")
-            os.remove(local_path)
-            continue
-
         with open(local_path, "rb") as f:
             dropbox_path = f"{dropbox_folder}/{file_name}"
             dbx.files_upload(f.read(), dropbox_path, mode=WriteMode("overwrite"))
-            print(f"Uploaded property media to Dropbox: {dropbox_path} ({reason})")
+            print(f"Uploaded {file_name} to Dropbox: {dropbox_path}")
             uploaded_count += 1
 
         os.remove(local_path)
 
     if uploaded_count == 0:
-        print(f"No property media uploaded to {dropbox_folder}")
+        print(f"No media uploaded to {dropbox_folder}")
         return None
 
     return create_folder_shared_link(dropbox_folder)
