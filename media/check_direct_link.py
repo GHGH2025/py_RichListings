@@ -17,7 +17,7 @@ def is_direct_image_url(url: str) -> tuple[bool, str | None]:
     path = urlsplit(url).path  # strips ?query#fragment
     ext = os.path.splitext(path)[1].lower()
     if ext in IMG_EXTS:
-        return True, None
+        return True, None   
     # Fallback: HEAD check Content-Type
     try:
         r = requests.head(url, allow_redirects=True, timeout=10, headers={"User-Agent": UA})
@@ -43,3 +43,5 @@ def safe_filename_from_url(url: str, content_type: str | None = None) -> str:
             ext = ".jpg"  # last-resort default
         base = f"{name or 'image_' + str(int(time.time()*1000))}{ext}"
     return base
+       
+
