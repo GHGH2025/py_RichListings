@@ -12,8 +12,38 @@ _BOUNCE_TEXT_HINTS = re.compile(
     r"(address not found|user unknown|mailbox not found|mailbox unavailable|"
     r"recipient address rejected|invalid recipient|invalid email|no such user|"
     r"does not exist|undeliverable|permanent.?fail|hard.?bounce|"
-    r"email.?bounce|\bbounced\b|550[\s-]|551[\s-]|553[\s-]|554[\s-])",
+    r"email.?bounce|\bbounced\b|550[\s-]|551[\s-]|553[\s-]|554[\s-]|"
+    r"wasn'?t delivered|was not delivered|could not be delivered|"
+    r"delivery status notification|account that you tried to reach)",
     re.IGNORECASE,
+)
+
+_SOFT_BOUNCE_HINTS = re.compile(
+    r"(mailbox full|quota exceeded|try again later|temporarily unavailable|"
+    r"temporary failure|deferred|452[\s-]|421[\s-]|4\.2\.\d|over quota)",
+    re.IGNORECASE,
+)
+
+_EMAIL_TOKEN_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+
+_RECIPIENT_EXTRACT_PATTERNS = (
+    re.compile(r"wasn'?t delivered to\s+<?([\w.+-]+@[\w.-]+\.\w+)>?", re.IGNORECASE),
+    re.compile(r"was not delivered to\s+<?([\w.+-]+@[\w.-]+\.\w+)>?", re.IGNORECASE),
+    re.compile(r"could not be delivered to\s+<?([\w.+-]+@[\w.-]+\.\w+)>?", re.IGNORECASE),
+    re.compile(r"delivery to the following recipient failed[^\n]*\n[^\n]*<?([\w.+-]+@[\w.-]+\.\w+)>?", re.IGNORECASE),
+    re.compile(r"final-recipient:\s*rfc822;\s*([\w.+-]+@[\w.-]+\.\w+)", re.IGNORECASE),
+    re.compile(r"original-recipient:\s*rfc822;\s*([\w.+-]+@[\w.-]+\.\w+)", re.IGNORECASE),
+    re.compile(r"\bto:\s*([\w.+-]+@[\w.-]+\.\w+)", re.IGNORECASE),
+    re.compile(r"address not found[^\n]*<?([\w.+-]+@[\w.-]+\.\w+)>?", re.IGNORECASE),
+    re.compile(r"the email account that you tried to reach[^\n]*<?([\w.+-]+@[\w.-]+\.\w+)>?", re.IGNORECASE),
+)
+
+_SYSTEM_EMAIL_PREFIXES = (
+    "mailer-daemon@",
+    "postmaster@",
+    "noreply@",
+    "no-reply@",
+    "mail-delivery@",
 )
 
 
@@ -22,6 +52,81 @@ def text_indicates_invalid_email(text: str) -> bool:
     if not s:
         return False
     return bool(_BOUNCE_TEXT_HINTS.search(s))
+
+
+def is_soft_bounce_text(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return False
+    return bool(_SOFT_BOUNCE_HINTS.search(s))
+
+
+def is_system_or_sender_email(email: str) -> bool:
+    em = normalize_email(email)
+    if not em:
+        return True
+    return any(em.startswith(prefix) for prefix in _SYSTEM_EMAIL_PREFIXES)
+
+
+def is_delivery_failure_notification(*, subject: str, from_header: str, body: str) -> bool:
+    """True when a Gmail/DSN message looks like a permanent delivery failure."""
+    combined = "\n".join(part for part in (subject, from_header, body) if part)
+    if not combined.strip():
+        return False
+
+    if is_soft_bounce_text(combined) and not text_indicates_invalid_email(combined):
+        return False
+
+    if text_indicates_invalid_email(combined):
+        return True
+
+    from_lower = (from_header or "").lower()
+    subj_lower = (subject or "").lower()
+    if any(
+        token in from_lower
+        for token in ("mailer-daemon", "postmaster", "mail delivery subsystem", "mail delivery")
+    ):
+        return True
+
+    return any(
+        token in subj_lower
+        for token in (
+            "delivery status notification",
+            "address not found",
+            "undelivered mail",
+            "returned mail",
+            "mail delivery failed",
+            "delivery failure",
+            "message blocked",
+            "failure notice",
+        )
+    )
+
+
+def extract_invalid_recipients_from_bounce_body(body: str, candidate_emails: Set[str]) -> Set[str]:
+    """
+    Extract bounced recipient addresses from a delivery-failure email body.
+    Only returns emails that appear in candidate_emails (emails we sent to).
+    """
+    if not body or not candidate_emails:
+        return set()
+
+    found: Set[str] = set()
+    for pattern in _RECIPIENT_EXTRACT_PATTERNS:
+        for match in pattern.finditer(body):
+            email = normalize_email(match.group(1))
+            if email in candidate_emails:
+                found.add(email)
+
+    if text_indicates_invalid_email(body):
+        mentioned = {
+            normalize_email(token)
+            for token in _EMAIL_TOKEN_RE.findall(body)
+            if not is_system_or_sender_email(token)
+        }
+        found |= mentioned & candidate_emails
+
+    return found
 
 
 def json_indicates_invalid_email(data: Any) -> bool:

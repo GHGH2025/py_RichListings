@@ -26,7 +26,7 @@ dbx = dropbox.Dropbox(
 ALLOWED_EXTS = {
     # Images
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif",
-    # Videos
+    # Videos    
     ".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v"
 }
 
@@ -39,7 +39,7 @@ def _ai_image_filter_enabled() -> bool:
 
 def should_keep_local_media(local_path: str) -> tuple[bool, str]:
     """
-    Return (keep, reason) for a downloaded file before Dropbox upload.
+    Return (keep, reason) for a downloaded file before Dropbox upload.  
     Videos are always kept; images are classified with the same vision rules as image curation.
     """
     _, ext = os.path.splitext(local_path.lower())

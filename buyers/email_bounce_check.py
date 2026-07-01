@@ -1,4 +1,4 @@
-"""Daily buyer deal-email bounce reconciliation (API + optional AI parsing)."""
+"""Daily buyer deal-email bounce reconciliation (Gmail scan + optional API)."""
 from __future__ import annotations
 
 import json
@@ -17,6 +17,7 @@ from buyers.email_delivery_utils import (
     mark_buyer_email_invalid,
     normalize_email,
 )
+from buyers.gmail_bounce_scan import scan_gmail_for_bounced_emails
 from models import BuyerDealEmailSend, BuyerEmailBounceJobRun, WebFormBuyerSubmission
 
 EASTERN = ZoneInfo("America/New_York")
@@ -25,6 +26,8 @@ POF_EMAIL_API_URL = os.getenv(
     "POF_EMAIL_API_URL",
     "http://ec2-3-90-20-111.compute-1.amazonaws.com:8000/rich_ai_deal_Email",
 ).strip()
+
+BUYER_EMAIL_BOUNCE_CHECK_MODE = os.getenv("BUYER_EMAIL_BOUNCE_CHECK_MODE", "gmail").strip().lower()
 
 BUYER_EMAIL_BOUNCE_CHECK_API_URL = os.getenv("BUYER_EMAIL_BOUNCE_CHECK_API_URL", "").strip()
 BUYER_EMAIL_BOUNCE_CHECK_USE_AI = os.getenv("BUYER_EMAIL_BOUNCE_CHECK_USE_AI", "true").strip().lower() in (
@@ -249,7 +252,8 @@ def _buyer_prefers_email(buyer_id: str) -> bool:
 
 def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
     """
-    Daily job: load deal emails sent yesterday, fetch bounce report, mark invalid buyers.
+    Daily job: load pending deal-email sends, scan Gmail for bounce/DSN messages,
+    mark invalid buyers. Optional API mode via BUYER_EMAIL_BOUNCE_CHECK_MODE=api.
 
     Works together with immediate invalid detection on send (email_delivery_utils).
     """
@@ -283,32 +287,62 @@ def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
         return result
 
     candidate_emails = sorted({normalize_email(s.to_email) for s in sends if s.to_email})
-    bounce_report = _fetch_bounce_report(
-        date_label=date_label,
-        window_start=window_start,
-        window_end=window_end,
-        sends=sends,
-    )
+    candidate_set = set(candidate_emails)
 
-    if bounce_report is None:
-        for s in sends:
-            BuyerDealEmailSend.objects(id=s.id).update_one(
-                inc__bounce_check_attempts=1,
-                set__updated_at=datetime.utcnow(),
+    bounced_emails: Set[str] = set()
+    if BUYER_EMAIL_BOUNCE_CHECK_MODE == "api":
+        bounce_report = _fetch_bounce_report(
+            date_label=date_label,
+            window_start=window_start,
+            window_end=window_end,
+            sends=sends,
+        )
+        if bounce_report is None:
+            for s in sends:
+                BuyerDealEmailSend.objects(id=s.id).update_one(
+                    inc__bounce_check_attempts=1,
+                    set__updated_at=datetime.utcnow(),
+                )
+            result = {
+                "ok": False,
+                "date": date_label,
+                "checked_sends": len(sends),
+                "bounced_emails": 0,
+                "buyers_marked_invalid": 0,
+                "skipped": True,
+                "reason": "bounce_api_unavailable",
+            }
+            _persist_bounce_job_run(result)
+            return result
+        bounced_emails = _resolve_bounced_emails(bounce_report, candidate_emails)
+    else:
+        try:
+            # Bounce DSN messages often arrive after midnight on the day after send.
+            bounce_scan_end = datetime.utcnow()
+            bounced_emails = scan_gmail_for_bounced_emails(
+                window_start=backlog_start,
+                window_end=bounce_scan_end,
+                candidate_emails=candidate_set,
             )
-        result = {
-            "ok": False,
-            "date": date_label,
-            "checked_sends": len(sends),
-            "bounced_emails": 0,
-            "buyers_marked_invalid": 0,
-            "skipped": True,
-            "reason": "bounce_api_unavailable",
-        }
-        _persist_bounce_job_run(result)
-        return result
+        except Exception:
+            logging.exception("check_yesterday_buyer_email_bounces: gmail scan failed")
+            for s in sends:
+                BuyerDealEmailSend.objects(id=s.id).update_one(
+                    inc__bounce_check_attempts=1,
+                    set__updated_at=datetime.utcnow(),
+                )
+            result = {
+                "ok": False,
+                "date": date_label,
+                "checked_sends": len(sends),
+                "bounced_emails": 0,
+                "buyers_marked_invalid": 0,
+                "skipped": True,
+                "reason": "gmail_bounce_scan_failed",
+            }
+            _persist_bounce_job_run(result)
+            return result
 
-    bounced_emails = _resolve_bounced_emails(bounce_report, candidate_emails)
     buyers_marked = 0
     now = datetime.utcnow()
 
@@ -323,7 +357,7 @@ def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
         for buyer_id in buyer_ids:
             if not _buyer_prefers_email(buyer_id):
                 continue
-            mark_buyer_email_invalid(buyer_id, reason=f"daily_bounce_check:{date_label}:{em}")
+            mark_buyer_email_invalid(buyer_id, reason=f"daily_gmail_bounce_check:{date_label}:{em}")
             buyers_marked += 1
 
     for s in sends:
@@ -332,7 +366,7 @@ def check_yesterday_buyer_email_bounces() -> Dict[str, Any]:
         BuyerDealEmailSend.objects(id=s.id).update_one(
             set__bounce_check_status=status,
             set__bounce_checked_at=now,
-            set__bounce_reason=(f"detected_in_daily_check:{date_label}" if status == "bounced" else ""),
+            set__bounce_reason=(f"detected_in_gmail_bounce_check:{date_label}" if status == "bounced" else ""),
             set__updated_at=now,
         )
 
