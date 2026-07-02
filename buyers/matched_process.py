@@ -37,7 +37,7 @@ POF_EMAIL_API_URL = os.getenv(
 
 RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com")
 
-DEAL_PAGE_BASE_URL = os.getenv("DEAL_PAGE_BASE_URL", "https://deals.wholesaledealfinder.ai/deal")
+DEAL_PAGE_BASE_URL = os.getenv("DEAL_PAGE_BASE_URL", "https://wholesaledealfinder.ai/deals")
 
 EASTERN = ZoneInfo("America/New_York")
 BUYER_SEND_WINDOW_START_HOUR = int(os.getenv("BUYER_SEND_WINDOW_START_HOUR", "7"))
