@@ -9,7 +9,6 @@ from openai import OpenAI
 from db.mongo_engine_conn import init_db
 from models import ParsedListing
 from pipeline.address_utils import resolve_street_address
-from pipeline.property_description import append_full_property_description
 import time, random
 import requests 
 from whatsapp.sender import send_listing_to_whatsapp
@@ -189,7 +188,6 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
         try:
             listing_obj = _listing_payload(pl)
             post_text = _compose_post(rules_text, listing_obj)
-            post_text = append_full_property_description(post_text, pl.complete_info)
 
             pl.update(
                 set__post_content=post_text,
