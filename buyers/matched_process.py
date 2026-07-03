@@ -10,12 +10,13 @@ from openai import OpenAI
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from integrations.ringcentral_auth import rc_auth_header
-from models import ParsedListing, WebFormBuyerSubmission, BuyerDealPage
+from models import ParsedListing, WebFormBuyerSubmission
 from core.paths import resolve_project_path
 from buyers.email_delivery_utils import (
     email_send_indicates_invalid_address,
     mark_buyer_email_invalid,
 )
+from buyers.deal_page import create_deal_page
 from buyers.email_bounce_check import log_buyer_deal_email_send
 
 BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL", "").strip()
@@ -36,8 +37,6 @@ POF_EMAIL_API_URL = os.getenv(
 )
 
 RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com")
-
-DEAL_PAGE_BASE_URL = os.getenv("DEAL_PAGE_BASE_URL", "https://wholesaledealfinder.ai/deals")
 
 EASTERN = ZoneInfo("America/New_York")
 BUYER_SEND_WINDOW_START_HOUR = int(os.getenv("BUYER_SEND_WINDOW_START_HOUR", "7"))
@@ -765,26 +764,6 @@ def _is_within_buyer_send_window() -> bool:
     return BUYER_SEND_WINDOW_START_HOUR <= now_et.hour < BUYER_SEND_WINDOW_END_HOUR
 
 
-def _create_deal_page(listing, buyer, context: dict) -> str:
-    """
-    Persist a BuyerDealPage snapshot for this listing+buyer pair.
-    Returns the full public URL: DEAL_PAGE_BASE_URL/<doc_id>
-    """
-    doc = BuyerDealPage(
-        listing_id    = str(listing.id),
-        buyer_id      = str(buyer.id),
-        first_name    = context.get("first_name", ""),
-        address       = context.get("address", ""),
-        price         = context.get("price", ""),
-        description   = context.get("description", ""),
-        pics_link     = context.get("pics_link", ""),
-        image_urls    = list(getattr(listing, "images", None) or []),
-        complete_info = dict(getattr(listing, "complete_info", None) or {}),
-    )
-    doc.save()
-    return f"{DEAL_PAGE_BASE_URL}/{doc.id}"
-
-
 def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     """
     1) Pull ParsedListing where:
@@ -986,7 +965,7 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                     ctx_sms["description"] = sms_desc or email_desc or ""
                     ctx_sms["pics_block"] = pics_block_sms
 
-                    deal_url = _create_deal_page(pl, buyer, ctx_sms)
+                    deal_url = create_deal_page(pl, buyer, ctx_sms)
                     ctx_sms["deal_url"] = deal_url
 
                     sms_body = _render_sms_body(templates, ctx_sms)

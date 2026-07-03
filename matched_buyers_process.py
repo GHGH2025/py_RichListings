@@ -9,7 +9,8 @@ import mimetypes
 from openai import OpenAI
 from datetime import datetime
 from ringcentral_auth import rc_auth_header
-from models import ParsedListing, WebFormBuyerSubmission, BuyerDealPage
+from models import ParsedListing, WebFormBuyerSubmission
+from buyers.deal_page import create_deal_page
 
 BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL", "").strip()
 
@@ -27,8 +28,6 @@ POF_EMAIL_API_URL = os.getenv(
 )
 
 RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com") 
-
-DEAL_PAGE_BASE_URL = os.getenv("DEAL_PAGE_BASE_URL", "https://wholesaledealfinder.ai/deals")
 
 # Standard RingCentral SMS/MMS endpoint
 RC_SMS_URL = f"{RC_SERVER_URL}/restapi/v1.0/account/~/extension/~/sms" 
@@ -717,26 +716,6 @@ def _get_remote_file_size_bytes(url: str, timeout: int = 10) -> Optional[int]:
     except requests.RequestException:
         return None
 
-def _create_deal_page(listing, buyer, context: dict) -> str:
-    """
-    Persist a BuyerDealPage snapshot for this listing+buyer pair.
-    Returns the full public URL: DEAL_PAGE_BASE_URL/<doc_id>
-    """
-    doc = BuyerDealPage(
-        listing_id    = str(listing.id),
-        buyer_id      = str(buyer.id),
-        first_name    = context.get("first_name", ""),
-        address       = context.get("address", ""),
-        price         = context.get("price", ""),
-        description   = context.get("description", ""),
-        pics_link     = context.get("pics_link", ""),
-        image_urls    = list(getattr(listing, "images", None) or []),
-        complete_info = dict(getattr(listing, "complete_info", None) or {}),
-    )
-    doc.save()
-    return f"{DEAL_PAGE_BASE_URL}/{doc.id}"
-
-
 def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     """
     1) Pull ParsedListing where:
@@ -915,7 +894,7 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                     ctx_sms["description"] = sms_desc or email_desc or ""
                     ctx_sms["pics_block"] = pics_block_sms
 
-                    deal_url = _create_deal_page(pl, buyer, ctx_sms)
+                    deal_url = create_deal_page(pl, buyer, ctx_sms)
                     ctx_sms["deal_url"] = deal_url
 
                     sms_body = _render_sms_body(templates, ctx_sms)

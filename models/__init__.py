@@ -465,9 +465,16 @@ class BuyerDealPage(Document):
             {"fields": ["-created_at"], "name": "created_desc"},
             {"fields": ["listing_id"], "name": "listing_id_idx"},
             {"fields": ["buyer_id"], "name": "buyer_id_idx"},
+            {
+                "fields": ["public_id"],
+                "unique": True,
+                "sparse": True,
+                "name": "public_id_unique",
+            },
         ],
     }
 
+    public_id     = IntField(unique=True, sparse=True)
     listing_id    = StringField(required=True)
     buyer_id      = StringField()
     first_name    = StringField()
