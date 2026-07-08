@@ -5,7 +5,6 @@ import os
 import re
 import logging
 import requests
-import mimetypes
 from openai import OpenAI
 from datetime import datetime
 from ringcentral_auth import rc_auth_header
@@ -29,7 +28,7 @@ POF_EMAIL_API_URL = os.getenv(
 
 RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com") 
 
-# Standard RingCentral SMS/MMS endpoint
+# Standard RingCentral SMS endpoint
 RC_SMS_URL = f"{RC_SERVER_URL}/restapi/v1.0/account/~/extension/~/sms" 
 
 
@@ -481,43 +480,16 @@ def _normalize_phone(num: str) -> str:
         return "+1" + digits
     return digits
 
-def _download_image(image_url: str) -> Optional[Dict[str, Any]]:
-    """
-    Download the image bytes from a URL so we can attach it as MMS.
-    Returns dict suitable for 'files' in requests if successful,
-    otherwise None (so caller can fall back to plain SMS).
-    """
-    try:
-        resp = requests.get(image_url, timeout=20)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[RingCentral] Failed to download image for MMS: {e}")
-        return None
-
-    content_type = resp.headers.get("Content-Type", "").split(";")[0].strip() or "image/jpeg"
-    # Guess an extension; not critical but nice
-    ext = mimetypes.guess_extension(content_type) or ".jpg"
-    filename = "image" + ext
-
-    return {
-        "filename": filename,
-        "content": resp.content,
-        "content_type": content_type,
-    }
-
 def send_sms_to_buyer(
     to_number: str,
     sms_text: str,
     from_number: Optional[str] = None,
-    image_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Send SMS or MMS (if image_url provided) to a buyer via RingCentral.
+    Send a text-only SMS to a buyer via RingCentral.
 
-    - Uses JWT-based auth via ringcentralauth.get_access_token / rc_auth_header().
-    - If image_url is provided and we can download it, sends MMS with one attachment.
-    - Otherwise sends plain SMS.
-    - Returns a dict with basic info and any error message.
+    Uses JWT-based auth via ringcentralauth.get_access_token / rc_auth_header().
+    Returns a dict with basic info and any error message.
     """
 
     if not to_number:
@@ -534,61 +506,21 @@ def send_sms_to_buyer(
     to_norm = _normalize_phone(to_number)
     from_norm = _normalize_phone(from_number)
 
-    # Base JSON payload used for both SMS and MMS
     body_json = {
         "from": {"phoneNumber": from_norm},
         "to": [{"phoneNumber": to_norm}],
         "text": sms_text,
     }
 
-    headers = rc_auth_header()  # {"Authorization": "Bearer <token>"}
+    headers = {
+        **rc_auth_header(),
+        "Content-Type": "application/json",
+    }
 
-    # ---------- Try MMS if image_url is provided ----------
-    if image_url:
-        img = _download_image(image_url)
-        if img:
-            try:
-                files = {
-                    # The JSON part of the MMS request
-                    "json": (None, json.dumps(body_json), "application/json"),
-                    # The binary attachment
-                    "attachment": (img["filename"], img["content"], img["content_type"]),
-                }
-
-                resp = requests.post(
-                    RC_SMS_URL,
-                    headers=headers,  # do NOT set Content-Type; requests will handle multipart
-                    files=files,
-                    timeout=20,
-                )
-                print("resp",resp.json())
-                ok = resp.status_code in (200, 201, 202)
-                if not ok:
-                    return {
-                        "ok": False,
-                        "error": f"mms_non_2xx:{resp.status_code}",
-                        "response_text": resp.text[:500],
-                    }
-
-                return {
-                    "ok": True,
-                    "mode": "mms",
-                    "status_code": resp.status_code,
-                    "response": resp.json(),
-                }
-            except requests.RequestException as e:
-                print(f"[RingCentral] MMS send failed, will fall back to SMS: {e}")
-                # fall through to SMS
-
-    # ---------- Plain SMS fallback ----------
     try:
-        sms_headers = {
-            **headers,
-            "Content-Type": "application/json",
-        }
         resp = requests.post(
             RC_SMS_URL,
-            headers=sms_headers,
+            headers=headers,
             json=body_json,
             timeout=20,
         )
@@ -665,56 +597,6 @@ def _send_non_text_email_buyer_to_webhook(
     except requests.RequestException as e:
         print(f"[buyer_webhook] request failed: {e}")
         return {"ok": False, "error": str(e)}
-
-RINGCENTRAL_MMS_MAX_BYTES = 1_500_000  # RingCentral documented MMS attachment limit
-
-def _get_remote_file_size_bytes(url: str, timeout: int = 10) -> Optional[int]:
-    """
-    Return remote file size in bytes.
-
-    Strategy:
-    1) Try HEAD and read Content-Length
-    2) Fallback to streaming GET and count bytes up to the limit
-
-    Returns:
-        int  -> detected size in bytes
-        None -> could not determine size
-    """
-    if not url:
-        return None
-
-    # First try HEAD
-    try:
-        resp = requests.head(url, allow_redirects=True, timeout=timeout)
-        content_length = resp.headers.get("Content-Length")
-        if content_length and content_length.isdigit():
-            return int(content_length)
-    except requests.RequestException:
-        pass
-
-    # Fallback: stream the file and count bytes
-    try:
-        with requests.get(url, stream=True, allow_redirects=True, timeout=timeout) as resp:
-            resp.raise_for_status()
-
-            content_length = resp.headers.get("Content-Length")
-            if content_length and content_length.isdigit():
-                return int(content_length)
-
-            total = 0
-            for chunk in resp.iter_content(chunk_size=8192):
-                if not chunk:
-                    continue
-                total += len(chunk)
-
-                # Early exit once we know it's too large
-                if total > RINGCENTRAL_MMS_MAX_BYTES:
-                    return total
-            print("total size",total)
-            return total
-
-    except requests.RequestException:
-        return None
 
 def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     """
@@ -826,31 +708,6 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
             buyers = list(WebFormBuyerSubmission.objects(id__in=buyer_ids))
             print("buyers",buyers)
 
-            # Determine once per listing whether MMS image is allowed
-            sms_image_url = first_image_url
-            sms_image_size_bytes = None
-
-            if first_image_url:
-                sms_image_size_bytes = _get_remote_file_size_bytes(first_image_url)
-
-                if sms_image_size_bytes is None:
-                    # Conservative behavior: if size cannot be determined, send text only
-                    logging.warning(
-                        "Could not determine image size for listing %s image %s. Sending text-only SMS.",
-                        pl.id,
-                        first_image_url,
-                    )
-                    sms_image_url = None
-
-                elif sms_image_size_bytes > RINGCENTRAL_MMS_MAX_BYTES:
-                    logging.info(
-                        "Image too large for MMS for listing %s: %s bytes > %s. Sending text-only SMS.",
-                        pl.id,
-                        sms_image_size_bytes,
-                        RINGCENTRAL_MMS_MAX_BYTES,
-                    )
-                    sms_image_url = None
-
             for buyer in buyers:
                 contact = buyer.contact
                 full_name = (contact.name or "").strip()
@@ -905,7 +762,6 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                         to_number=contact.text_number,
                         sms_text=sms_body,
                         from_number="+17542001204",
-                        image_url=sms_image_url,
                     )
                     
 
