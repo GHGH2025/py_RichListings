@@ -19,10 +19,40 @@ _STREET_WITH_HOUSE_RE = re.compile(
     r"([^\n\r,]{2,80})"
 )
 
+# Bed/bath/size blurbs mistaken for street addresses, e.g.:
+#   "3 Beds / 2 Baths, Miami, FL 33143"
+#   "4 Bed/3 Bath- 2732 sqft, Lehigh Acres, FL 33936"
+#   "3 bed | 2 bath | 1322 sf, Daytona Beach, FL"
+_BED_BATH_DESCRIPTOR_RE = re.compile(
+    r"""(?ix)
+    ^\s*
+    \d+(?:\.\d+)?\s*
+    (?:beds?|bedrooms?|brs?|bds?)
+    \s*[|/,\-–—]?\s*
+    \d+(?:\.\d+)?\s*
+    (?:baths?|bathrooms?|ba|bath)\b
+    """
+)
+
 
 def has_house_number(address: Optional[str]) -> bool:
     """True when the street line begins with a house number (or mask like 137XX)."""
     return bool(_HAS_HOUSE_RE.match(address or ""))
+
+
+def is_bed_bath_descriptor_address(address: Optional[str]) -> bool:
+    """
+    True when `address` is a bed/bath (optionally sqft) summary line, not a street address.
+
+    Keep real streets like "7926 213th St E" / "513 Kel Ave".
+    Skip descriptors like "3 Beds / 2 Baths" or "4 Bed/3 Bath- 2732 sqft".
+    """
+    text = (address or "").strip()
+    if not text:
+        return False
+    # Evaluate the street-ish portion before city/state when present.
+    head = text.split(",", 1)[0].strip()
+    return bool(_BED_BATH_DESCRIPTOR_RE.match(head) or _BED_BATH_DESCRIPTOR_RE.match(text))
 
 
 def _normalize_street_key(s: str) -> str:

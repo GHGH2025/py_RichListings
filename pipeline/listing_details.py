@@ -8,7 +8,10 @@ from models import ParsedListing, FilteredListingEmail
 from ai.address_keys import update_parsed_listing_address_keys
 from integrations.google_formatter import get_street_and_city, geocode_response
 from services.direct_wholesaler_service import get_wholesaler_map
-from pipeline.address_utils import resolve_street_address_from_fields
+from pipeline.address_utils import (
+    is_bed_bath_descriptor_address,
+    resolve_street_address_from_fields,
+)
 from buyers.special_preferences import (
     build_extraction_prompt_block,
     finalize_extracted_special_preferences,
@@ -217,8 +220,7 @@ def build_system_prompt(use_nearest_image_rules: bool = False) -> str:
     image_block = IMAGE_RULES_NEAREST if use_nearest_image_rules else IMAGE_RULES_DEFAULT
     special_prefs_block = build_extraction_prompt_block()
     return f"""\
-You extract structured data from EMAIL Markdown Content containing MULTIPLE property listings, Process and return ALL listings addresses.
-Don't skip any address to process. 
+You extract structured data from EMAIL Markdown Content containing MULTIPLE property listings, Process and return ALL listings with real street addresses.
 Make sure if listing have images include in images.
 VERY IMPORTANT: Use the field names EXACTLY as defined in the JSON schema.
 
@@ -230,6 +232,16 @@ OUTPUT CONTRACT (must follow exactly):
 
 Rules:
 - For `address`, include the full street line as written in the email, INCLUDING the house/building number when present (e.g. "1234 India Street", "137XX Royal Palm Blvd", "2*** SW Natura Ave"). Preserve masked/partial numbers exactly as written. Do not strip the house number.
+- SKIP non-street "address" lines that are only bed/bath/size summaries with a city. These are NOT addresses.
+  Examples to SKIP (do not emit a listing, or set address=null and exclude):
+    • "3 Beds / 2 Baths, Miami, FL 33143"
+    • "4 Beds / 2.5 Bath, Pinecrest, FL 33156"
+    • "4 Bed/3 Bath- 2732 sqft, Lehigh Acres, FL 33936"
+    • "3 bed | 2 bath | 1322 sf, Daytona Beach, FL"
+  Examples to KEEP (real street addresses):
+    • "7926 213th St E, Bradenton, FL 34202"
+    • "513 Kel Ave, Titusville, FL 32796"
+  If a block has only beds/baths/sqft + city/state/ZIP and no house-number street line, do not invent an address — omit that block from `listings`.
 - DO NOT GUESS. Only return values explicitly present in the HTML (or safe numeric conversions/derivations described below).
 - If a field is missing/unclear, return null or "unknown" (for enums).
 - Normalize numbers: strip $ and commas. Convert acres->sqft (1 acre = 43560 sqft) when only acres given.
@@ -456,6 +468,14 @@ def upsert_parsed_listings_from_html(
             city  = (lst.get("city") or "").strip()
             state = (lst.get("state") or "").strip()
             zip_  = (lst.get("zip") or "").strip()
+
+            # Skip bed/bath/size blurbs mistaken for street addresses
+            if is_bed_bath_descriptor_address(addr):
+                logging.info(
+                    "Skipping bed/bath descriptor address @idx %s account=%s msg=%s: %r",
+                    idx, account_label, gmail_message_id, addr,
+                )
+                continue
 
             # ✨ NEW: try to normalize with Google
             geo_js = None
