@@ -8,14 +8,22 @@ from openai import OpenAI
 import os
 from db.mongo_engine_conn import init_db
 from models import ParsedListing
+from media.check_direct_link import blocked_image_filename_reason
 
 load_dotenv()
-OPENAI_MODEL_VISION = os.getenv("OPENAI_VISION_MODEL", "gpt-4.1-mini")
+OPENAI_MODEL_VISION = os.getenv("OPENAI_VISION_MODEL", "gpt-5.4-mini")
 client = OpenAI()
 
 MIDDLEWARE_STATUS_PRIMARY = "ready_for_primary_image_check"
 PRIMARY_FAIL_STATUS = "primary_image_failed"
 PRIMARY_PASS_STATUS = "ready_to_post"
+
+
+def _model_supports_temperature(model: Optional[str]) -> bool:
+    """gpt-5* models often reject temperature; omit it for that family."""
+    if not model:
+        return True
+    return not str(model).lower().startswith("gpt-5")
 
 # CURATOR_SYSTEM_PROMPT = """You are an expert real-estate photo curator.
 # Given a set of image URLs for one property listing, return ONLY JSON describing:
@@ -106,13 +114,19 @@ Treat as valid "property photos" (KEEP = true) when the image clearly shows:
   not fully visible.
 
 What to SKIP (KEEP = false; image must NOT be treated as a property photo):
-- Company logos, QR codes, headshots/people/selfies, agent cards, business cards, signatures.
+- Brand / company logos of any kind — including standalone realtor/wholesaler logos,
+  wordmarks, emblems, icons, or "Real Estate Group" / brokerage branding on a solid
+  or plain background (e.g. a company name + leaf/icon mark with no property visible).
+  These MUST be skipped; they must never be kept for posting or Dropbox galleries.
+- QR codes, headshots/people/selfies, agent cards, business cards, signatures.
 - Screenshots of text, ads/flyers, memes, heavy text tiles, price/terms graphics.
 - Any image that is primarily a marketing tile, flyer, banner, or logo, EVEN IF there is
   a property photo in the background. If the logo/text/branding covers a large part of
-  the image or is the main focus, SKIP it and use a reason like "logo", "text tile",
-  or "marketing banner".
-- A small company watermark/logo overlay on an otherwise valid property photo is OK — KEEP it. Only skip if the logo/branding is the main focus of the image.
+  the image or is the main focus, SKIP it and use a reason like "brand logo", "logo",
+  "text tile", or "marketing banner".
+- A tiny discreet watermark in a corner of an otherwise clear property photo may KEEP.
+  If branding is the main subject, or the image is mostly logo/text with little or no
+  real property visible, SKIP it.
 - Website/app listing screenshots (portal pages, app UIs, search results, etc.).
 - Generic maps (e.g., Google Maps with a pin), location diagrams, zoning diagrams,
   parcel drawings that are not actual photos.
@@ -122,6 +136,7 @@ What to SKIP (KEEP = false; image must NOT be treated as a property photo):
 
 IMPORTANT:
 - Only mark KEEP = true if the image is a genuine property photo as defined above.
+- Brand logos and company branding images are NEVER valid property photos — always SKIP.
 - If there is any doubt and the image looks like branding, a flyer, a text tile,
   a document, a map, or a UI screenshot, SKIP it.
 
@@ -129,7 +144,7 @@ Return ONLY JSON with this exact structure:
 {
   "url": "<same URL as given>",
   "keep": true or false,
-  "reason": "short reason like 'property exterior', 'kitchen', 'vacant land', 'logo', 'text tile', 'document', etc."
+  "reason": "short reason like 'property exterior', 'kitchen', 'vacant land', 'brand logo', 'logo', 'text tile', 'document', etc."
 }
 """
 
@@ -170,16 +185,9 @@ def classify_primary_image(url: str, model: Optional[str] = None) -> Dict[str, A
         "messages": [{"role": "user", "content": content}],
         "response_format": {"type": "json_object"},
     }
-    # Only include temperature if model is NOT gpt-5-mini
-    if model != "gpt-5-mini":
+    if _model_supports_temperature(model):
         kwargs["temperature"] = 0
 
-    # resp = client.chat.completions.create(
-    #     model=model,
-    #     messages=[{"role": "user", "content": content}],
-    #     temperature=0,
-    #     response_format={"type": "json_object"},
-    # )
     resp = client.chat.completions.create(**kwargs)
 
     raw = resp.choices[0].message.content
@@ -211,12 +219,15 @@ def classify_single_image(url: str) -> Dict[str, Any]:
         {"type": "image_url", "image_url": {"url": url}},
     ]
 
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL_VISION,
-        messages=[{"role": "user", "content": content}],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
+    kwargs = {
+        "model": OPENAI_MODEL_VISION,
+        "messages": [{"role": "user", "content": content}],
+        "response_format": {"type": "json_object"},
+    }
+    if _model_supports_temperature(OPENAI_MODEL_VISION):
+        kwargs["temperature"] = 0
+
+    resp = client.chat.completions.create(**kwargs)
 
     raw = resp.choices[0].message.content
     data = json.loads(raw)
@@ -240,6 +251,18 @@ def classify_single_image(url: str) -> Dict[str, Any]:
         data["reason"] = ""
 
     return data
+
+
+def _filter_by_filename(kept_urls: List[str], skipped: List[Dict[str, str]]):
+    """Second-pass filter: drop URLs whose filename contains logo/headshot tokens."""
+    still_kept: List[str] = []
+    for u in kept_urls:
+        reason = blocked_image_filename_reason(u)
+        if reason:
+            skipped.append({"url": u, "reason": reason})
+        else:
+            still_kept.append(u)
+    return still_kept
 
 
 def _filter_property_images(image_urls: List[str]):
@@ -306,12 +329,15 @@ def order_property_images(kept_urls: List[str]) -> Dict[str, Any]:
         content.append({"type": "text", "text": f"URL: {u}"})
         content.append({"type": "image_url", "image_url": {"url": u}})
 
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL_VISION,
-        messages=[{"role": "user", "content": content}],
-        temperature=0.2,
-        response_format={"type": "json_object"},
-    )
+    kwargs = {
+        "model": OPENAI_MODEL_VISION,
+        "messages": [{"role": "user", "content": content}],
+        "response_format": {"type": "json_object"},
+    }
+    if _model_supports_temperature(OPENAI_MODEL_VISION):
+        kwargs["temperature"] = 0.2
+
+    resp = client.chat.completions.create(**kwargs)
 
     return json.loads(resp.choices[0].message.content)
 
@@ -371,7 +397,7 @@ def process_primary_image_verification(
 
 
         try:
-            # 1st pass: main model (gpt-5.1)
+            # 1st pass: main model (gpt-5.6-luna)
             result_1 = classify_primary_image(primary_url, model=primary_model)
             keep_1 = bool(result_1.get("keep", False))
             reason_1 = (result_1.get("reason") or "").strip()
@@ -464,8 +490,11 @@ def process_primary_image_verification(
 
 
 def _invoke_vision_model(image_urls: List[str]) -> Dict[str, Any]:
-    # 1) Per-image classification (uses full valid+skip rules)
+    # 1) Vision classification (property photo vs logo/headshot/flyer/etc.)
     kept_raw, skipped = _filter_property_images(image_urls)
+
+    # 2) Filename filter (e.g. "...Logo-Design-2", "...Headshot-scaled")
+    kept_raw = _filter_by_filename(kept_raw, skipped)
 
     if not kept_raw:
         return {
@@ -474,7 +503,7 @@ def _invoke_vision_model(image_urls: List[str]) -> Dict[str, Any]:
             "primary": None,
         }
 
-    # 2) Ordering among valid property photos only
+    # 3) Ordering among valid property photos only
     ordered = order_property_images(kept_raw)
     kept_ordered = ordered.get("kept_ordered") or kept_raw
     primary = ordered.get("primary") or (kept_ordered[0] if kept_ordered else None)

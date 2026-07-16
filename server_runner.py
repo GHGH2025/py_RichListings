@@ -151,7 +151,7 @@ def run_process_listings_ready_for_image_processing():
 @safe_scheduled_job
 def run_process_primary_image_verification():
     logging.info("process_primary_image_verification")
-    process_primary_image_verification(limit=5, model="gpt-5.1")
+    process_primary_image_verification(limit=5, model="gpt-5.6-luna")
 
 
 @repeat(every(2).minutes)

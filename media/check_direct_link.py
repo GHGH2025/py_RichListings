@@ -1,13 +1,49 @@
 import os
-from urllib.parse import urlsplit
+import re
+from urllib.parse import unquote, urlsplit
 import requests
 import mimetypes
 import time
+from typing import Optional
 
 IMG_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif'}
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
       "AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/120.0.0.0 Safari/537.36")
+
+# Whole-token matches only (delimiter-aware) so "catalog" / "prologue" are not blocked.
+_BLOCKED_FILENAME_PATTERNS = (
+    (re.compile(r"(?:^|[^a-z0-9])logos?(?:[^a-z0-9]|$)"), "filename_contains_logo"),
+    (re.compile(r"(?:^|[^a-z0-9])head[-_]?shots?(?:[^a-z0-9]|$)"), "filename_contains_headshot"),
+)
+
+
+def basename_from_url_or_name(name_or_url: str) -> str:
+    """Extract a usable basename from a raw filename or URL."""
+    if not name_or_url:
+        return ""
+    text = unquote(str(name_or_url).strip())
+    if "://" in text or text.startswith("/"):
+        text = os.path.basename(urlsplit(text).path)
+    else:
+        text = os.path.basename(text)
+    return text
+
+
+def blocked_image_filename_reason(name_or_url: str) -> Optional[str]:
+    """
+    If the filename suggests a brand logo or headshot, return a short skip reason.
+    Otherwise return None.
+    """
+    base = basename_from_url_or_name(name_or_url)
+    if not base:
+        return None
+    # Compare without extension so "hoffer-logo.png" and "Grant-Bevel-Headshot-scaled.jpg" match.
+    stem = os.path.splitext(base)[0].lower()
+    for pattern, reason in _BLOCKED_FILENAME_PATTERNS:
+        if pattern.search(stem):
+            return reason
+    return None
 
 def is_direct_image_url(url: str) -> tuple[bool, str | None]:
     """

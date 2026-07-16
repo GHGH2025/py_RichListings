@@ -245,6 +245,13 @@ def record_listing_stage(
         if stage == "posted":
             _capture_posted_address(metric, pl)
 
+        dropbox_link = (getattr(pl, "other_images_dropbox_link", None) or "").strip()
+        if dropbox_link and (
+            stage in ("post_selection", "image_curation", "primary_image", "ready_to_post", "posted")
+            or not metric.other_images_dropbox_link
+        ):
+            metric.other_images_dropbox_link = dropbox_link
+
         metric.current_stage = stage
         if listing_status is not None:
             metric.listing_status = listing_status
@@ -267,7 +274,10 @@ def record_listing_stage(
         elif detail and stage.endswith("skipped"):
             metric.skip_reason = detail
 
-        _append_event(metric, stage, status=status or listing_status, detail=detail, at=now)
+        event_detail = detail
+        if stage == "image_curation" and dropbox_link and not event_detail:
+            event_detail = dropbox_link
+        _append_event(metric, stage, status=status or listing_status, detail=event_detail, at=now)
         _recompute_durations(metric, now)
         metric.updated_at = now
         metric.save()
