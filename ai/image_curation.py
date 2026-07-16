@@ -20,10 +20,10 @@ PRIMARY_PASS_STATUS = "ready_to_post"
 
 
 def _model_supports_temperature(model: Optional[str]) -> bool:
-    """gpt-5 mini variants reject temperature; omit it for those models."""
+    """gpt-5* models often reject temperature; omit it for that family."""
     if not model:
         return True
-    return model not in {"gpt-5-mini", "gpt-5.4-mini"}
+    return not str(model).lower().startswith("gpt-5")
 
 # CURATOR_SYSTEM_PROMPT = """You are an expert real-estate photo curator.
 # Given a set of image URLs for one property listing, return ONLY JSON describing:

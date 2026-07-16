@@ -1,4 +1,5 @@
 import os
+import re
 from urllib.parse import unquote, urlsplit
 import requests
 import mimetypes
@@ -10,14 +11,10 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
       "AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/120.0.0.0 Safari/537.36")
 
-# Filenames containing these tokens are never property photos (logos / agent portraits).
-_BLOCKED_FILENAME_TOKENS = (
-    "logo",
-    "logos",
-    "headshot",
-    "headshots",
-    "head-shot",
-    "head_shot",
+# Whole-token matches only (delimiter-aware) so "catalog" / "prologue" are not blocked.
+_BLOCKED_FILENAME_PATTERNS = (
+    (re.compile(r"(?:^|[^a-z0-9])logos?(?:[^a-z0-9]|$)"), "filename_contains_logo"),
+    (re.compile(r"(?:^|[^a-z0-9])head[-_]?shots?(?:[^a-z0-9]|$)"), "filename_contains_headshot"),
 )
 
 
@@ -43,11 +40,9 @@ def blocked_image_filename_reason(name_or_url: str) -> Optional[str]:
         return None
     # Compare without extension so "hoffer-logo.png" and "Grant-Bevel-Headshot-scaled.jpg" match.
     stem = os.path.splitext(base)[0].lower()
-    for token in _BLOCKED_FILENAME_TOKENS:
-        if token in stem:
-            if "logo" in token:
-                return "filename_contains_logo"
-            return "filename_contains_headshot"
+    for pattern, reason in _BLOCKED_FILENAME_PATTERNS:
+        if pattern.search(stem):
+            return reason
     return None
 
 def is_direct_image_url(url: str) -> tuple[bool, str | None]:

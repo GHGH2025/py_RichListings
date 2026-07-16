@@ -410,11 +410,6 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
                 print(f"Skipping file based on extension: {file_name}")
                 continue
 
-            blocked_final = blocked_image_filename_reason(file_name)
-            if blocked_final:
-                print(f"Skipping {file_name}: {blocked_final}")
-                continue
-
             print(f"Downloading valid media: {file_name}")
             local_path = os.path.join("downloads", file_name)
             with open(local_path, "wb") as f:
