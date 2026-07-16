@@ -7,7 +7,11 @@ from dotenv import load_dotenv
 import shutil
 from dropbox.files import WriteMode
 from media.scrape_images import extract_image_links
-from media.check_direct_link import safe_filename_from_url,is_direct_image_url
+from media.check_direct_link import (
+    safe_filename_from_url,
+    is_direct_image_url,
+    blocked_image_filename_reason,
+)
 from dropbox.exceptions import ApiError
 
 load_dotenv()
@@ -86,13 +90,19 @@ def process_dropbox_link(dropbox_link: str, dropbox_folder: str = "/PropertyList
                         continue
                     if not is_allowed_filename(info.filename):
                         continue
+                    base_name = os.path.basename(info.filename)
+                    blocked = blocked_image_filename_reason(base_name)
+                    if blocked:
+                        print(f"Skipping {base_name}: {blocked}")
+                        continue
                     # Extract this image/video to temp, then upload
-                    extract_path = os.path.join(tmpdir, os.path.basename(info.filename))
+                    extract_path = os.path.join(tmpdir, base_name)
                     with zf.open(info) as src, open(extract_path, "wb") as dst:
                         dst.write(src.read())
                     try:
                         link = upload_to_dropbox(extract_path, dropbox_folder)
-                        uploaded_links.append(link)
+                        if link:
+                            uploaded_links.append(link)
                     except Exception as up_err:
                         print(f"Upload failed for {info.filename}: {up_err}")
 
@@ -113,6 +123,11 @@ def process_dropbox_link(dropbox_link: str, dropbox_folder: str = "/PropertyList
             is_media_type = content_type.startswith("image/") or content_type.startswith("video/")
             
             if is_allowed_filename(filename) or is_media_type:
+                blocked = blocked_image_filename_reason(filename)
+                if blocked:
+                    print(f"Skipping {filename}: {blocked}")
+                    return list(dict.fromkeys(uploaded_links))
+
                 # If extension missing but known media type, append extension?
                 # For now just save and upload
                 with tempfile.NamedTemporaryFile(delete=False) as tmpf:
@@ -139,7 +154,8 @@ def process_dropbox_link(dropbox_link: str, dropbox_folder: str = "/PropertyList
                 
                 try:
                     link = upload_to_dropbox(final_local_path, dropbox_folder)
-                    uploaded_links.append(link)
+                    if link:
+                        uploaded_links.append(link)
                 finally:
                     try:
                         os.remove(final_local_path)
@@ -173,6 +189,11 @@ def download_file_from_url(url, save_path):
 
 def upload_to_dropbox(local_path, dropbox_folder):
     file_name = os.path.basename(local_path)
+
+    blocked = blocked_image_filename_reason(file_name)
+    if blocked:
+        print(f"Skipping upload of {file_name}: {blocked}")
+        return None
 
     # Ensure the folder exists
     try:
@@ -357,6 +378,11 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
 
            #NEW LOGIC ADDED TO HANDLE NESTED FILE END
 
+        blocked = blocked_image_filename_reason(file_name)
+        if blocked:
+            print(f"Skipping {file_name}: {blocked}")
+            continue
+
         download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
         print(f"Checking {file_name}...")
@@ -382,6 +408,11 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
             _, final_ext = os.path.splitext(file_name.lower())
             if final_ext not in ALLOWED_EXTS:
                 print(f"Skipping file based on extension: {file_name}")
+                continue
+
+            blocked_final = blocked_image_filename_reason(file_name)
+            if blocked_final:
+                print(f"Skipping {file_name}: {blocked_final}")
                 continue
 
             print(f"Downloading valid media: {file_name}")
@@ -474,6 +505,11 @@ def handle_Link(links, folder = ""):
                                    ext = guessed
 
                     if ext in ALLOWED_EXTS:
+                        blocked = blocked_image_filename_reason(file_name)
+                        if blocked:
+                            print(f"Skipping direct link {link} ({file_name}): {blocked}")
+                            continue
+
                         local_file = os.path.join("downloads", file_name)
 
                         download_file_from_url(link, local_file)

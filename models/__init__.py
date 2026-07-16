@@ -598,6 +598,8 @@ class ListingPipelineMetric(Document):
     wp_des_at = DateTimeField()
     wp_synced_at = DateTimeField()
 
+    other_images_dropbox_link = StringField()
+
     duration_to_parsed_sec = FloatField()
     duration_to_posted_sec = FloatField()
     duration_to_whatsapp_sec = FloatField()
@@ -619,3 +621,4 @@ class ListingPipelineMetric(Document):
 
 from .direct_wholesaler import DirectWholesaler
 from .scraping_list import ScrapingList
+from .whatsapp_tracked_messages import WhatsappTrackedMessage
