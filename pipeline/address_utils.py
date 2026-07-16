@@ -37,7 +37,7 @@ _BED_BATH_DESCRIPTOR_RE = re.compile(
 
 def has_house_number(address: Optional[str]) -> bool:
     """True when the street line begins with a house number (or mask like 137XX)."""
-    return bool(_HAS_HOUSE_RE.match(address or ""))
+    return bool(_HAS_HOUSE_RE.match(address or "")) and not is_bed_bath_descriptor_address(address)
 
 
 def is_bed_bath_descriptor_address(address: Optional[str]) -> bool:
@@ -90,6 +90,8 @@ def _extract_from_verbatim(verbatim: str, street_hint: str) -> Optional[str]:
         house, rest = m.group(1), m.group(2).strip()
         street = f"{house} {rest}".strip()
         street = _street_only_from_line(street)
+        if is_bed_bath_descriptor_address(street):
+            continue
         if not first_match:
             first_match = street
         if not hint_key:

@@ -499,6 +499,12 @@ def upsert_parsed_listings_from_html(
             if resolved_addr:
                 addr = resolved_addr
                 lst["address"] = addr
+                if is_bed_bath_descriptor_address(addr):
+                    logging.info(
+                        "Skipping resolved bed/bath descriptor address @idx %s account=%s msg=%s: %r",
+                        idx, account_label, gmail_message_id, addr,
+                    )
+                    continue
 
             extracted_special_prefs = finalize_extracted_special_preferences(lst)
             # Keep only in top-level DB field — not inside complete_info blob used for WhatsApp
