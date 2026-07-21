@@ -11,7 +11,7 @@ import json
 from mongoengine.queryset.visitor import Q
 
 from models import ParsedListing  # your MongoEngine model
-from config.runtime import get_whatsapp_send_mode, get_group_jids
+from config.runtime import get_whatsapp_send_mode, get_group_jids_for_account
 
 TEAM_NUMBERS = [n.strip() for n in os.getenv("TEAM_WHATSAPP_NUMBERS","").split(",") if n.strip()]
 
@@ -139,9 +139,14 @@ def _send_dm(pl: ParsedListing, to_numbers: List[str]) -> bool:
     return ok_any
 
 def _send_group(pl: ParsedListing) -> bool:
-    jids = get_group_jids()  # from config_runtime or .env adapter
+    account_label = (getattr(pl, "account_label", None) or "").strip()
+    jids = get_group_jids_for_account(account_label)
     if not jids:
-        logging.warning("Group mode selected but no JIDs configured; skipping")
+        logging.warning(
+            "Group mode selected but no JIDs configured; skipping id=%s account_label=%s",
+            pl.id,
+            account_label or "(none)",
+        )
         return False
 
     text = (getattr(pl, "post_content", "") or "").strip()
@@ -158,11 +163,17 @@ def _send_group(pl: ParsedListing) -> bool:
     headers = _headers()
 
     try:
-        print("Group>>",GATEWAY_URL_GROUP,payload)
+        print("Group>>", GATEWAY_URL_GROUP, {"account_label": account_label, **payload})
         resp = s.post(GATEWAY_URL_GROUP, json=payload, headers=headers, timeout=GATEWAY_TIMEOUT)
         sent, dbg = _parse_sent(resp)
         if sent:
-            logging.info("GROUP OK: jids=%s id=%s %s", len(jids), pl.id, dbg)
+            logging.info(
+                "GROUP OK: jids=%s id=%s account_label=%s %s",
+                len(jids),
+                pl.id,
+                account_label or "(none)",
+                dbg,
+            )
             return True
         logging.warning("GROUP not-sent: id=%s %s body=%s", pl.id, dbg, resp.text[:500])
     except requests.RequestException as e:
@@ -196,7 +207,7 @@ def process_whatsapp_queue(limit: int = 100, dm_sleep_range: Tuple[float, float]
 
     qs = ParsedListing.objects(
         Q(whatsapp_status__in=["pending", "failed"])
-    ).only("id", "post_content", "images", "whatsapp_status").limit(limit)
+    ).only("id", "post_content", "images", "whatsapp_status", "account_label").limit(limit)
 
     total = sent = failed = 0
 
