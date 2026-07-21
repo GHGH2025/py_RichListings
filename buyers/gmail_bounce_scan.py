@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
-from typing import List, Set
+from typing import Dict, List, Set
 
 from buyers.email_delivery_utils import (
     extract_invalid_recipients_from_bounce_body,
@@ -14,7 +14,26 @@ from buyers.email_delivery_utils import (
 from ingestion.email_extract import extract_email_body_simple
 from ingestion.gmail import ACCOUNTS, _ensure_paths, _get_message, _gmail_search, _gmail_service, _header
 
-BUYER_EMAIL_BOUNCE_GMAIL_ACCOUNTS = os.getenv("BUYER_EMAIL_BOUNCE_GMAIL_ACCOUNTS", "").strip()
+# Deal emails are sent from rich@wholesaledealfinder.ai (RingCentral /rich_ai_deal_Email).
+# Bounce/DSN messages land in THAT mailbox — not the listing scrapers (acct1/acct2).
+# Keep this list separate from ingestion.gmail.ACCOUNTS so listing fetch never touches it.
+BOUNCE_ACCOUNTS = [
+    {
+        "label": "richai_deal",
+        "base_dir": os.path.join("accounts", "richai_deal"),
+        "only_inbox": False,
+        "fallback_lookback_min": 60,
+        "credentials_filename": "credentials.json",
+        "token_filename": "token.json",
+        "state_filename": "state.json",
+    },
+]
+
+# Comma-separated labels. Default: richai_deal only (not acct1/acct2).
+BUYER_EMAIL_BOUNCE_GMAIL_ACCOUNTS = os.getenv(
+    "BUYER_EMAIL_BOUNCE_GMAIL_ACCOUNTS",
+    "richai_deal",
+).strip()
 
 
 def _utc_epoch_seconds(dt: datetime) -> int:
@@ -41,7 +60,15 @@ def _build_bounce_search_query(after_epoch: int, before_epoch: int) -> str:
 def _resolve_account_labels() -> List[str]:
     if BUYER_EMAIL_BOUNCE_GMAIL_ACCOUNTS:
         return [label.strip() for label in BUYER_EMAIL_BOUNCE_GMAIL_ACCOUNTS.split(",") if label.strip()]
-    return [acct["label"] for acct in ACCOUNTS]
+    return [acct["label"] for acct in BOUNCE_ACCOUNTS]
+
+
+def _account_registry() -> Dict[str, dict]:
+    """Bounce accounts first; listing ACCOUNTS only for explicit env overrides."""
+    registry: Dict[str, dict] = {acct["label"]: acct for acct in BOUNCE_ACCOUNTS}
+    for acct in ACCOUNTS:
+        registry.setdefault(acct["label"], acct)
+    return registry
 
 
 def _message_text(message: dict) -> str:
@@ -58,7 +85,7 @@ def scan_gmail_for_bounced_emails(
     candidate_emails: Set[str],
 ) -> Set[str]:
     """
-    Search configured Gmail accounts for yesterday's bounce/DSN messages and
+    Search the deal-sender Gmail mailbox for bounce/DSN messages and
     extract invalid recipient addresses that match candidate_emails.
     """
     if not candidate_emails:
@@ -68,7 +95,7 @@ def scan_gmail_for_bounced_emails(
     before_epoch = _utc_epoch_seconds(window_end)
     query = _build_bounce_search_query(after_epoch, before_epoch)
     labels = _resolve_account_labels()
-    label_to_raw = {acct["label"]: acct for acct in ACCOUNTS}
+    label_to_raw = _account_registry()
 
     bounced: Set[str] = set()
     scanned_messages = 0

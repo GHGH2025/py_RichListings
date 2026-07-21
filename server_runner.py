@@ -12,6 +12,7 @@ import uvicorn
 
 # import your task entrypoints
 from ingestion.gmail import process_account, _ensure_paths, ACCOUNTS, build_service_by_account
+from ingestion.whatsapp import process_pending_whatsapp, reset_stale_processing_whatsapp
 from pipeline.process_email import process_pending, reset_stale_processing_emails
 from pipeline.dedup import process_not_processed_with_duplicate_rule
 from ai.rules_runner import apply_ai_english_rules
@@ -33,6 +34,7 @@ from models import (
     ListingPipelineMetric,
     BuyerDealEmailSend,
     BuyerEmailBounceJobRun,
+    WhatsappTrackedMessage,
 )
 from models.special_avail_list import SpecialAvailList
 from integrations.podio.direct_wholesaler import process_direct_wholeseller_batch
@@ -106,6 +108,13 @@ def run_gmail_job():
 def run_process_email():
     logging.info("run_process_email")
     process_pending()
+
+@repeat(every(1).minutes)
+@safe_scheduled_job
+def run_whatsapp_ingest():
+    logging.info("run_whatsapp_ingest")
+    result = process_pending_whatsapp(limit=10)
+    logging.info("run_whatsapp_ingest: result=%s", result)
 
 @repeat(every(3).minutes)
 @safe_scheduled_job
@@ -228,6 +237,13 @@ def run_reset_stale_processing_emails():
     logging.info("reset_stale_processing_emails")
     reset_stale_processing_emails()
 
+@repeat(every(2).hours)
+@safe_scheduled_job
+def run_reset_stale_processing_whatsapp():
+    logging.info("reset_stale_processing_whatsapp")
+    result = reset_stale_processing_whatsapp()
+    logging.info("reset_stale_processing_whatsapp: result=%s", result)
+
 @repeat(every(BUYER_MATCHING_CRON_MINUTES).minutes)
 @safe_scheduled_job
 def run_buyer_matching_cron():
@@ -293,6 +309,7 @@ if __name__ == "__main__":
         ListingPipelineMetric.ensure_indexes()
         BuyerDealEmailSend.ensure_indexes()
         BuyerEmailBounceJobRun.ensure_indexes()
+        WhatsappTrackedMessage.ensure_indexes()
 
         # gmail_fetch_all()
     except Exception:

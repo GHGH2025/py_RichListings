@@ -6,6 +6,8 @@ This document explains how RichListings publishes property listings to the **Buy
 
 RichListings does not log into WordPress manually. It calls a custom REST API plugin (`addproperty/v1`) to search for existing properties and create or update posts.
 
+For the MySQL database / tables the public inventory page reads, see [wordpress_inventory_db.md](./wordpress_inventory_db.md).
+
 ---
 
 ## Big picture flow
