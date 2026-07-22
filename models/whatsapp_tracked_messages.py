@@ -8,6 +8,8 @@ class WhatsappTrackedMessage(Document):
 
     meta = {
         "collection": "whatsapp_tracked_messages",
+        # Mongoose writes __v; ignore unknown fields so ingest can load docs.
+        "strict": False,
         "indexes": [
             {
                 "fields": ["group_jid", "message_id"],
