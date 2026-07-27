@@ -311,22 +311,23 @@ if __name__ == "__main__":
 
     # One-time DB bootstrap
     init_db()
-    try:
-        FilteredListingEmail.ensure_indexes()
-        ParsedListing.ensure_indexes()
-        WebFormBuyerSubmission.ensure_indexes()
-        ScrapingList.ensure_indexes()
-        SpecialAvailList.ensure_indexes()
-        ListingPipelineMetric.ensure_indexes()
-        BuyerDealEmailSend.ensure_indexes()
-        BuyerEmailBounceJobRun.ensure_indexes()
-        WhatsappTrackedMessage.ensure_indexes()
-        SpecialAvailInactiveTracker.ensure_indexes()
-        SpecialAvailInactiveJobRun.ensure_indexes()
-
-        # gmail_fetch_all()
-    except Exception:
-        logging.exception("ensure_indexes failed")
+    for model in (
+        FilteredListingEmail,
+        ParsedListing,
+        WebFormBuyerSubmission,
+        ScrapingList,
+        SpecialAvailList,
+        ListingPipelineMetric,
+        BuyerDealEmailSend,
+        BuyerEmailBounceJobRun,
+        WhatsappTrackedMessage,
+        SpecialAvailInactiveTracker,
+        SpecialAvailInactiveJobRun,
+    ):
+        try:
+            model.ensure_indexes()
+        except Exception:
+            logging.exception("ensure_indexes failed for %s", getattr(model, "__name__", model))
 
     # Start status HTTP server in background
     status_port = int(os.getenv("STATUS_PORT", "8000"))
