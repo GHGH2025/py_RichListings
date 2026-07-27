@@ -14,7 +14,9 @@ class WhatsappTrackedMessage(Document):
             {
                 "fields": ["group_jid", "message_id"],
                 "unique": True,
-                "name": "uniq_group_message",
+                # Match existing Mongo index name (default compound name).
+                # Renaming to uniq_group_message conflicts on ensure_indexes.
+                "name": "group_jid_1_message_id_1",
             },
             {"fields": ["status"], "name": "status_idx"},
             {"fields": ["timestamp"], "name": "timestamp_idx"},
