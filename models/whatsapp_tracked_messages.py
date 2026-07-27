@@ -10,16 +10,16 @@ class WhatsappTrackedMessage(Document):
         "collection": "whatsapp_tracked_messages",
         # Mongoose writes __v; ignore unknown fields so ingest can load docs.
         "strict": False,
+        # Index names must match node_RichWhatsappListings Mongoose defaults
+        # (same collection). Custom names cause IndexOptionsConflict on ensure_indexes.
         "indexes": [
             {
                 "fields": ["group_jid", "message_id"],
                 "unique": True,
-                # Match existing Mongo index name (default compound name).
-                # Renaming to uniq_group_message conflicts on ensure_indexes.
                 "name": "group_jid_1_message_id_1",
             },
-            {"fields": ["status"], "name": "status_idx"},
-            {"fields": ["timestamp"], "name": "timestamp_idx"},
+            {"fields": ["status"], "name": "status_1"},
+            {"fields": ["timestamp"], "name": "timestamp_1"},
         ],
     }
 
