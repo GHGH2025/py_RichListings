@@ -35,6 +35,8 @@ from models import (
     BuyerDealEmailSend,
     BuyerEmailBounceJobRun,
     WhatsappTrackedMessage,
+    SpecialAvailInactiveTracker,
+    SpecialAvailInactiveJobRun,
 )
 from models.special_avail_list import SpecialAvailList
 from integrations.podio.direct_wholesaler import process_direct_wholeseller_batch
@@ -42,6 +44,7 @@ from whatsapp.keepalive import send_keepalive_template, parse_recipients_env
 
 from ai.image_curation import process_listings_ready_for_image_processing, process_primary_image_verification
 from special_avails.processor import process_one_special_avail_with_active_listings, process_one_special_avail_matching
+from special_avails.inactive_processor import run_special_avail_inactive_check
 from buyers.matching_api import process_pending_buyer_matching_batch
 from buyers.matched_process import process_pending_buyer_descriptions, process_buyer_sends
 from buyers.email_bounce_check import check_yesterday_buyer_email_bounces
@@ -58,6 +61,7 @@ START_TIME = time.time()  # for uptime calculation
 os.environ["APP_START_TIME"] = str(START_TIME)  # used by api_app for consistent uptime
 BUYER_MATCHING_CRON_MINUTES = int(os.getenv("BUYER_MATCHING_CRON_MINUTES", "3"))
 BUYER_EMAIL_BOUNCE_CHECK_TIME = os.getenv("BUYER_EMAIL_BOUNCE_CHECK_TIME", "06:00")
+SPECIAL_AVAIL_INACTIVE_CHECK_TIME = os.getenv("SPECIAL_AVAIL_INACTIVE_CHECK_TIME", "22:00")
 
 
 def safe_scheduled_job(fn):
@@ -270,6 +274,13 @@ def run_check_yesterday_buyer_email_bounces():
     result = check_yesterday_buyer_email_bounces()
     logging.info("check_yesterday_buyer_email_bounces: result=%s", result)
 
+@repeat(every().day.at(SPECIAL_AVAIL_INACTIVE_CHECK_TIME))
+@safe_scheduled_job
+def run_special_avail_inactive_check_cron():
+    logging.info("run_special_avail_inactive_check: start")
+    result = run_special_avail_inactive_check()
+    logging.info("run_special_avail_inactive_check: result=%s", result)
+
 # @repeat(every(15).hours)
 # def run_whatsapp_keepalive():
 #     logging.info("run_whatsapp_keepalive")
@@ -310,6 +321,8 @@ if __name__ == "__main__":
         BuyerDealEmailSend.ensure_indexes()
         BuyerEmailBounceJobRun.ensure_indexes()
         WhatsappTrackedMessage.ensure_indexes()
+        SpecialAvailInactiveTracker.ensure_indexes()
+        SpecialAvailInactiveJobRun.ensure_indexes()
 
         # gmail_fetch_all()
     except Exception:

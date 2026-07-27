@@ -622,3 +622,7 @@ class ListingPipelineMetric(Document):
 from .direct_wholesaler import DirectWholesaler
 from .scraping_list import ScrapingList
 from .whatsapp_tracked_messages import WhatsappTrackedMessage
+from .special_avail_inactive import (
+    SpecialAvailInactiveTracker,
+    SpecialAvailInactiveJobRun,
+)

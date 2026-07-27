@@ -190,3 +190,7 @@ Uses the same MongoDB connection as the rest of the project:
 - `MONGO_DB` — database name
 
 Podio field IDs used by the pipeline remain in environment variables in `special_avails.py` (`PODIO_PROPERTIES_APP_ID`, etc.). Only wholesaler name / email / Podio ID mappings moved to MongoDB.
+
+## Related
+
+- [special_avail_inactive.md](./special_avail_inactive.md) — daily non-active / consecutive-miss webhook automation
