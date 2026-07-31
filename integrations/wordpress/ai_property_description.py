@@ -155,18 +155,25 @@ def ai_build_wp_property_description_for_listing(
     complete_info: Dict[str, Any],
     post_content: str = "",
     model: Optional[str] = None,
+    listing_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate an HTML fragment for property features only using your existing extracted data.
     - complete_info: the full dict you already store under ParsedListing.complete_info
     - post_content: the WhatsApp text you already generate (may include address/contact—model is told to ignore them)
     """
+    from observability.openai_usage import tracked_chat_create
+
     msg = _USER_TEMPLATE.format(
         complete_info_json=json.dumps(complete_info or {}, ensure_ascii=False, indent=2),
         post_content_str=(post_content or "")[:2000],  # cap to keep prompts lean
     )
 
-    chat = client.chat.completions.create(
+    chat = tracked_chat_create(
+        client,
+        stage="wp_des",
+        call_name="wp_property_description",
+        listing_id=listing_id,
         model=(model or OPENAI_MODEL),
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -198,6 +205,7 @@ def ai_build_wp_property_description_by_id(listing_id: str, model: Optional[str]
         complete_info=complete_info,
         post_content=post_content,
         model=model,
+        listing_id=listing_id,
     )
 
     # Persist to same doc
@@ -267,6 +275,7 @@ def _process_batch(
                 complete_info=complete_info,
                 post_content=post_content,
                 model=model,
+                listing_id=str(pl.id),
             )
             ParsedListing.objects(id=pl.id).update_one(
                 set__wp_property_description=payload["property_description_html"],

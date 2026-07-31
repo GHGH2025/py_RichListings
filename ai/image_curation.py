@@ -165,7 +165,7 @@ def _build_user_prompt(images: List[str]) -> str:
           "Do not include any keys other than the three above."
     )
 
-def classify_primary_image(url: str, model: Optional[str] = None) -> Dict[str, Any]:
+def classify_primary_image(url: str, model: Optional[str] = None, listing_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Stricter re-check for the PRIMARY image (images[0]) of a listing.
 
@@ -173,13 +173,14 @@ def classify_primary_image(url: str, model: Optional[str] = None) -> Dict[str, A
     - keep=True only if it's clearly a property photo (exterior/interior/land/aerial)
     - keep=False for logos, flyers, documents, maps, UI screenshots, etc.
     """
+    from observability.openai_usage import tracked_chat_create
+
     content = [
         {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
         {"type": "text", "text": f"PRIMARY_CHECK_URL: {url}"},
         {"type": "image_url", "image_url": {"url": url}},
     ]
 
-    # Build kwargs so we can conditionally include temperature
     kwargs = {
         "model": model,
         "messages": [{"role": "user", "content": content}],
@@ -188,7 +189,13 @@ def classify_primary_image(url: str, model: Optional[str] = None) -> Dict[str, A
     if _model_supports_temperature(model):
         kwargs["temperature"] = 0
 
-    resp = client.chat.completions.create(**kwargs)
+    resp = tracked_chat_create(
+        client,
+        stage="primary_image",
+        call_name="classify_primary_image",
+        listing_id=listing_id,
+        **kwargs,
+    )
 
     raw = resp.choices[0].message.content
     data = json.loads(raw)
@@ -212,7 +219,9 @@ def classify_primary_image(url: str, model: Optional[str] = None) -> Dict[str, A
     return data
 
 
-def classify_single_image(url: str) -> Dict[str, Any]:
+def classify_single_image(url: str, listing_id: Optional[str] = None) -> Dict[str, Any]:
+    from observability.openai_usage import tracked_chat_create
+
     content = [
         {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
         {"type": "text", "text": f"URL: {url}"},
@@ -227,7 +236,13 @@ def classify_single_image(url: str) -> Dict[str, Any]:
     if _model_supports_temperature(OPENAI_MODEL_VISION):
         kwargs["temperature"] = 0
 
-    resp = client.chat.completions.create(**kwargs)
+    resp = tracked_chat_create(
+        client,
+        stage="image_curation",
+        call_name="classify_single_image",
+        listing_id=listing_id,
+        **kwargs,
+    )
 
     raw = resp.choices[0].message.content
     data = json.loads(raw)
@@ -265,13 +280,13 @@ def _filter_by_filename(kept_urls: List[str], skipped: List[Dict[str, str]]):
     return still_kept
 
 
-def _filter_property_images(image_urls: List[str]):
+def _filter_property_images(image_urls: List[str], listing_id: Optional[str] = None):
     kept_urls: List[str] = []
     skipped: List[Dict[str, str]] = []
 
     for u in image_urls:
         try:
-            result = classify_single_image(u)
+            result = classify_single_image(u, listing_id=listing_id)
         except Exception as e:
             # Any API / HTTP / invalid_image_url / JSON error ⇒ skip this image
             skipped.append({
@@ -319,9 +334,11 @@ Use ONLY URLs that I provide, do not invent new ones.
 
 
 
-def order_property_images(kept_urls: List[str]) -> Dict[str, Any]:
+def order_property_images(kept_urls: List[str], listing_id: Optional[str] = None) -> Dict[str, Any]:
     if not kept_urls:
         return {"kept_ordered": [], "primary": None}
+
+    from observability.openai_usage import tracked_chat_create
 
     content = [{"type": "text", "text": CURATOR_ORDERING_PROMPT}]
 
@@ -337,7 +354,13 @@ def order_property_images(kept_urls: List[str]) -> Dict[str, Any]:
     if _model_supports_temperature(OPENAI_MODEL_VISION):
         kwargs["temperature"] = 0.2
 
-    resp = client.chat.completions.create(**kwargs)
+    resp = tracked_chat_create(
+        client,
+        stage="image_curation",
+        call_name="order_property_images",
+        listing_id=listing_id,
+        **kwargs,
+    )
 
     return json.loads(resp.choices[0].message.content)
 
@@ -398,12 +421,12 @@ def process_primary_image_verification(
 
         try:
             # 1st pass: main model (gpt-5.6-luna)
-            result_1 = classify_primary_image(primary_url, model=primary_model)
+            result_1 = classify_primary_image(primary_url, model=primary_model, listing_id=str(pl.id))
             keep_1 = bool(result_1.get("keep", False))
             reason_1 = (result_1.get("reason") or "").strip()
 
             # 2nd pass: gpt-5.6-luna
-            result_2 = classify_primary_image(primary_url, model=secondary_model)
+            result_2 = classify_primary_image(primary_url, model=secondary_model, listing_id=str(pl.id))
             keep_2 = bool(result_2.get("keep", False))
             reason_2 = (result_2.get("reason") or "").strip()
 
@@ -489,9 +512,9 @@ def process_primary_image_verification(
     }
 
 
-def _invoke_vision_model(image_urls: List[str]) -> Dict[str, Any]:
+def _invoke_vision_model(image_urls: List[str], listing_id: Optional[str] = None) -> Dict[str, Any]:
     # 1) Vision classification (property photo vs logo/headshot/flyer/etc.)
-    kept_raw, skipped = _filter_property_images(image_urls)
+    kept_raw, skipped = _filter_property_images(image_urls, listing_id=listing_id)
 
     # 2) Filename filter (e.g. "...Logo-Design-2", "...Headshot-scaled")
     kept_raw = _filter_by_filename(kept_raw, skipped)
@@ -504,7 +527,7 @@ def _invoke_vision_model(image_urls: List[str]) -> Dict[str, Any]:
         }
 
     # 3) Ordering among valid property photos only
-    ordered = order_property_images(kept_raw)
+    ordered = order_property_images(kept_raw, listing_id=listing_id)
     kept_ordered = ordered.get("kept_ordered") or kept_raw
     primary = ordered.get("primary") or (kept_ordered[0] if kept_ordered else None)
 
@@ -582,7 +605,7 @@ def process_listings_ready_for_image_processing(limit: int = 100) -> Dict[str, i
                 no_images += 1
                 continue
 
-            result = _invoke_vision_model(images)
+            result = _invoke_vision_model(images, listing_id=str(pl.id))
 
             kept = _dedupe_preserve_order(result.get("kept_ordered") or [])
             skipped_items = result.get("skipped") or []

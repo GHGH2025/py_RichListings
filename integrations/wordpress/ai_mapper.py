@@ -440,7 +440,8 @@ Hints:
 
 def ai_build_wp_payload_catalog_first(
     listing: Dict[str, Any],
-    model: Optional[str] = None
+    model: Optional[str] = None,
+    listing_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     listing: ParsedListing document or dict (must include location + property_type within listing or listing['complete_info'])
@@ -448,6 +449,8 @@ def ai_build_wp_payload_catalog_first(
                                      "Broward County Deals > Multi Family", "Alachua County Single Family")
     allowed_region_paths: flat list of exact region strings (e.g., "Florida > Central Florida > BREVARD", "Taylor")
     """
+    from observability.openai_usage import tracked_chat_create
+
     # determine property_type label hint from listing
     ci = (listing.get("complete_info") or {})
     prop_key = ci.get("property_type") or listing.get("property_type") or ""
@@ -472,7 +475,11 @@ def ai_build_wp_payload_catalog_first(
         ptype_hint=ptype_hint
     )
 
-    chat = client.chat.completions.create(
+    chat = tracked_chat_create(
+        client,
+        stage="wp_keys",
+        call_name="wp_ai_mapper",
+        listing_id=listing_id,
         model=(model or OPENAI_MODEL),
         messages=[{"role": "system", "content": _SYSTEM_PROMPT},
                   {"role": "user", "content": msg}],
@@ -525,7 +532,7 @@ def ai_build_wp_payload_by_id(
         "complete_info": getattr(pl, "complete_info", {}) or {},
     }
 
-    return ai_build_wp_payload_catalog_first(listing_dict, model=model)
+    return ai_build_wp_payload_catalog_first(listing_dict, model=model, listing_id=listing_id)
 
 
 def _listing_to_dict(pl: ParsedListing) -> Dict[str, Any]:
@@ -601,7 +608,7 @@ def _process_batch(
     for pl in docs:
         try:
             listing_dict = _listing_to_dict(pl)
-            payload = ai_build_wp_payload_catalog_first(listing_dict, model=model)
+            payload = ai_build_wp_payload_catalog_first(listing_dict, model=model, listing_id=str(pl.id))
             # ✅ Save to this listing
             ParsedListing.objects(id=pl.id).update_one(
                 set__wp_parsed_data=payload,
