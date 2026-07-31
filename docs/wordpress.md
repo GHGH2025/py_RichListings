@@ -193,7 +193,7 @@ Shared implementation: `integrations/wordpress/post_status.py` → `set_wp_post_
 Used by:
 
 - External callers (e.g. Podio automations) to toggle `private` / `public`
-- `pipeline/price_drop_activate.py` after a ≥6% dedup pass (sets `post_status: "public"`)
+- `pipeline/price_drop_activate.py` after a ≥6% dedup pass (sets `post_status: "publish"`)
 
 See [price_drop_activate.md](./price_drop_activate.md).
 

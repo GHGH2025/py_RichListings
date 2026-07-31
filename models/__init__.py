@@ -165,7 +165,9 @@ class ParsedListing(Document):
     wp_check_post_id = IntField() 
 
     wp_check_reduced = StringField()
-
+    # WP asking price before / after a REDUCED!! update
+    wp_check_prev_price = FloatField(null=True)
+    wp_check_new_price = FloatField(null=True)
 
     post_id = IntField() 
 

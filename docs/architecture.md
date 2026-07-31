@@ -182,7 +182,7 @@ See [price_drop_activate.md](./price_drop_activate.md).
 
 | File | Function | Effect |
 |------|----------|--------|
-| `pipeline/price_drop_activate.py` | `process_price_drop_activations()` | WP `post_status=public` + Podio Active catch webhook → `price_drop_activated` |
+| `pipeline/price_drop_activate.py` | `process_price_drop_activations()` | WP `post_status=publish` + Podio Active catch webhook → `price_drop_activated` |
 
 **Schedule:** every 2 min
 

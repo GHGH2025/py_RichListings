@@ -1,6 +1,6 @@
-# 6% Price Drop — Activate (Podio Active + WP public)
+# 6% Price Drop — Activate (Podio Active + WP publish)
 
-After the **30-day dedup** gate allows a listing because the price dropped **≥ 6%** vs a recent prior, a follow-up job marks the property **Active in Podio** (catch webhook) and **public on WordPress**.
+After the **30-day dedup** gate allows a listing because the price dropped **≥ 6%** vs a recent prior, a follow-up job marks the property **Active in Podio** (catch webhook) and sets WordPress `post_status` to **`publish`**.
 
 This is separate from WordPress **REDUCED!!** updates (`wp_check_reduced`). See [dedup_30_day.md](./dedup_30_day.md) for the gate itself and [wordpress.md](./wordpress.md) for the REDUCED!! pipeline.
 
@@ -12,7 +12,7 @@ When the same property returns within 30 days at a meaningfully lower price:
 
 1. Dedup stamps `price_drop_pass = true` (and related fields).
 2. Activate cron:
-   - Sets WordPress `post_status` to **`public`** via addproperty `/create`
+   - Sets WordPress `post_status` to **`publish`** via addproperty `/create`
    - POSTs Podio Workflow Automation catch webhook `{ "add": "<address>" }` to mark **Active**
 3. On both success → `price_drop_activated = true` (metrics Option A)
 
@@ -73,7 +73,7 @@ The same string is used as:
 {
   "token": "<WP_API_TOKEN>",
   "posttitle": "<address string>",
-  "post_status": "public"
+  "post_status": "publish"
 }
 ```
 

@@ -153,7 +153,7 @@ The response includes the workspace name.
 
 ### 3b. ≥6% price-drop → mark Active
 
-**What it does:** When a listing passed the 30-day dedup gate because price dropped ≥ 6%, a cron posts a catch webhook so Workflow Automation can set the property **Status = Active**. Separately, the same job sets WordPress `post_status` to `public`.
+**What it does:** When a listing passed the 30-day dedup gate because price dropped ≥ 6%, a cron posts a catch webhook so Workflow Automation can set the property **Status = Active**. Separately, the same job sets WordPress `post_status` to `publish`.
 
 **Files:**
 - `pipeline/price_drop_activate.py`

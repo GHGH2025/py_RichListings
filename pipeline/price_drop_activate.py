@@ -1,6 +1,6 @@
 """
 Activate listings that passed the 30-day ≥6% price-drop dedup gate:
-  1) Set WordPress post_status to public
+  1) Set WordPress post_status to publish, update asking_price, set REDUCED!! title
   2) Fire Podio catch webhook to mark property Active
 """
 from __future__ import annotations
@@ -20,6 +20,8 @@ WEBHOOK_URL = os.getenv(
     "https://workflow-automation.podio.com/catch/2rtkutxl47po7x7",
 ).strip()
 WEBHOOK_TIMEOUT = int(os.getenv("PRICE_DROP_PODIO_ACTIVE_WEBHOOK_TIMEOUT", "20"))
+
+REDUCED_TITLE_PREFIX = "<strong><span style='color: #ff6600;'>REDUCED!!</span> </strong>"
 
 
 def _now() -> datetime:
@@ -76,6 +78,23 @@ def build_activation_address(pl: ParsedListing) -> Optional[str]:
     return full or None
 
 
+def _activation_price(pl: ParsedListing) -> Optional[float]:
+    for raw in (getattr(pl, "price_drop_curr_price", None), getattr(pl, "price", None)):
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _format_asking_price(price: float) -> str:
+    return str(int(price)) if float(price).is_integer() else str(float(price))
+
+
 def _fire_podio_active_webhook(address: str) -> bool:
     if not WEBHOOK_URL:
         logging.warning("price_drop_activate: webhook URL not configured")
@@ -103,11 +122,11 @@ def _fire_podio_active_webhook(address: str) -> bool:
 def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
     """
     For each listing with price_drop_pass and not yet activated:
-      - set WP public
+      - set WP post_status to publish, update asking_price, set REDUCED!! custom_title
       - fire Podio Active webhook
       - mark price_drop_activated when both succeed
     """
-    checked = activated = wp_ok = podio_ok = failed = skipped_no_addr = 0
+    checked = activated = wp_ok = podio_ok = failed = skipped_no_addr = skipped_no_price = 0
 
     candidates = (
         ParsedListing.objects(
@@ -130,10 +149,31 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
             failed += 1
             continue
 
-        posttitle = address
-        wp_success, wp_status, wp_payload = set_wp_post_status(posttitle, "public")
+        price = _activation_price(pl)
+        if price is None:
+            skipped_no_price += 1
+            pl.update(
+                set__price_drop_activate_error="no price available for WP reduction update",
+                set__updated_at=_now(),
+            )
+            failed += 1
+            continue
+
+        street, _, _, _ = _best_address_parts(pl)
+        title_address = street or address
+        asking_price = _format_asking_price(price)
+        custom_title = f"{REDUCED_TITLE_PREFIX} {title_address}"
+
+        wp_success, wp_status, wp_payload = set_wp_post_status(
+            address,
+            "publish",
+            asking_price=asking_price,
+            custom_title=custom_title,
+            address=address,
+            newest_deals=["Todays Deal"],
+        )
         if not wp_success:
-            err = f"wp_public_failed status={wp_status} detail={str(wp_payload)[:200]}"
+            err = f"wp_publish_failed status={wp_status} detail={str(wp_payload)[:200]}"
             pl.update(
                 set__price_drop_activate_error=err,
                 set__updated_at=_now(),
@@ -156,14 +196,23 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
 
         podio_ok += 1
         now = _now()
-        pl.update(
-            set__price_drop_wp_public_at=wp_at,
-            set__price_drop_podio_webhook_at=now,
-            set__price_drop_activated=True,
-            set__price_drop_activated_at=now,
-            set__price_drop_activate_error=None,
-            set__updated_at=now,
-        )
+        prev_price = getattr(pl, "price_drop_prev_price", None)
+        update_fields: Dict[str, Any] = {
+            "set__price_drop_wp_public_at": wp_at,
+            "set__price_drop_podio_webhook_at": now,
+            "set__price_drop_activated": True,
+            "set__price_drop_activated_at": now,
+            "set__price_drop_activate_error": None,
+            "set__wp_check_reduced": "updated",
+            "set__wp_check_new_price": float(price),
+            "set__updated_at": now,
+        }
+        if prev_price is not None:
+            try:
+                update_fields["set__wp_check_prev_price"] = float(prev_price)
+            except (TypeError, ValueError):
+                pass
+        pl.update(**update_fields)
         activated += 1
 
     return {
@@ -173,4 +222,5 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
         "podio_ok": podio_ok,
         "failed": failed,
         "skipped_no_addr": skipped_no_addr,
+        "skipped_no_price": skipped_no_price,
     }

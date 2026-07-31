@@ -18,9 +18,16 @@ def set_wp_post_status(
     post_status: str,
     *,
     token: Optional[str] = None,
+    asking_price: Optional[str] = None,
+    custom_title: Optional[str] = None,
+    address: Optional[str] = None,
+    newest_deals: Optional[list] = None,
 ) -> Tuple[bool, int, Any]:
     """
     POST to WordPress addproperty/v1/create with token, posttitle, post_status.
+
+    Optional fields (asking_price, custom_title, address, newest_deals) are
+    included when provided — used by ≥6% price-drop activation.
 
     Returns (ok, status_code, payload_or_error_text).
     """
@@ -35,11 +42,19 @@ def set_wp_post_status(
     if not status:
         return False, 0, "post_status is empty"
 
-    body: Dict[str, str] = {
+    body: Dict[str, Any] = {
         "token": auth,
         "posttitle": title,
         "post_status": status,
     }
+    if asking_price is not None and str(asking_price).strip():
+        body["asking_price"] = str(asking_price).strip()
+    if custom_title is not None and str(custom_title).strip():
+        body["custom_title"] = str(custom_title).strip()
+    if address is not None and str(address).strip():
+        body["address"] = str(address).strip()
+    if newest_deals:
+        body["newest_deals"] = newest_deals
 
     try:
         resp = requests.post(
