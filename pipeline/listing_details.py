@@ -1,6 +1,7 @@
 import os
 import json
 import re
+from datetime import datetime
 from typing import Dict, Any, List, Optional
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -336,6 +337,15 @@ def extract_listings_from_email_html(email_html: str,
         {"role": "user", "content": _USER_INSTRUCTIONS_TEMPLATE.format(email_html=compact_html)}
     ]
 
+    def _attach_usage(data: Dict[str, Any], chat) -> Dict[str, Any]:
+        try:
+            from observability.openai_usage import extract_usage_from_response
+            data["_openai_usage"] = extract_usage_from_response(chat)
+            data["_openai_model"] = model
+        except Exception:
+            pass
+        return data
+
     # First try: Structured Outputs (json_schema strict)
     try:
         chat = client.chat.completions.create(
@@ -347,8 +357,7 @@ def extract_listings_from_email_html(email_html: str,
         content = chat.choices[0].message.content
         data = json.loads(content)
         data.setdefault("notes", [])
-        return data
-        # return json.loads(content)
+        return _attach_usage(data, chat)
     except Exception as e:
         # Fallback: JSON mode (still asks for JSON, not schema-validated)
         try:
@@ -363,10 +372,9 @@ def extract_listings_from_email_html(email_html: str,
                 response_format={"type": "json_object"}
             )
             content = chat.choices[0].message.content
-            # return json.loads(content)
             data = json.loads(content)
             data.setdefault("notes", [])
-            return data
+            return _attach_usage(data, chat)
         except Exception as e2:
             # Last resort: return a structured error
             return {"listings": [], "notes": [f"extraction_failed: {e}", f"fallback_failed: {e2}"]}
@@ -602,5 +610,33 @@ def upsert_parsed_listings_from_html(
                         pass
         except Exception as e:
             print(f"[parsed_listings] upsert error @idx {idx}: {e}")
+
+    usage = result.get("_openai_usage")
+    if usage and saved_ids:
+        try:
+            from observability.openai_usage import allocate_usage_to_listings
+            allocate_usage_to_listings(
+                usage,
+                model=result.get("_openai_model"),
+                stage="parsed",
+                call_name="extract_listings",
+                listing_ids=saved_ids,
+            )
+        except Exception:
+            pass
+    elif usage and source_email_doc:
+        try:
+            from models import FilteredListingEmail
+            FilteredListingEmail.objects(id=source_email_doc.id).update_one(
+                set__pipeline_token_usage={
+                    "stage": "parsed",
+                    "call_name": "extract_listings",
+                    "model": result.get("_openai_model"),
+                    **usage,
+                },
+                set__updated_at=datetime.utcnow(),
+            )
+        except Exception:
+            pass
 
     return {"count": len(saved_ids), "ids": saved_ids, "notes": result.get("notes", [])}

@@ -143,7 +143,7 @@
 # ai_nl_rules_judge.py
 
 import os, json, yaml, re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -206,7 +206,8 @@ def _extract_json(text: str) -> Dict[str, Any]:
 
 def judge_listing_with_english_rules(
     listing_facts: Dict[str, Any],
-    rules_yaml: Dict[str, Any]
+    rules_yaml: Dict[str, Any],
+    listing_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     policy = rules_yaml.get("policy", "")
     rules  = rules_yaml.get("rules", []) or []
@@ -270,8 +271,14 @@ Respond ONLY with the JSON object matching the schema. Do not include any text, 
 
     model_name = os.getenv("OPENAI_MODEL", "gpt-5")
 
+    from observability.openai_usage import tracked_chat_create
+
     # --- Direct OpenAI call (no LangChain) ---
-    resp = client.chat.completions.create(
+    resp = tracked_chat_create(
+        client,
+        stage="rules",
+        call_name="judge_listing_rules",
+        listing_id=listing_id,
         model=model_name,
         messages=[
             {"role": "system", "content": system_prompt},

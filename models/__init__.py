@@ -629,6 +629,14 @@ class ListingPipelineMetric(Document):
 
     events = ListField(EmbeddedDocumentField(StageEvent), default=list)
 
+    # OpenAI usage (estimated $ from observability/openai_pricing.py at call time)
+    ai_prompt_tokens = IntField(default=0)
+    ai_completion_tokens = IntField(default=0)
+    ai_cached_tokens = IntField(default=0)
+    ai_total_tokens = IntField(default=0)
+    ai_cost_usd = FloatField(default=0.0)
+    ai_calls = ListField(DictField(), default=list)
+
     created_at = DateTimeField(default=datetime.utcnow)
     updated_at = DateTimeField(default=datetime.utcnow)
 

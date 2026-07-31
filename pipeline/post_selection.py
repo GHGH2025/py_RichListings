@@ -88,7 +88,7 @@ def _get_city(pl: ParsedListing) -> Optional[str]:
     return None
 
 
-def _ai_city_in_do_not_post(city: str) -> bool:
+def _ai_city_in_do_not_post(city: str, listing_id: Optional[str] = None) -> bool:
     """
     Use AI to determine whether the listing city matches ANY city
     in the do-not-post list, even with:
@@ -152,7 +152,13 @@ Do-not-post cities:
 
     result = False
     try:
-        resp = client.chat.completions.create(
+        from observability.openai_usage import tracked_chat_create
+
+        resp = tracked_chat_create(
+            client,
+            stage="post_selection",
+            call_name="do_not_post_city",
+            listing_id=listing_id,
             model="gpt-4o-mini",
             messages=[
                 {
@@ -217,7 +223,7 @@ def _is_do_not_post_city(pl: ParsedListing) -> bool:
     city = _get_city(pl)
     if not city:
         return False
-    return _ai_city_in_do_not_post(city)
+    return _ai_city_in_do_not_post(city, listing_id=str(pl.id))
 
 
 def _now():

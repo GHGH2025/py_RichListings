@@ -2,7 +2,7 @@
 import json
 import os
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -149,7 +149,9 @@ def _listing_payload(pl: ParsedListing) -> Dict[str, Any]:
 
     return d
 
-def _compose_post(rules_text: str, listing_obj: Dict[str, Any]) -> str:
+def _compose_post(rules_text: str, listing_obj: Dict[str, Any], listing_id: Optional[str] = None) -> str:
+    from observability.openai_usage import tracked_chat_create
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": USER_TMPL.format(
@@ -157,7 +159,11 @@ def _compose_post(rules_text: str, listing_obj: Dict[str, Any]) -> str:
             listing_json=json.dumps(listing_obj, ensure_ascii=False, indent=2),
         )}
     ]
-    resp = client.chat.completions.create(
+    resp = tracked_chat_create(
+        client,
+        stage="posted",
+        call_name="whatsapp_post",
+        listing_id=listing_id,
         model=OPENAI_MODEL,
         messages=messages,
         temperature=0.2,
@@ -187,7 +193,7 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
         total += 1
         try:
             listing_obj = _listing_payload(pl)
-            post_text = _compose_post(rules_text, listing_obj)
+            post_text = _compose_post(rules_text, listing_obj, listing_id=str(pl.id))
 
             pl.update(
                 set__post_content=post_text,
