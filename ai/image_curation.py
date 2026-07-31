@@ -11,7 +11,7 @@ from models import ParsedListing
 from media.check_direct_link import blocked_image_filename_reason
 
 load_dotenv()
-OPENAI_MODEL_VISION = os.getenv("OPENAI_VISION_MODEL", "gpt-5.4-mini")
+OPENAI_MODEL_VISION = os.getenv("OPENAI_VISION_MODEL", "gpt-5.6-luna")
 client = OpenAI()
 
 MIDDLEWARE_STATUS_PRIMARY = "ready_for_primary_image_check"
@@ -369,7 +369,7 @@ def process_primary_image_verification(
     errors: List[str] = []
 
     primary_model = model
-    secondary_model = "gpt-5-mini"
+    secondary_model = "gpt-5.6-luna"
 
     for pl in qs:
         total += 1
@@ -402,7 +402,7 @@ def process_primary_image_verification(
             keep_1 = bool(result_1.get("keep", False))
             reason_1 = (result_1.get("reason") or "").strip()
 
-            # 2nd pass: mini model (gpt-5-mini)
+            # 2nd pass: gpt-5.6-luna
             result_2 = classify_primary_image(primary_url, model=secondary_model)
             keep_2 = bool(result_2.get("keep", False))
             reason_2 = (result_2.get("reason") or "").strip()
