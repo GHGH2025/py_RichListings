@@ -15,6 +15,7 @@ from ingestion.gmail import process_account, _ensure_paths, ACCOUNTS, build_serv
 from ingestion.whatsapp import process_pending_whatsapp, reset_stale_processing_whatsapp
 from pipeline.process_email import process_pending, reset_stale_processing_emails
 from pipeline.dedup import process_not_processed_with_duplicate_rule
+from pipeline.price_drop_activate import process_price_drop_activations
 from ai.rules_runner import apply_ai_english_rules
 from pipeline.post_selection import select_passed_listings_for_post
 from ai.whatsapp_posts import make_whatsapp_posts_from_ready_to_post
@@ -138,6 +139,14 @@ def run_process_wp_price_and_media_updates():
 def run_process_dup30days():
     logging.info("process_dup30days")
     process_not_processed_with_duplicate_rule()
+
+
+@repeat(every(2).minutes)
+@safe_scheduled_job
+def run_price_drop_activate():
+    logging.info("price_drop_activate: start")
+    result = process_price_drop_activations(limit=50)
+    logging.info("price_drop_activate: result=%s", result)
 
 
 @repeat(every(5).minutes)

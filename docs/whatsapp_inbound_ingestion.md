@@ -230,5 +230,39 @@ In Mongo / tools:
 | S3 upload helper | `node_RichWhatsappListings/utils/s3Upload.js` |
 | Group Tracker UI | `react_RichBuyerInfoFrontEnd/WhatsAppGroupsConfig.tsx` → `/whatsapp-groups` |
 | Python ingest | `ingestion/whatsapp.py` |
-| Model | `models/whatsapp_tracked_messages.py` → collection `whatsapp_tracked_messages` |
+| Model (shared collection) | Node `models/whatsapp_tracked_messages.js` **and** Python `models/whatsapp_tracked_messages.py` → `whatsapp_tracked_messages` |
 | Scheduler | `server_runner.py` → `run_whatsapp_ingest`, `run_reset_stale_processing_whatsapp` |
+
+### Shared Mongo collection / indexes (read this before changing indexes)
+
+Node and Python both use the **same** collection: `whatsapp_tracked_messages`.
+
+| Writer | Path |
+|--------|------|
+| Node (creates messages) | `node_RichWhatsappListings/models/whatsapp_tracked_messages.js` |
+| Python (ingest / status) | `py_RichListings/models/whatsapp_tracked_messages.py` |
+
+**Mongoose owns the index names** (Mongo default naming). Python must declare the **same** names or `ensure_indexes()` fails with:
+
+`Index already exists with a different name: … (IndexOptionsConflict)`
+
+That used to abort the whole startup index block (fixed by per-model try/except in `server_runner.py`), but WhatsApp indexes still must stay aligned.
+
+#### Canonical index names (as created by Node)
+
+| Keys | Options | Mongo name |
+|------|---------|------------|
+| `group_jid` + `message_id` | unique | `group_jid_1_message_id_1` |
+| `status` | — | `status_1` |
+| `timestamp` | field `index: true` | `timestamp_1` |
+| `group_jid` | field `index: true` | `group_jid_1` |
+| `sender_phone` | field `index: true` | `sender_phone_1` |
+| `sender_email` | field `index: true` | `sender_email_1` |
+
+#### Rules for future changes
+
+1. Prefer changing indexes in the **Node** model first (it writes the docs).
+2. Mirror any new/changed index in the **Python** model using the **exact** Mongo index `name` (default `field_1` / `a_1_b_1` style unless you set an explicit `name` on **both** sides).
+3. Never invent a custom Python-only name (`uniq_group_message`, `status_idx`, etc.) for an index that already exists under the default name.
+4. After changing either model, restart both `rich-whatsapp` and `rich-listings` and confirm startup logs have no `ensure_indexes failed for WhatsappTrackedMessage`.
+5. Do **not** drop production indexes casually to “fix” a name mismatch — align the code to the existing name instead.

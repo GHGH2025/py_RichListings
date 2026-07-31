@@ -182,6 +182,21 @@ Success response:
 { "post_id": 12345 }
 ```
 
+### Public proxy — `POST /public/wp/create`
+
+FastAPI route on the RichListings server (port 8000) that accepts JSON (or URL-encoded JSON) and forwards to WordPress `/create`.
+
+Required body fields: `token`, `posttitle`, `post_status`.
+
+Shared implementation: `integrations/wordpress/post_status.py` → `set_wp_post_status()`.
+
+Used by:
+
+- External callers (e.g. Podio automations) to toggle `private` / `public`
+- `pipeline/price_drop_activate.py` after a ≥6% dedup pass (sets `post_status: "public"`)
+
+See [price_drop_activate.md](./price_drop_activate.md).
+
 ---
 
 ## MongoDB fields (`parsed_listings`)
@@ -255,7 +270,14 @@ Upstream job that starts the pipeline:
 | `DROPBOX_REFRESH_TOKEN` | For gallery link generation |
 | `MONGO_URI` | MongoDB connection |
 
-**Note:** `wp_price_red_pic_links.py` hardcodes the WP URL and does not read `WP_API_BASE`.
+**Note:** `wp_price_red_pic_links.py` hardcodes the WP URL and does not read `WP_API_BASE`. The public proxy and `price_drop_activate` use `WP_API_BASE` + `WP_API_TOKEN`.
+
+### Metrics UI
+
+| Sidebar | Path | Tracks |
+|---------|------|--------|
+| **Reduction** | `/metric/reduction` | `wp_check` / `wp_check_reduced` (REDUCED!!) + dedup blocked &lt;6% |
+| **6% Price Drop** | `/metric/price-drop-6pct` | `price_drop_pass` / `price_drop_activated` (see [price_drop_activate.md](./price_drop_activate.md)) |
 
 ---
 

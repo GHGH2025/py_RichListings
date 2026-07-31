@@ -113,8 +113,23 @@ For each listing with status = "verified":
 
   Price drop = (prev - curr) / prev
     drop ≥ 6%  → processed (pass — price-drop repost allowed)
+                 + stamp price_drop_pass / price_drop_pct / prices
     drop < 6%  → skip (reason: duplicate found; price not low enough)
 ```
+
+On a **≥ 6% pass** (prior existed), Mongo also stores:
+
+| Field | Meaning |
+|-------|---------|
+| `price_drop_pass` | `true` — allowed because of the price drop |
+| `price_drop_pct` | Fractional drop |
+| `price_drop_prev_id` | Prior listing id |
+| `price_drop_prev_price` / `price_drop_curr_price` | Compared prices |
+| `price_drop_activated` | Starts `false`; set later by activate job |
+
+Listings that pass with **no prior** are normal `processed` — they do **not** get `price_drop_pass`.
+
+After stamp, see [price_drop_activate.md](./price_drop_activate.md): cron sets WordPress **public** and fires Podio **Active** webhook, then sets `price_drop_activated = true`.
 
 ### Price sources
 
@@ -170,6 +185,7 @@ passed / skipped
 See also:
 
 - [Media verification](./media_verify.md) — previous stage
+- [6% activate (Podio + WP public)](./price_drop_activate.md) — after ≥6% pass
 - [Post selection](./post_selection.md) — runs after AI rules and post-selection policies
 
 ---
@@ -180,6 +196,7 @@ See also:
 - **6% threshold:** Allows legitimate price-drop updates to be reposted; same or slightly lower prices are suppressed
 - **Geo fallback:** Catches duplicates when address formatting differs between emails but Google resolves to the same place
 - **Historical statuses include `skipped`:** A property skipped for any reason still counts as “seen” for dedup purposes
+- **Activation is separate:** Dedup only stamps the pass; Podio Active + WP public are handled by `price_drop_activate`
 
 ---
 
@@ -191,6 +208,7 @@ See also:
 | Duplicate reposted when it should not | Price dropped ≥ 6% vs prior | Prior price, current price, `PRICE_DROP_THRESHOLD` |
 | Listing skipped with price unavailable | Missing or zero price on current or prior | `price`, `complete_info.list_price_usd` |
 | Dedup not catching obvious duplicate | Address text differs, geo not populated | `geo_code_response`, masked address normalization |
+| Pass stamped but not Active/public | Activate cron failing | [price_drop_activate.md](./price_drop_activate.md), `price_drop_activate_error` |
 
 ---
 
@@ -198,8 +216,8 @@ See also:
 
 ```
 py_RichListings/
-├── process_dup30days.py     # This stage
-├── google_formatter.py      # geocode_response() for geo fallback
-├── server_runner.py         # Scheduler (every 1 min)
-└── models/__init__.py       # ParsedListing schema
+├── pipeline/dedup.py            # This stage
+├── pipeline/price_drop_activate.py  # WP public + Podio Active after ≥6% pass
+├── server_runner.py             # Scheduler (dedup every 1 min)
+└── models/__init__.py           # ParsedListing schema
 ```
