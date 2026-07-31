@@ -283,9 +283,11 @@ def process_wp_price_and_media_updates(limit: int = 200) -> Dict[str, Any]:
                         "custom_title": f"<strong><span style='color: #ff6600;'>REDUCED!!</span> </strong> {wp_address}",
                     }
                     ParsedListing.objects(id=pl.id).update_one(
-                        set__wp_check_reduced="updated"
+                        set__wp_check_reduced="updated",
+                        set__wp_check_prev_price=float(wp_price),
+                        set__wp_check_new_price=float(parsed_price),
                     )
-                    
+
                     if _wp_post_create(body_reduction):
                         reduced_updates += 1
 

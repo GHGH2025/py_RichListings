@@ -6,6 +6,7 @@ For integration-specific deep dives, see:
 
 - [Media verification](./media_verify.md)
 - [30-day dedup](./dedup_30_day.md)
+- [6% activate (Podio Active + WP public)](./price_drop_activate.md)
 - [Post selection](./post_selection.md)
 - [Image curation](./image_curation.md)
 - [WhatsApp ad generation](./whatsapp_ad_generation.md)
@@ -15,6 +16,7 @@ For integration-specific deep dives, see:
 - [Scraping list (sender patterns)](./scraping_list.md)
 - [Direct wholesalers](./direct_wholesalers.md)
 - [Special availability](./special_avail_list.md)
+- [Special avails non-active](./special_avail_inactive.md)
 
 ---
 
@@ -166,12 +168,23 @@ See [dedup_30_day.md](./dedup_30_day.md).
 
 | File | Function | Status transition |
 |------|----------|-------------------|
-| `process_dup30days.py` | `process_not_processed_with_duplicate_rule()` | `verified` → **`processed`** or **`skipped`** |
+| `pipeline/dedup.py` | `process_not_processed_with_duplicate_rule()` | `verified` → **`processed`** or **`skipped`** |
 
 - Same address/city/zip within 30 days → skip unless price dropped ≥ 6%
 - Geo-based fallback matching via `geo_code_response`
+- On ≥ 6% pass vs a prior: stamps `price_drop_pass` (see [price_drop_activate.md](./price_drop_activate.md))
 
 **Schedule:** every 1 min
+
+### Stage B2 — Activate ≥6% price-drop passes
+
+See [price_drop_activate.md](./price_drop_activate.md).
+
+| File | Function | Effect |
+|------|----------|--------|
+| `pipeline/price_drop_activate.py` | `process_price_drop_activations()` | WP `post_status=publish` + Podio Active catch webhook → `price_drop_activated` |
+
+**Schedule:** every 2 min
 
 ### Stage C — AI business rules
 
@@ -337,7 +350,8 @@ not_processed
     ↓  (media verify)
 verified
     ↓  (30-day dedup)
-processed ──→ skipped
+processed / skipped   (+ price_drop_pass when ≥6% vs prior)
+    ↓  (price_drop_activate — WP public + Podio Active, if stamped)
     ↓  (AI rules)
 passed ──→ skipped
     ↓  (post selection)
@@ -417,7 +431,8 @@ posted
 | 5 min | `gmail_fetch_all` | `gmail_hourly_multi` |
 | 1 min | `process_pending` | `processFilteredEmail` |
 | 3 min | `verify_and_fill_missing_media_for_not_processed` | `ai_media_verify` |
-| 1 min | `process_not_processed_with_duplicate_rule` | `process_dup30days` |
+| 1 min | `process_not_processed_with_duplicate_rule` | `pipeline/dedup` |
+| 2 min | `process_price_drop_activations` | `pipeline/price_drop_activate` |
 | 5 min | `apply_ai_english_rules` | `ai_nl_rules_runner` |
 | 10 min | `select_passed_listings_for_post` | `post_selection` |
 | 2 min | `process_listings_ready_for_image_processing` | `image_curation` |
@@ -457,6 +472,7 @@ Served on port `STATUS_PORT` (default 8000) in a background thread.
 | `/api/special-avail-list/*` | `routes/special_avail_list.py` | Special avail mapping management |
 | `POST /tasks/snapshot-yesterday-special-avail` | `api_app.py` | Manual special avail snapshot |
 | `POST /tasks/run-manny-special-avails` | `api_app.py` | Manny special-avail batch (background) |
+| `POST /public/wp/create` | `routes/wordpress_proxy.py` | Proxy: set WP `post_status` via addproperty `/create` |
 
 ---
 
@@ -500,7 +516,7 @@ flowchart TB
 
   subgraph qualify [Qualify]
     MV[ai_media_verify → verified]
-    D30[process_dup30days → processed]
+    D30[pipeline/dedup → processed]
     RULES[ai_nl_rules_runner → passed]
     SEL[post_selection → ready_for_image_processing]
     PL --> MV --> D30 --> RULES --> SEL
@@ -571,7 +587,8 @@ py_RichListings/
 ├── google_formatter.py       # Google Maps geocoding
 │
 ├── ai_media_verify.py        # Media verification + S3 upload
-├── process_dup30days.py      # 30-day duplicate detection
+├── pipeline/dedup.py         # 30-day duplicate detection
+├── pipeline/price_drop_activate.py  # ≥6% → WP public + Podio Active webhook
 ├── ai_nl_rules_runner.py     # AI business rules
 ├── ai_nl_rules_judge.py      # LangChain rules judge
 ├── post_selection.py         # Post selection + quotas
@@ -625,7 +642,7 @@ Grouped by concern. Full list lives in `.env`.
 | **Dropbox** | `DROPBOX_APP_KEY`, `DROPBOX_REFRESH_TOKEN` |
 | **Podio** | `PodioClientId`, `PodioClientSecret`, `PODIO_PROPERTIES_APP_ID`, `PODIO_BUYERS_APP_ID` |
 | **RingCentral** | `RC_CLIENT_ID`, `RC_JWT`, `RC_FROM_NUMBER` |
-| **Webhooks** | `POSTED_LISTING_WEBHOOK_URL`, `SKIPPED_LISTING_WEBHOOK_URL`, `BUYER_NON_TEXT_EMAIL_WEBHOOK_URL` |
+| **Webhooks** | `POSTED_LISTING_WEBHOOK_URL`, `SKIPPED_LISTING_WEBHOOK_URL`, `BUYER_NON_TEXT_EMAIL_WEBHOOK_URL`, `PRICE_DROP_PODIO_ACTIVE_WEBHOOK_URL` |
 | **Buyer matching** | `BUYER_MATCHING_CRON_MINUTES`, `BUYER_UPDATE_JWT_SECRET`, `BUYER_UPDATE_EMAIL_API_URL` |
 | **Server** | `STATUS_PORT`, `DEV` |
 

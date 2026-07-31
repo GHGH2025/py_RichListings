@@ -151,6 +151,35 @@ The response includes the workspace name.
 
 ---
 
+### 3b. ≥6% price-drop → mark Active
+
+**What it does:** When a listing passed the 30-day dedup gate because price dropped ≥ 6%, a cron posts a catch webhook so Workflow Automation can set the property **Status = Active**. Separately, the same job sets WordPress `post_status` to `publish`.
+
+**Files:**
+- `pipeline/price_drop_activate.py`
+- `integrations/wordpress/post_status.py`
+
+**Env variables:**
+
+| Variable | When it fires |
+|----------|---------------|
+| `PRICE_DROP_PODIO_ACTIVE_WEBHOOK_URL` | Listing has `price_drop_pass` and is not yet activated |
+
+**Payload:**
+
+```json
+{ "add": "1403 Ave J, Fort Pierce, FL 34950, USA" }
+```
+
+Full details: [price_drop_activate.md](./price_drop_activate.md).
+
+**How to check:**
+- MongoDB: `db.parsed_listings.find({ price_drop_activated: true })`
+- Metrics UI: **6% Price Drop** → `/metric/price-drop-6pct`
+- Podio Workflow Automation run history for the catch URL
+
+---
+
 ### 4. Buyer matching
 
 **What it does:** Matches parsed listings to buyers based on preferences. When a match is found, it updates the **Properties** app in Podio with references to matched buyer items.
@@ -234,6 +263,7 @@ Buyer form submissions run **immediately** when the API is called — not on a s
 | `PODIO_PROPERTIES_SPECIAL_PREFERENCES_FIELD_ID` | Manual special prefs on properties |
 | `POSTED_LISTING_WEBHOOK_URL` | Posted listing webhook |
 | `SKIPPED_LISTING_WEBHOOK_URL` | Skipped listing webhook |
+| `PRICE_DROP_PODIO_ACTIVE_WEBHOOK_URL` | ≥6% pass → mark property Active |
 | `SPECIAL_AVAIL_MATCH_WEBHOOK_URL` | Special avail webhook |
 | `MANNY_MATCH_WEBHOOK_URL` | Manny match webhook |
 | `IGNORE_PODIO_STATUS_FOR_TEST` | Test mode: ignore Active status filter |
@@ -248,8 +278,9 @@ Buyer form submissions run **immediately** when the API is called — not on a s
 3. **Direct wholesaler** — `direct_wholeseller: "processed"` in MongoDB
 4. **Buyer form** — `podio_status: "sent"` in `web_form_buyer_submissions`
 5. **Posted webhooks** — check Podio Workflow Automation run history
-6. **Buyer matching** — `buyer_matching_status: "matched"` in MongoDB
-7. **Podio UI** — open the Properties / Web Form Submissions apps and confirm recent changes
+6. **≥6% Active webhook** — `price_drop_activated: true` / metrics `/metric/price-drop-6pct`
+7. **Buyer matching** — `buyer_matching_status: "matched"` in MongoDB
+8. **Podio UI** — open the Properties / Web Form Submissions apps and confirm recent changes
 
 ---
 
@@ -271,14 +302,15 @@ Buyer form submissions run **immediately** when the API is called — not on a s
 
 ```
 py_RichListings/
-├── podio_direct_wholeseller.py      # Wholesaler linking on Properties app
-├── podio_web_form_submissions.py    # Buyer form → Podio create/update
-├── buyer_submissions_api.py         # /api/buyer-submissions endpoint
-├── buyer_matching_api.py            # Buyer ↔ property matching + Podio updates
-├── special_avails.py                # Special avail reads + webhooks
-├── ai_make_whatsapp_posts.py        # Posted listing webhook
-├── post_selection.py                # Skipped listing webhook
-└── server_runner.py                 # Scheduled jobs
+├── integrations/podio/direct_wholesaler.py  # Wholesaler linking on Properties app
+├── integrations/podio/web_form_submissions.py
+├── buyers/matching_api.py                   # Buyer ↔ property matching + Podio updates
+├── special_avails/processor.py              # Special avail reads + webhooks
+├── pipeline/price_drop_activate.py          # ≥6% → Active catch webhook + WP public
+├── ai/whatsapp_posts.py                     # Posted listing webhook
+├── pipeline/post_selection.py               # Skipped listing webhook
+└── server_runner.py                         # Scheduled jobs
 ```
 
-For direct wholesaler configuration, see also: [direct_wholesalers.md](./direct_wholesalers.md)
+For direct wholesaler configuration, see also: [direct_wholesalers.md](./direct_wholesalers.md).  
+For ≥6% Active + WP public: [price_drop_activate.md](./price_drop_activate.md).
