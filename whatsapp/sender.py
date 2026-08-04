@@ -196,18 +196,29 @@ def send_listing_to_whatsapp(listing_id, to_numbers: Optional[List[str]] = None)
     to_numbers = TEAM_NUMBERS
     return _send_dm(pl, to_numbers)
 
-def process_whatsapp_queue(limit: int = 100, dm_sleep_range: Tuple[float, float] = (10, 15)) -> Dict[str, int]:
+def process_whatsapp_queue(
+    limit: int = 100,
+    dm_sleep_range: Tuple[float, float] = (10, 15),
+    gmail_message_id: Optional[str] = None,
+) -> Dict[str, int]:
     """
     Pulls ParsedListing where whatsapp_status in {"pending","failed"} and attempts delivery.
     - Before sending: whatsapp_status -> "sending"
     - After sending:  "sent" or "failed"
+    - Optional gmail_message_id scopes the queue to one source email (catch-up).
     """
     mode = get_whatsapp_send_mode()
     to_numbers = TEAM_NUMBERS if mode == "dm" else []
 
-    qs = ParsedListing.objects(
-        Q(whatsapp_status__in=["pending", "failed"])
-    ).only("id", "post_content", "images", "whatsapp_status", "account_label").limit(limit)
+    q = Q(whatsapp_status__in=["pending", "failed"])
+    if gmail_message_id:
+        q = q & Q(gmail_message_id=gmail_message_id)
+    else:
+        q = q & Q(gmail_message_id__not__startswith="test_")
+
+    qs = ParsedListing.objects(q).only(
+        "id", "post_content", "images", "whatsapp_status", "account_label"
+    ).limit(limit)
 
     total = sent = failed = 0
 
