@@ -77,8 +77,8 @@ def _addr_candidates(pl) -> list[tuple[str, str | None, str | None]]:
     2) raw/complete_info fields (complete_info.address, complete_info.city, complete_info.zip)
     Dedupes if both are identical/blank.
     """
-    def _t(x): 
-        return (x or "").strip()
+    def _t(x):
+        return _sanitize_match_text(x) or ""
 
     top_addr  = _t(getattr(pl, "address", None))
     top_city  = _t(getattr(pl, "city", None))
@@ -98,12 +98,28 @@ def _addr_candidates(pl) -> list[tuple[str, str | None, str | None]]:
             cands.append(tup)
     return cands
 
+def _sanitize_match_text(value: Optional[str]) -> Optional[str]:
+    """Strip NULs/control chars that break Mongo regex (iexact) queries."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        value = str(value)
+    cleaned = "".join(ch for ch in value if ch == "\t" or ord(ch) >= 32).strip()
+    return cleaned or None
+
+
 def _find_recent_prior(addr: str, city: Optional[str], zip_: Optional[str],
                        since: datetime, exclude_id) -> Optional[ParsedListing]:
     """
     Find most-recent prior in last 30 days with SAME address (and city/zip when present),
     across top-level vs complete_info fields. Excludes the current doc.
     """
+    addr = _sanitize_match_text(addr)
+    city = _sanitize_match_text(city)
+    zip_ = _sanitize_match_text(zip_)
+    if not addr:
+        return None
+
     # address match (no address_line anywhere)
     addr_q = Q(address__iexact=addr) | Q(complete_info__address__iexact=addr)
 
@@ -124,7 +140,6 @@ def _find_recent_prior(addr: str, city: Optional[str], zip_: Optional[str],
         .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status")
         .order_by("-skipped_or_posted_at")
     )
-    print("addr>>",addr,">>",qs.first())
     return qs.first()
 
 def _compose_raw_for_google(addr: str, city: str, state: str, zip_: str) -> str:
@@ -261,7 +276,10 @@ def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
 
     return None
 
-def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
+def process_not_processed_with_duplicate_rule(
+    limit: int = 500,
+    gmail_message_id: Optional[str] = None,
+) -> dict:
     """
     For each `not_processed` listing:
       - If NO prior (same address/city/zip) within 30d => status -> processed (clear reason)
@@ -273,9 +291,13 @@ def process_not_processed_with_duplicate_rule(limit: int = 500) -> dict:
     since = _now() - timedelta(days=30)
     checked = processed = skipped = missing_addr = 0
 
+    q = ParsedListing.objects(status="verified")
+    if gmail_message_id:
+        q = q.filter(gmail_message_id=gmail_message_id)
+    else:
+        q = q.filter(gmail_message_id__not__startswith="test_")
     candidates = (
-        ParsedListing.objects(status="verified")
-        .only("address", "city", "zip", "state", "price", "complete_info", "geo_code_response", "skipped_or_posted_at", "status")
+        q.only("address", "city", "zip", "state", "price", "complete_info", "geo_code_response", "skipped_or_posted_at", "status")
         .limit(limit)
     )
 
