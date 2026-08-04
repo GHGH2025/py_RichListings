@@ -74,11 +74,16 @@ except ImportError:
 
 from db.mongo_engine_conn import init_db
 from special_avails.processor import snapshot_yesterday_special_avail, process_manny_special_avails
-from pipeline.test_pipeline import run_test_email_pipeline
 from pipeline.catchup_from_verified import (
     find_verified_since,
     run_catchup_from_verified,
 )
+
+try:
+    # Not always present on EC2 deploys; catch-up must still boot without it.
+    from pipeline.test_pipeline import run_test_email_pipeline
+except ImportError:
+    run_test_email_pipeline = None
 
 
 START_TIME = float(os.getenv("APP_START_TIME", str(time.time())))
@@ -209,6 +214,11 @@ def test_email_pipeline(payload: TestEmailPipelinePayload):
     - Does NOT send WhatsApp, create WordPress posts, write Podio, or fire webhooks
     - Returns per-listing would-send payloads for WhatsApp / WordPress / Podio
     """
+    if run_test_email_pipeline is None:
+        raise HTTPException(
+            status_code=501,
+            detail="pipeline.test_pipeline is not deployed on this host",
+        )
     try:
         result = run_test_email_pipeline(
             html=payload.html,
