@@ -293,6 +293,51 @@ Webhooks are best-effort — if they fail, the listing still posts; only a log l
 | Group send does nothing | `WHATSAPP_GROUP_JIDS` empty or wrong | Verify group JID ends with `@g.us` |
 | Mode mismatch | Testing DM endpoint but mode is `group` | Check `WHATSAPP_SEND_MODE` or `/config/whatsapp-mode` |
 | `whatsapp_status` stuck on `sending` | Worker crashed mid-send | Manually set back to `pending` or `failed` in MongoDB |
+| Many listings stuck at `verified` | Pipeline stalled (e.g. OpenAI credits) | Use catch-up API below |
+
+---
+
+## Ops: catch-up from verified
+
+When listings remain at `status=verified` and never reach WhatsApp / WordPress, use:
+
+`POST /tasks/catchup-from-verified`
+
+**Body:**
+
+```json
+{
+  "since": "2026-08-01T00:00:00Z",
+  "dry_run": true,
+  "limit": 100
+}
+```
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `since` | required | ISO-8601 UTC; selects `created_at >= since` |
+| `dry_run` | `true` | Preview matching verified listings only (no sends) |
+| `limit` | `100` | Max verified listings to include |
+
+**`dry_run=true`:** returns count + listing previews. No DB updates, no WhatsApp/WP/Podio.
+
+**`dry_run=false`:** starts a background job that runs the live pipeline for those listings (grouped by `gmail_message_id`):
+
+dedup → AI rules → post selection → image curation → primary image → WhatsApp ad copy (+ Podio webhook) → WordPress AI → WP sync → WhatsApp send
+
+Implementation: `pipeline/catchup_from_verified.py`.
+
+```bash
+# Preview
+curl -X POST http://HOST:8000/tasks/catchup-from-verified \
+  -H "Content-Type: application/json" \
+  -d '{"since":"2026-08-01T00:00:00Z","dry_run":true}'
+
+# Process
+curl -X POST http://HOST:8000/tasks/catchup-from-verified \
+  -H "Content-Type: application/json" \
+  -d '{"since":"2026-08-01T00:00:00Z","dry_run":false,"limit":100}'
+```
 
 ---
 
@@ -313,7 +358,8 @@ py_RichListings/
 ├── whatsapp_sender.py         # Send queue + HTTP calls to Node
 ├── whatsapp_keepalive.py      # Twilio keepalive (optional)
 ├── config_runtime.py          # DM/group mode get/set
-├── api_app.py                 # /server-status, /config/whatsapp-mode
+├── api_app.py                 # /server-status, /config/whatsapp-mode, /tasks/catchup-from-verified
+├── pipeline/catchup_from_verified.py  # Ops catch-up for stuck verified listings
 ├── post_selection.py          # Picks listings + skipped webhook
 └── image_curation.py          # Image steps before ready_to_post
 
