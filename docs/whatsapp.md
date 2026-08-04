@@ -321,9 +321,12 @@ When listings remain at `status=verified` and never reach WhatsApp / WordPress, 
 
 **`dry_run=true`:** returns count + listing previews. No DB updates, no WhatsApp/WP/Podio.
 
-**`dry_run=false`:** starts a background job that runs the live pipeline for those listings (grouped by `gmail_message_id`):
+**`dry_run=false`:** starts a background job that runs the live pipeline for those listings:
 
 dedup → AI rules → post selection → image curation → primary image → WhatsApp ad copy (+ Podio webhook) → WordPress AI → WP sync → WhatsApp send
+
+- If stage helpers support `gmail_message_id`: scoped per email.
+- If not (older EC2 deploy): one **batch** pass with `limit` (signature-safe kwargs).
 
 Implementation: `pipeline/catchup_from_verified.py`.
 
