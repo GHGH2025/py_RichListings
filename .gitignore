@@ -3,3 +3,19 @@ __pycache__/
 accounts/
 run-api.sh
 rich.pem
+
+# Local working changes (ignore from tracking)
+ai/image_curation.py
+ai/media_verify.py
+ai/rules_runner.py
+ai/whatsapp_posts.py
+api_app.py
+integrations/podio/direct_wholesaler.py
+integrations/wordpress/ai_mapper.py
+integrations/wordpress/ai_property_description.py
+integrations/wordpress/sync_poster.py
+pipeline/dedup.py
+pipeline/post_selection.py
+pipeline/process_email.py
+pipeline/test_pipeline.py
+whatsapp/sender.py
