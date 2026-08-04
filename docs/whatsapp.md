@@ -315,7 +315,7 @@ When listings remain at `status=verified` and never reach WhatsApp / WordPress, 
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `since` | required | ISO-8601 UTC; selects `created_at >= since` |
+| `since` | required | ISO-8601 UTC; selects `updated_at >= since` (created_at is often null in prod) |
 | `dry_run` | `true` | Preview matching verified listings only (no sends) |
 | `limit` | `100` | Max verified listings to include |
 

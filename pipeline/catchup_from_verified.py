@@ -61,6 +61,7 @@ def _listing_preview(pl: ParsedListing) -> Dict[str, Any]:
         "city": getattr(pl, "city", None),
         "state": getattr(pl, "state", None),
         "created_at": _iso(getattr(pl, "created_at", None)),
+        "updated_at": _iso(getattr(pl, "updated_at", None)),
         "gmail_message_id": getattr(pl, "gmail_message_id", None),
         "account_label": getattr(pl, "account_label", None),
         "status": getattr(pl, "status", None),
@@ -69,7 +70,10 @@ def _listing_preview(pl: ParsedListing) -> Dict[str, Any]:
 
 def find_verified_since(since: str, limit: int = 100) -> Dict[str, Any]:
     """
-    Preview verified listings with created_at >= since.
+    Preview verified listings with updated_at >= since.
+
+    Note: many production ParsedListing docs have created_at null/missing, so
+    the catch-up window is keyed on updated_at (set when status becomes verified).
     """
     since_dt = _parse_since(since)
     limit = max(1, int(limit or 100))
@@ -77,10 +81,10 @@ def find_verified_since(since: str, limit: int = 100) -> Dict[str, Any]:
     qs = (
         ParsedListing.objects(
             status="verified",
-            created_at__gte=since_dt,
+            updated_at__gte=since_dt,
             gmail_message_id__not__startswith="test_",
         )
-        .order_by("+created_at")
+        .order_by("+updated_at")
         .limit(limit)
         .only(
             "id",
@@ -88,6 +92,7 @@ def find_verified_since(since: str, limit: int = 100) -> Dict[str, Any]:
             "city",
             "state",
             "created_at",
+            "updated_at",
             "gmail_message_id",
             "account_label",
             "status",
