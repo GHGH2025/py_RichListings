@@ -243,7 +243,12 @@ def _try_search_in_wp(pl: ParsedListing) -> Optional[int]:
             return pid
     return None
 
-def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: float = 0.0) -> Dict[str, Any]:
+def sync_wp_for_descriptions(
+    *,
+    limit: Optional[int] = None,
+    per_item_sleep_s: float = 0.0,
+    gmail_message_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Process all ParsedListing with:
       - wp_status == "des_generated"
@@ -253,11 +258,19 @@ def sync_wp_for_descriptions(*, limit: Optional[int] = None, per_item_sleep_s: f
       - search in WP (main "<addr, city>" then variants)
         - if found: set wp_status="already_found", set post_id
         - else: POST create; on success set wp_status="posted", set post_id
+
+    Optional gmail_message_id scopes sync to one source email (catch-up).
     """
     if not WP_TOKEN:
         raise RuntimeError("WP_API_TOKEN is not set in environment")
 
-    q = ParsedListing.objects(wp_status="des_generated").only(
+    filters: Dict[str, Any] = {"wp_status": "des_generated"}
+    if gmail_message_id:
+        filters["gmail_message_id"] = gmail_message_id
+    else:
+        filters["gmail_message_id__not__startswith"] = "test_"
+
+    q = ParsedListing.objects(**filters).only(
         "address", "city", "state", "zip", "images", "price",
         "wp_property_description", "wp_parsed_data",
         "other_images_dropbox_link", "address_search_keys"
