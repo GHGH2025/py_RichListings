@@ -53,33 +53,39 @@ The response includes the workspace name.
 
 ### 1. Direct wholesaler linking
 
-**What it does:** When a listing comes from a known direct wholesaler, RichListings finds the matching property in Podio and sets the **Wholeseller** field to the correct wholeseller record.
+**What it does:** When a listing is scraped from a known direct-wholesaler email, RichListings stamps the contact from Mongo, then finds the matching **Active** property in Podio and sets the **Wholeseller** field. Nothing is created in Podio on miss — lookup and link only.
+
+Full config and flow: [direct_wholesalers.md](./direct_wholesalers.md).
 
 **Files:**
-- `podio_direct_wholeseller.py` — search, match, and update logic
+- `pipeline/listing_details.py` — Gmail From → Mongo `direct_wholesalers` → stamp `agent_*` + queue flag
+- `integrations/podio/direct_wholesaler.py` — property search, wholeseller email match, Podio field update
 - `server_runner.py` — runs every **3 minutes** via `run_direct_wholeseller_linking`
 
 **Step by step:**
 
-1. A parsed listing has `direct_wholeseller = "not_processed"`.
-2. The job reads the agent email from `complete_info.agent_email`.
-3. It searches the **Properties** app by address and city.
-4. It finds the wholeseller in the **Wholesellers** app by email.
-5. It updates the property’s Wholeseller reference field in Podio.
-6. MongoDB field `direct_wholeseller` is updated.
+1. On parse, Gmail **From** is looked up in Mongo `direct_wholesalers` by `sender_email`.
+2. On hit, listing `agent_name` / `agent_phone` / `agent_email` are overwritten from the map, and `direct_wholeseller` is set to `"not_processed"` (or `"bypassed"` / `"not_found"` as below).
+3. The cron job picks listings with `direct_wholeseller = "not_processed"`.
+4. It reads `complete_info.agent_email` (the map’s contact email, not necessarily Gmail From).
+5. It searches the **Properties** app by address and city (Active only).
+6. It finds the wholeseller in the **Wholesellers** app by **email only**.
+7. If `updateFlagForPodio` is true, it updates the property’s Wholeseller reference field; if false, it skips the write.
+8. MongoDB `direct_wholeseller` is updated to the outcome.
 
-**Important:** The Podio update only happens if the wholesaler has `updateFlagForPodio: true` in the `direct_wholesalers` MongoDB collection. If it is `false`, the code skips the Podio write and only logs a message.
+**Important:** The Podio write only happens if `updateFlagForPodio` is true for that wholesaler. Name and phone are not used for Podio matching.
 
 **MongoDB field:** `ParsedListing.direct_wholeseller`
 
 | Value | Meaning |
 |-------|---------|
-| `not_processed` | Waiting to be picked up |
-| `processed` | Successfully linked in Podio (or already correct) |
-| `property_not_found` | No matching property in Podio |
+| `not_processed` | Known sender; waiting for Podio linker |
+| `processed` | Linked (or already correct / write skipped by flag) |
+| `not_found` | Gmail From not in `direct_wholesalers` |
+| `bypassed` | Known sender, but listing index not queued for processing |
+| `property_not_found` | No matching Active property in Podio |
 | `wholeseller_not_found` | Property found, but no wholeseller with that email |
 | `no_agent_email` | Listing has no agent email |
-| `bypassed` | Sender is not a direct wholesaler |
 
 **How to check:**
 - Server logs: `run_direct_wholeseller_linking`, `Setting Wholeseller reference on property item ...`
@@ -302,6 +308,14 @@ Buyer form submissions run **immediately** when the API is called — not on a s
 
 ```
 py_RichListings/
+├── integrations/podio/direct_wholesaler.py   # Wholesaler linking on Properties app
+├── pipeline/listing_details.py               # Sender → Mongo map → stamp listing
+├── integrations/podio/                        # Other Podio clients (forms, matching, etc.)
+├── server_runner.py                          # Scheduled jobs (incl. wholesaler link every 3 min)
+└── ...
+```
+
+For direct wholesaler configuration and the full email → Mongo → Podio flow, see: [direct_wholesalers.md](./direct_wholesalers.md)
 ├── integrations/podio/direct_wholesaler.py  # Wholesaler linking on Properties app
 ├── integrations/podio/web_form_submissions.py
 ├── buyers/matching_api.py                   # Buyer ↔ property matching + Podio updates

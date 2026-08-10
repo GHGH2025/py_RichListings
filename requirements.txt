@@ -19,3 +19,4 @@ tzdata
 boto3
 requests
 twilio
+emoji

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, List
+
+import emoji
 
 from models import (
     Bodies,
@@ -19,6 +22,36 @@ from models.whatsapp_tracked_messages import WhatsappTrackedMessage
 logger = logging.getLogger(__name__)
 
 ACCOUNT_LABEL = "whatsapp"
+
+# Arrows / bullets used in WA deal blasts that are not always in emoji data (e.g. →).
+_DECORATIVE_ARROWS_RE = re.compile(
+    "["
+    "\U00002190-\U000021FF"
+    "\U000027A1"
+    "\U00002B05-\U00002B07"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _strip_emojis(text: str) -> str:
+    """
+    Remove all Unicode/WhatsApp emojis from inbound deal text.
+
+    Uses the `emoji` package (full Unicode emoji list, including ZWJ sequences,
+    skin tones, and flags). Also strips common decorative arrows used as bullets.
+    """
+    if not text:
+        return ""
+    cleaned = emoji.replace_emoji(text, replace="")
+    cleaned = _DECORATIVE_ARROWS_RE.sub("", cleaned)
+    # Orphaned variation selectors / ZWJ left after partial sequences.
+    cleaned = cleaned.replace("\uFE0F", "").replace("\u200D", "")
+    # Drop spaces left behind by emoji removal; preserve newlines.
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
 
 
 def _push_name(msg: WhatsappTrackedMessage) -> str:
@@ -106,6 +139,7 @@ def _upsert_filtered_email(msg: WhatsappTrackedMessage) -> str:
     sender_lookup = _sender_lookup_email(msg)
     gmail_message_id = _gmail_message_id(msg)
     media_urls = _media_urls(msg)
+    text = _strip_emojis(msg.text or "")
 
     q = FilteredListingEmail.objects(
         account_label=ACCOUNT_LABEL,
@@ -123,7 +157,7 @@ def _upsert_filtered_email(msg: WhatsappTrackedMessage) -> str:
         ),
         set__rfc822_date=dt.isoformat(),
         set__internal_date=InternalDate(ts_ms=ts_ms, iso=dt.isoformat()),
-        set__bodies=_wrap_body(msg.text or "", media_urls),
+        set__bodies=_wrap_body(text, media_urls),
         set_on_insert__status="not_processed",
         set__updated_at=datetime.utcnow(),
         set_on_insert__created_at=datetime.utcnow(),
@@ -175,7 +209,7 @@ def process_pending_whatsapp(limit: int = 10) -> dict:
             continue
 
         try:
-            text = (msg.text or "").strip()
+            text = _strip_emojis(msg.text or "")
             media_urls = _media_urls(msg)
             if not text and not media_urls:
                 _mark_error(msg.id, "empty_text")
