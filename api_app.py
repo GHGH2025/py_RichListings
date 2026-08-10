@@ -65,6 +65,7 @@ from routes.direct_wholesaler import router as direct_wholesaler_router
 from routes.scraping_list import router as scraping_list_router
 from routes.special_avail_list import router as special_avail_list_router
 from routes.wordpress_proxy import router as wordpress_proxy_router
+from routes.openai_ping import router as openai_ping_router
 
 try:
     # Present on rich-ai EC2; optional in local checkouts that lack this module.
@@ -120,9 +121,11 @@ app.include_router(direct_wholesaler_router)
 app.include_router(scraping_list_router)
 app.include_router(special_avail_list_router)
 app.include_router(wordpress_proxy_router)
+app.include_router(openai_ping_router)
 # Buyer-SMS campaign (Twilio 800#). Mounted under /api so nginx /api/ proxy reaches it.
 if campaign_sms_router is not None:
     app.include_router(campaign_sms_router, prefix="/api")
+
 
 
 class ModePayload(BaseModel):
