@@ -236,9 +236,20 @@ EMAIL_MARKDOWN_HTML:
 {html_ai}
 """
 
-def ai_verify_media_for_listing(address: str, html_ai: str, model: Optional[str] = None) -> Dict[str, Any]:
+def ai_verify_media_for_listing(
+    address: str,
+    html_ai: str,
+    model: Optional[str] = None,
+    listing_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    from observability.openai_usage import tracked_chat_create
+
     msg = _USER_TMPL.format(address=address.strip(), html_ai=(html_ai or "").strip())
-    chat = client.chat.completions.create(
+    chat = tracked_chat_create(
+        client,
+        stage="verified",
+        call_name="ai_verify_media",
+        listing_id=listing_id,
         model=(model or OPENAI_MODEL),
         messages=[{"role": "system", "content": _SYSTEM_PROMPT},
                   {"role": "user", "content": msg}],
@@ -423,7 +434,7 @@ def verify_and_fill_missing_media_for_not_processed(
 
             if html_ai.strip():
                 anchor = _address_line_for_match(pl)
-                ai = ai_verify_media_for_listing(anchor, str(html_ai), model=model)
+                ai = ai_verify_media_for_listing(anchor, str(html_ai), model=model, listing_id=pl_id)
                 # Only harvest for fields that are missing locally
                 if not has_imgs:
                     ai_images = _clean_images(ai.get("images", []))

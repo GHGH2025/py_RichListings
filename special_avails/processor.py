@@ -1026,13 +1026,13 @@ def ai_match_active_to_unique(
         ),
     }
 
-    # Handle 'gpt-5-mini' temperature quirk similar to your earlier pattern
+    # gpt-5* models often reject temperature; omit it for that family
     kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [system_msg, user_msg],
         "response_format": {"type": "json_object"},
     }
-    if model != "gpt-5-mini":
+    if not str(model or "").lower().startswith("gpt-5"):
         kwargs["temperature"] = 0
 
     resp = client.chat.completions.create(**kwargs)
@@ -1255,7 +1255,7 @@ def process_one_special_avail_matching() -> Dict[str, Any]:
 
 MANNY_WEBHOOK_URL = os.getenv("MANNY_MATCH_WEBHOOK_URL", "").strip()  # or pass as arg
 # You will pass Manny's wholesaler Podio item IDs as a parameter.
-MANNY_MATCH_MODEL = "gpt-5-mini"
+MANNY_MATCH_MODEL = "gpt-5.6-luna"
 
 def _to_est_date(dt: datetime) -> date:
     """
@@ -1411,7 +1411,7 @@ def ai_match_address_in_sheet(
         "messages": [system_msg, user_msg],
         "response_format": {"type": "json_object"},
     }
-    if model != "gpt-5-mini":
+    if not str(model or "").lower().startswith("gpt-5"):
         kwargs["temperature"] = 0
 
     resp = client.chat.completions.create(**kwargs)

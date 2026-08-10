@@ -392,6 +392,13 @@ def process_not_processed_with_duplicate_rule(
             pl.update(
                 set__status=NEXT_STATUS_ON_PASS,
                 set__rules_ai_reason=None,
+                set__price_drop_pass=True,
+                set__price_drop_pct=float(drop),
+                set__price_drop_prev_id=str(prior.id),
+                set__price_drop_prev_price=float(prev_price),
+                set__price_drop_curr_price=float(curr_price),
+                set__price_drop_activated=False,
+                set__price_drop_activate_error=None,
                 set__updated_at=_now(),
             )
             try:

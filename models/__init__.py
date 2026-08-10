@@ -165,7 +165,9 @@ class ParsedListing(Document):
     wp_check_post_id = IntField() 
 
     wp_check_reduced = StringField()
-
+    # WP asking price before / after a REDUCED!! update
+    wp_check_prev_price = FloatField(null=True)
+    wp_check_new_price = FloatField(null=True)
 
     post_id = IntField() 
 
@@ -223,6 +225,18 @@ class ParsedListing(Document):
     rules_ai_version            = StringField()   # store YAML version as string (flexible)
     rules_ai_reason             = StringField()   # short reason when Skipped
     skipped_or_posted_at        = DateTimeField(null=True)
+
+    # 30-day dedup ≥6% price-drop pass + later Podio/WP activation
+    price_drop_pass = BooleanField(default=False)
+    price_drop_pct = FloatField(null=True)
+    price_drop_prev_id = StringField(null=True)
+    price_drop_prev_price = FloatField(null=True)
+    price_drop_curr_price = FloatField(null=True)
+    price_drop_activated = BooleanField(default=False)
+    price_drop_activated_at = DateTimeField(null=True)
+    price_drop_wp_public_at = DateTimeField(null=True)
+    price_drop_podio_webhook_at = DateTimeField(null=True)
+    price_drop_activate_error = StringField(null=True)
 
      # NEW: flags for your new logic
     over_35_percent = StringField(
@@ -614,6 +628,14 @@ class ListingPipelineMetric(Document):
     skip_reason = StringField()
 
     events = ListField(EmbeddedDocumentField(StageEvent), default=list)
+
+    # OpenAI usage (estimated $ from observability/openai_pricing.py at call time)
+    ai_prompt_tokens = IntField(default=0)
+    ai_completion_tokens = IntField(default=0)
+    ai_cached_tokens = IntField(default=0)
+    ai_total_tokens = IntField(default=0)
+    ai_cost_usd = FloatField(default=0.0)
+    ai_calls = ListField(DictField(), default=list)
 
     created_at = DateTimeField(default=datetime.utcnow)
     updated_at = DateTimeField(default=datetime.utcnow)

@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Optional
 from urllib.parse import unquote_plus
 
-import requests
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-WP_BASE = os.getenv("WP_API_BASE", "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1")
-WP_CREATE_URL = f"{WP_BASE}/create"
-REQUEST_TIMEOUT = 25
+from integrations.wordpress.post_status import set_wp_post_status
 
 router = APIRouter(tags=["wordpress-proxy"])
 
@@ -69,26 +65,17 @@ async def public_wp_create(request: Request):
             detail=f"Missing required fields: {', '.join(missing)}",
         )
 
-    body = {
-        "token": str(data["token"]).strip(),
-        "posttitle": str(data["posttitle"]).strip(),
-        "post_status": str(data["post_status"]).strip(),
-    }
+    _ok, status_code, payload = set_wp_post_status(
+        str(data["posttitle"]).strip(),
+        str(data["post_status"]).strip(),
+        token=str(data["token"]).strip(),
+    )
 
-    try:
-        resp = requests.post(
-            WP_CREATE_URL,
-            json=body,
-            headers={"Content-Type": "application/json"},
-            timeout=REQUEST_TIMEOUT,
-        )
-    except requests.RequestException as e:
-        logging.exception("WP create proxy request failed")
-        raise HTTPException(status_code=502, detail=f"WordPress request failed: {e}") from e
+    if status_code == 0:
+        logging.error("WP create proxy failed: %s", payload)
+        raise HTTPException(status_code=502, detail=f"WordPress request failed: {payload}")
 
-    try:
-        payload = resp.json()
-    except ValueError:
-        payload = {"raw": resp.text}
+    if not isinstance(payload, (dict, list)):
+        payload = {"raw": payload}
 
-    return JSONResponse(status_code=resp.status_code, content=payload)
+    return JSONResponse(status_code=status_code, content=payload)

@@ -264,8 +264,18 @@ _USER_TEMPLATE = "ADDRESS:\n{addr}\n"
 
 
 
-def ai_address_search_keys(address_str: str, model: Optional[str] = None) -> List[str]:
-    chat = client.chat.completions.create(
+def ai_address_search_keys(
+    address_str: str,
+    model: Optional[str] = None,
+    listing_id: Optional[str] = None,
+) -> List[str]:
+    from observability.openai_usage import tracked_chat_create
+
+    chat = tracked_chat_create(
+        client,
+        stage="address_keys",
+        call_name="ai_address_search_keys",
+        listing_id=listing_id,
         model=(model or OPENAI_MODEL),
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -302,18 +312,18 @@ def ai_address_search_keys(address_str: str, model: Optional[str] = None) -> Lis
     return out[:20]
 
 # Convenience alias
-def address_keys(address_str: str) -> List[str]:
-    return ai_address_search_keys(address_str)
+def address_keys(address_str: str, listing_id: Optional[str] = None) -> List[str]:
+    return ai_address_search_keys(address_str, listing_id=listing_id)
 
 
-def _call_ai_address_keys(addr: str, city: str) -> List[str]:
+def _call_ai_address_keys(addr: str, city: str, listing_id: Optional[str] = None) -> List[str]:
     """
     Call your AI generator to expand address variants.
     Always returns a de-duplicated list (may be empty).
     """
     try:
         # If you have a different import name, adjust this call:
-        resp = address_keys(f"{addr}, {city}")
+        resp = address_keys(f"{addr}, {city}", listing_id=listing_id)
         if isinstance(resp, dict):
             keys = resp.get("search_keys", []) or []
         elif isinstance(resp, list):
@@ -361,7 +371,7 @@ def update_parsed_listing_address_keys(listing_id: str, addr: str, city: str) ->
         logging.warning("Could not resolve street address for %s: %s", listing_id, e)
 
     try:
-        keys = _call_ai_address_keys(addr, city)
+        keys = _call_ai_address_keys(addr, city, listing_id=listing_id)
         if not keys:
             return False
 

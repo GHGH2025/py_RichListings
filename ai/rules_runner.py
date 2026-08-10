@@ -36,7 +36,7 @@ def apply_ai_english_rules(rules_path: str, limit: int = 100) -> Dict[str, int]:
         total += 1
         facts = _facts_from_doc(pl)
         try:
-            result = judge_listing_with_english_rules(facts, rules_yaml)
+            result = judge_listing_with_english_rules(facts, rules_yaml, listing_id=str(pl.id))
         except Exception as e:
             # Keep doc for retry; annotate error for visibility
             pl.update(set__complete_info__rules_ai_error=str(e), set__updated_at=datetime.utcnow())
