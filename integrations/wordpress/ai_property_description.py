@@ -224,12 +224,18 @@ def ai_build_wp_property_description_for_posted(
     batch_size: int = 25,
     per_item_sleep_s: float = 0.0,
     only_missing: bool = True,  # skip if already present
+    gmail_message_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Build & save HTML descriptions for all ParsedListings with status='posted'.
     Uses complete_info + post_content; saves to wp_property_description.
     """
-    q = ParsedListing.objects(wp_status="keys_generated").order_by("+created_at")
+    q = ParsedListing.objects(wp_status="keys_generated")
+    if gmail_message_id:
+        q = q.filter(gmail_message_id=gmail_message_id)
+    else:
+        q = q.filter(gmail_message_id__not__startswith="test_")
+    q = q.order_by("+created_at")
     # if only_missing:
     #     q = q.filter(wp_property_description__exists=False)
     if skip:

@@ -557,6 +557,7 @@ def ai_build_wp_payload_for_posted(
     skip: int = 0,                        # pagination offset
     batch_size: int = 25,                 # safety against rate limits
     per_item_sleep_s: float = 0.0,        # e.g. 0.2 if you want light throttling
+    gmail_message_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs AI mapping for all ParsedListing with status='posted'.
@@ -564,7 +565,12 @@ def ai_build_wp_payload_for_posted(
 
     You can paginate with skip/limit, and throttle with batch_size + per_item_sleep_s.
     """
-    q = ParsedListing.objects(wp_status="ready_to_process").order_by("+created_at")
+    q = ParsedListing.objects(wp_status="ready_to_process")
+    if gmail_message_id:
+        q = q.filter(gmail_message_id=gmail_message_id)
+    else:
+        q = q.filter(gmail_message_id__not__startswith="test_")
+    q = q.order_by("+created_at")
     if skip:
         q = q.skip(skip)
     if limit is not None:

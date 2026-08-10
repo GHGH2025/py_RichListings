@@ -367,6 +367,7 @@ def order_property_images(kept_urls: List[str], listing_id: Optional[str] = None
 def process_primary_image_verification(
     limit: int = 100,
     model: Optional[str] = None,
+    gmail_message_id: Optional[str] = None,
 ) -> Dict[str, int]:
     """
     Middleware step between image curation and posting.
@@ -384,9 +385,12 @@ def process_primary_image_verification(
     """
     now = datetime.utcnow()
 
-    qs = ParsedListing.objects(status=MIDDLEWARE_STATUS_PRIMARY) \
-        .only("id", "images", "primary_image_check") \
-        .limit(limit)
+    qs = ParsedListing.objects(status=MIDDLEWARE_STATUS_PRIMARY)
+    if gmail_message_id:
+        qs = qs.filter(gmail_message_id=gmail_message_id)
+    else:
+        qs = qs.filter(gmail_message_id__not__startswith="test_")
+    qs = qs.only("id", "images", "primary_image_check").limit(limit)
 
     total = checked = passed = failed = no_image = 0
     errors: List[str] = []
@@ -572,7 +576,10 @@ def _dedupe_preserve_order(urls: List[str]) -> List[str]:
             out.append(u)
     return out
 
-def process_listings_ready_for_image_processing(limit: int = 100) -> Dict[str, int]:
+def process_listings_ready_for_image_processing(
+    limit: int = 100,
+    gmail_message_id: Optional[str] = None,
+) -> Dict[str, int]:
     """
     Pull listings with status == 'ready_for_image_processing' and curate images.
     - If images empty => mark ready_to_post.
@@ -584,7 +591,12 @@ def process_listings_ready_for_image_processing(limit: int = 100) -> Dict[str, i
     total = done = no_images = failed = 0
     now = datetime.utcnow()
 
-    q = ParsedListing.objects(status="ready_for_image_processing").order_by("+created_at").limit(limit)
+    q = ParsedListing.objects(status="ready_for_image_processing")
+    if gmail_message_id:
+        q = q.filter(gmail_message_id=gmail_message_id)
+    else:
+        q = q.filter(gmail_message_id__not__startswith="test_")
+    q = q.order_by("+created_at").limit(limit)
     for pl in q:
         total += 1
         try:

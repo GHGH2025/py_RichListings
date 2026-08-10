@@ -88,7 +88,10 @@ def process_pending(limit=2):
     # FilteredListingEmail.ensure_indexes()
     # ParsedListing.ensure_indexes()
 
-    pending = FilteredListingEmail.objects(status="not_processed").limit(limit)
+    pending = FilteredListingEmail.objects(
+        status="not_processed",
+        gmail_message_id__not__startswith="test_",
+    ).limit(limit)
 
     for fe in pending:
         print("fe.id",fe.id)

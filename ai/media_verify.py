@@ -365,7 +365,8 @@ def _address_line_for_match(pl: ParsedListing) -> str:
 def verify_and_fill_missing_media_for_not_processed(
     limit: int = 200,
     max_workers: int = 6,
-    model: Optional[str] = None
+    model: Optional[str] = None,
+    gmail_message_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Processes ALL 'not_processed' listings.
@@ -373,8 +374,12 @@ def verify_and_fill_missing_media_for_not_processed(
     - If either is missing: run AI; update ONLY the missing fields (no overwrites, no regex fallback).
     - Regardless of outcome: mark verified at the end.
     """
-    qs = ParsedListing.objects(status="not_processed") \
-        .only("id", "address", "city", "state", "zip", "images", "other_images_source", "source_email") \
+    qs = ParsedListing.objects(status="not_processed")
+    if gmail_message_id:
+        qs = qs.filter(gmail_message_id=gmail_message_id)
+    else:
+        qs = qs.filter(gmail_message_id__not__startswith="test_")
+    qs = qs.only("id", "address", "city", "state", "zip", "images", "other_images_source", "source_email") \
         .limit(limit)
 
     total = qs.count()

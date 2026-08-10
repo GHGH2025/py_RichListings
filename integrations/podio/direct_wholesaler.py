@@ -961,7 +961,10 @@ def process_direct_wholeseller_batch(batch_limit: int = 3) -> None:
     logging.debug("Effective batch limit after clamp: %s", limit)
 
     listings = list(
-        ParsedListing.objects(direct_wholeseller="not_processed")[:limit]
+        ParsedListing.objects(
+            direct_wholeseller="not_processed",
+            gmail_message_id__not__startswith="test_",
+        )[:limit]
     )
     print("listings==========", listings)  # kept as-is
     if not listings:
