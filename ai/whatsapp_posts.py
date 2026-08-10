@@ -176,7 +176,12 @@ def _compose_post(rules_text: str, listing_obj: Dict[str, Any], listing_id: Opti
         raise ValueError("empty post_content")
     return post
 
-def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) -> Dict[str, int]:
+def make_whatsapp_posts_from_ready_to_post(
+    rules_path: str,
+    limit: int = 100,
+    gmail_message_id: str | None = None,
+    skip_webhook: bool = False,
+) -> Dict[str, int]:
     """
     - Read human rules text from file.
     - Pull ready_to_post listings (limit N).
@@ -189,7 +194,12 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
         rules_text = f.read().strip()
 
     total = done = failed = 0
-    for pl in ParsedListing.objects(status="ready_to_post").limit(limit):
+    q = ParsedListing.objects(status="ready_to_post")
+    if gmail_message_id:
+        q = q.filter(gmail_message_id=gmail_message_id)
+    else:
+        q = q.filter(gmail_message_id__not__startswith="test_")
+    for pl in q.limit(limit):
         total += 1
         try:
             listing_obj = _listing_payload(pl)
@@ -219,7 +229,9 @@ def make_whatsapp_posts_from_ready_to_post(rules_path: str, limit: int = 100) ->
                 pass
 
             # NEW: best-effort webhook (does not affect flow)
-            _post_listing_to_webhook(pl.id)
+            is_test = str(getattr(pl, "gmail_message_id", "") or "").startswith("test_")
+            if not skip_webhook and not is_test:
+                _post_listing_to_webhook(pl.id)
 
             # try:
             #     if TEAM_NUMBERS:

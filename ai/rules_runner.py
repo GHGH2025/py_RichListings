@@ -22,7 +22,11 @@ def _facts_from_doc(pl: ParsedListing) -> Dict[str, Any]:
         facts["list_price_usd"] = float(pl.price)
     return facts
 
-def apply_ai_english_rules(rules_path: str, limit: int = 100) -> Dict[str, int]:
+def apply_ai_english_rules(
+    rules_path: str,
+    limit: int = 100,
+    gmail_message_id: str | None = None,
+) -> Dict[str, int]:
     # init_db()
     with open(rules_path, "r", encoding="utf-8") as f:
         rules_yaml = yaml.safe_load(f)
@@ -30,7 +34,12 @@ def apply_ai_english_rules(rules_path: str, limit: int = 100) -> Dict[str, int]:
     total = passed = skipped = 0
 
     # Pull a batch ready to screen
-    q = ParsedListing.objects(status="processed").limit(limit)
+    q = ParsedListing.objects(status="processed")
+    if gmail_message_id:
+        q = q.filter(gmail_message_id=gmail_message_id)
+    else:
+        q = q.filter(gmail_message_id__not__startswith="test_")
+    q = q.limit(limit)
 
     for pl in q:
         total += 1

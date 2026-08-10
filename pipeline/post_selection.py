@@ -329,6 +329,9 @@ def _send_skipped_listing_to_webhook(
         print("[skipped_listing] SKIPPED_LISTING_WEBHOOK_URL not set; skipping webhook send.")
         return {"ok": False, "reason": "no_webhook_url"}
 
+    if str(getattr(pl, "gmail_message_id", "") or "").startswith("test_"):
+        return {"ok": False, "reason": "test_listing"}
+
     payload: Dict[str, Any] = {
         "listing_id": str(pl.id),
         "skip_type": skip_type,
@@ -370,6 +373,8 @@ def select_passed_listings_for_post(
     limit: Optional[int] = None,
     sort_by: str = "created_at",       # or "price", "updated_at", etc.
     mark_ready_status: Optional[str] = None,  # e.g., "image_processed" or None to leave "passed"
+    gmail_message_id: Optional[str] = None,
+    skip_webhooks: bool = False,
 ) -> Dict[str, any]:
     """
     Pull 'passed' listings, filter to allowed regions, enforce 35% cap for rest_of_florida,
@@ -381,6 +386,10 @@ def select_passed_listings_for_post(
 
     # Fetch all PASSED that are candidates for posting
     q = ParsedListing.objects(status="passed")
+    if gmail_message_id:
+        q = q.filter(gmail_message_id=gmail_message_id)
+    else:
+        q = q.filter(gmail_message_id__not__startswith="test_")
 
     # Optional sort (oldest first is typical for fairness)
     if sort_by in {"created_at", "updated_at", "price"}:
@@ -426,14 +435,15 @@ def select_passed_listings_for_post(
                 pass
 
             # NEW: send full listing to webhook for Do_Not_Post_City
-            try:
-                _send_skipped_listing_to_webhook(
-                    pl,
-                    skip_type="Do_Not_Post_City",
-                    reason="Skipped due to Do Not Post City rule",
-                )
-            except Exception as e:
-                print(f"[skipped_listing] failed to send Do_Not_Post_City webhook for {pl.id}: {e}")
+            if not skip_webhooks:
+                try:
+                    _send_skipped_listing_to_webhook(
+                        pl,
+                        skip_type="Do_Not_Post_City",
+                        reason="Skipped due to Do Not Post City rule",
+                    )
+                except Exception as e:
+                    print(f"[skipped_listing] failed to send Do_Not_Post_City webhook for {pl.id}: {e}")
 
             # Do NOT consider this listing for region / 35% calculations
             continue
@@ -501,18 +511,19 @@ def select_passed_listings_for_post(
             pass
 
         # NEW: send full listing to webhook for quota skip
-        try:
-            _send_skipped_listing_to_webhook(
-                pl,
-                skip_type="POST_POLICY_35PC",
-                reason="Skipped due to 35% rest_of_florida daily cap",
-                extra={
-                    "rest_cap": rest_cap,
-                    "final_base_count": final_base_count,
-                },
-            )
-        except Exception as e:
-            print(f"[skipped_listing] failed to send POST_POLICY_35PC webhook for {pl.id}: {e}")
+        if not skip_webhooks:
+            try:
+                _send_skipped_listing_to_webhook(
+                    pl,
+                    skip_type="POST_POLICY_35PC",
+                    reason="Skipped due to 35% rest_of_florida daily cap",
+                    extra={
+                        "rest_cap": rest_cap,
+                        "final_base_count": final_base_count,
+                    },
+                )
+            except Exception as e:
+                print(f"[skipped_listing] failed to send POST_POLICY_35PC webhook for {pl.id}: {e}")
 
     # 4) kept = all non_rest + up-to-cap rest → set to ready_for_image_processing
     kept = non_rest + rest_keep
