@@ -1,9 +1,13 @@
 """
-Isolated dry-run email → publish pipeline.
+Isolated DEV dry-run email → publish pipeline.
 
 Seeds one FilteredListingEmail from caller-provided HTML, runs the same
-qualification stages as live (scoped to that message id), then builds the
-WhatsApp / WordPress / Podio payloads without sending anything outbound.
+qualification stages as live (scoped to that message id), force-advances past
+gate skips so WhatsApp ad copy is always generated, builds would-send payloads,
+then deletes all seeded DB docs.
+
+Never sends WhatsApp, creates WordPress posts, writes Podio, bumps daily caps,
+uploads Dropbox galleries, or fires webhooks.
 """
 from __future__ import annotations
 
@@ -64,6 +68,44 @@ def _stage(name: str, fn, stages: List[Dict[str, Any]]) -> Any:
         stages.append(entry)
         logger.exception("test_pipeline stage failed: %s", name)
         return None
+
+
+def _force_advance(
+    msg_id: str,
+    *,
+    to_status: str,
+    from_statuses: List[str],
+    note: str,
+    stages: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Promote listings blocked by a gate so the dry-run can continue to WhatsApp copy.
+    Records a synthetic stage entry for visibility.
+    """
+    forced: List[Dict[str, str]] = []
+    now = datetime.utcnow()
+    for pl in ParsedListing.objects(gmail_message_id=msg_id, status__in=from_statuses):
+        old = pl.status
+        prior_reason = getattr(pl, "rules_ai_reason", None)
+        pl.update(
+            set__status=to_status,
+            set__rules_ai_reason=(
+                f"[dry-run-force] {note}; was={old}"
+                + (f"; prior_reason={prior_reason}" if prior_reason else "")
+            ),
+            unset__skipped_or_posted_at=1,
+            set__updated_at=now,
+        )
+        forced.append({"id": str(pl.id), "from": old, "to": to_status})
+
+    result = {
+        "forced_count": len(forced),
+        "forced": forced,
+        "to": to_status,
+        "note": note,
+    }
+    stages.append({"stage": f"force_to_{to_status}", "ok": True, "result": result})
+    return result
 
 
 def _seed_filtered_email(
@@ -135,7 +177,32 @@ def _listings_for(msg_id: str) -> List[ParsedListing]:
     return list(ParsedListing.objects(gmail_message_id=msg_id).order_by("+list_index"))
 
 
+def _cleanup_seeded(msg_id: str, email_id: Optional[str]) -> Dict[str, int]:
+    """Delete all DB artifacts created by this dry-run."""
+    listing_ids = [str(pl.id) for pl in ParsedListing.objects(gmail_message_id=msg_id).only("id")]
+    deleted_listings = ParsedListing.objects(gmail_message_id=msg_id).delete()
+    deleted_email = 0
+    if email_id:
+        deleted_email = FilteredListingEmail.objects(id=email_id).delete()
+
+    deleted_metrics = 0
+    if listing_ids:
+        try:
+            from models import ListingPipelineMetric
+
+            deleted_metrics = ListingPipelineMetric.objects(listing_id__in=listing_ids).delete()
+        except Exception:
+            logger.exception("dry-run metric cleanup failed for %s", msg_id)
+
+    return {
+        "deleted_listings": int(deleted_listings or 0),
+        "deleted_email": int(deleted_email or 0),
+        "deleted_metrics": int(deleted_metrics or 0),
+    }
+
+
 def _dry_run_whatsapp(pl: ParsedListing) -> Dict[str, Any]:
+    """Build would-send WhatsApp payload only — no send, no status park."""
     mode = get_whatsapp_send_mode()
     text = (getattr(pl, "post_content", "") or "").strip()
     img = _first_image_url(getattr(pl, "images", []) or [])
@@ -150,13 +217,9 @@ def _dry_run_whatsapp(pl: ParsedListing) -> Dict[str, Any]:
     if img:
         payload["imageUrl"] = img
 
-    # Mark as sent so nothing else tries to deliver it.
-    if would_send:
-        ParsedListing.objects(id=pl.id).update_one(set__whatsapp_status="sent")
-
     return {
         "would_send": would_send,
-        "sent": would_send,  # dry-run success = payload ready
+        "sent": False,
         "mode": mode,
         "targets": targets,
         "post_content": text,
@@ -167,6 +230,7 @@ def _dry_run_whatsapp(pl: ParsedListing) -> Dict[str, Any]:
 
 
 def _dry_run_wordpress(pl: ParsedListing) -> Dict[str, Any]:
+    """Build would-create WP body only — no WP API call, no status park."""
     wp_status = getattr(pl, "wp_status", None)
     desc = (getattr(pl, "wp_property_description", None) or "").strip()
     if wp_status not in ("des_generated", "keys_generated", "ready_to_process") and not desc:
@@ -178,7 +242,6 @@ def _dry_run_wordpress(pl: ParsedListing) -> Dict[str, Any]:
             "payload": None,
         }
 
-    # Build the same create body live would POST (strip token from response).
     try:
         body = _build_post_body(pl)
     except Exception as e:
@@ -193,14 +256,10 @@ def _dry_run_wordpress(pl: ParsedListing) -> Dict[str, Any]:
     safe_body = {k: v for k, v in body.items() if k != "token"}
     would_send = bool(desc) and bool(safe_body.get("address") or safe_body.get("posttitle"))
 
-    if would_send:
-        # Park away from live sync_wp_for_descriptions queue.
-        ParsedListing.objects(id=pl.id).update_one(set__wp_status="posted")
-
     return {
         "would_send": would_send,
-        "sent": would_send,
-        "wp_status": "posted" if would_send else wp_status,
+        "sent": False,
+        "wp_status": wp_status,
         "payload": safe_body,
         "description": desc,
         "reason": None if would_send else "incomplete_wp_payload",
@@ -208,9 +267,7 @@ def _dry_run_wordpress(pl: ParsedListing) -> Dict[str, Any]:
 
 
 def _dry_run_podio(pl: ParsedListing) -> Dict[str, Any]:
-    """
-    Read-only Podio probe: search property + wholeseller, never write.
-    """
+    """Read-only Podio probe: search property + wholeseller, never write Podio or park status."""
     flag = getattr(pl, "direct_wholeseller", None)
     complete = pl.complete_info or {}
     agent_email = (complete.get("agent_email") or "").strip().lower()
@@ -251,12 +308,6 @@ def _dry_run_podio(pl: ParsedListing) -> Dict[str, Any]:
         property_item_id = search_properties_app_for_listing(token, pl)
         if not property_item_id:
             base["reason"] = "property_not_found"
-            # Keep live podio batch away from this test listing.
-            ParsedListing.objects(id=pl.id).update_one(
-                set__direct_wholeseller="property_not_found",
-                set__FoundInPodioViaSearch="not_found",
-            )
-            base["direct_wholeseller"] = "property_not_found"
             return base
 
         base["property_item_id"] = property_item_id
@@ -268,33 +319,22 @@ def _dry_run_podio(pl: ParsedListing) -> Dict[str, Any]:
             current_email = _get_wholeseller_email_from_item(wh_item) if wh_item else None
             if current_email and current_email.lower() == agent_email:
                 base["would_link"] = True
-                base["linked"] = True
                 base["wholeseller_item_id"] = existing_wh_id
                 base["reason"] = "already_correctly_linked"
-                ParsedListing.objects(id=pl.id).update_one(set__direct_wholeseller="processed")
-                base["direct_wholeseller"] = "processed"
                 return base
 
         target_wh_id = find_wholeseller_item_by_email(token, agent_email)
         if not target_wh_id:
             base["reason"] = "wholeseller_not_found"
-            ParsedListing.objects(id=pl.id).update_one(
-                set__direct_wholeseller="wholeseller_not_found"
-            )
-            base["direct_wholeseller"] = "wholeseller_not_found"
             return base
 
         base["wholeseller_item_id"] = target_wh_id
         base["would_link"] = True
-        base["linked"] = True  # dry-run: would have linked (no Podio write)
         base["reason"] = (
             "would_set_wholeseller_reference"
             if update_flag
             else "would_skip_write_updateFlagForPodio_false"
         )
-        # Park away from live batch without writing to Podio.
-        ParsedListing.objects(id=pl.id).update_one(set__direct_wholeseller="processed")
-        base["direct_wholeseller"] = "processed"
         return base
     except Exception as e:
         base["reason"] = f"podio_probe_failed: {e}"
@@ -330,145 +370,223 @@ def run_test_email_pipeline(
     from_name: str = "Test Sender",
     subject: str = "[test-pipeline] seeded email",
     text: str = "",
-    cleanup: bool = False,
+    cleanup: bool = True,
 ) -> Dict[str, Any]:
     """
-    Full dry-run: ingest HTML → qualify → build publish payloads (no outbound sends).
+    DEV dry-run: ingest HTML → all stages (force-pass gates) → WhatsApp/WP/Podio
+    would-send payloads. Temporary Mongo docs are always deleted unless cleanup=False
+    (debug only). No outbound WhatsApp / WordPress / Podio writes.
     """
     if not (html or "").strip():
         return {"ok": False, "error": "html is required"}
 
     stages: List[Dict[str, Any]] = []
-    fe = _seed_filtered_email(
-        html=html,
-        account_label=account_label,
-        from_email=from_email,
-        from_name=from_name,
-        subject=subject,
-        text=text,
-    )
-    msg_id = fe.gmail_message_id
-    email_id = str(fe.id)
+    fe = None
+    msg_id: Optional[str] = None
+    email_id: Optional[str] = None
+    result: Dict[str, Any] = {"ok": False, "dry_run": True, "dev": True}
 
-    parse_res = _stage("parse", lambda: _parse_seeded_email(fe), stages)
-    if not parse_res or not parse_res.get("ok"):
-        return {
-            "ok": False,
-            "dry_run": True,
-            "email_id": email_id,
-            "gmail_message_id": msg_id,
-            "stages": stages,
-            "error": (parse_res or {}).get("error") or "parse_failed",
-        }
+    try:
+        fe = _seed_filtered_email(
+            html=html,
+            account_label=account_label,
+            from_email=from_email,
+            from_name=from_name,
+            subject=subject,
+            text=text,
+        )
+        msg_id = fe.gmail_message_id
+        email_id = str(fe.id)
 
-    msg_kw = {"gmail_message_id": msg_id}
-
-    _stage(
-        "media_verify",
-        lambda: verify_and_fill_missing_media_for_not_processed(
-            limit=50, max_workers=4, **msg_kw
-        ),
-        stages,
-    )
-
-    _stage(
-        "dedup_30d",
-        lambda: process_not_processed_with_duplicate_rule(limit=50, **msg_kw),
-        stages,
-    )
-    _stage(
-        "ai_rules",
-        lambda: apply_ai_english_rules(
-            str(data_path("ai_listing_rules.yaml")), limit=50, **msg_kw
-        ),
-        stages,
-    )
-    _stage(
-        "post_selection",
-        lambda: select_passed_listings_for_post(
-            limit=50,
-            sort_by="created_at",
-            mark_ready_status=None,
-            skip_webhooks=True,
-            **msg_kw,
-        ),
-        stages,
-    )
-    _stage(
-        "image_curation",
-        lambda: process_listings_ready_for_image_processing(limit=50, **msg_kw),
-        stages,
-    )
-    _stage(
-        "primary_image",
-        lambda: process_primary_image_verification(limit=50, **msg_kw),
-        stages,
-    )
-    _stage(
-        "whatsapp_ad_copy",
-        lambda: make_whatsapp_posts_from_ready_to_post(
-            str(data_path("ad_post_rules.txt")),
-            limit=50,
-            skip_webhook=True,
-            **msg_kw,
-        ),
-        stages,
-    )
-    _stage(
-        "wordpress_keys",
-        lambda: ai_build_wp_payload_for_posted(limit=50, batch_size=10, **msg_kw),
-        stages,
-    )
-    _stage(
-        "wordpress_description",
-        lambda: ai_build_wp_property_description_for_posted(
-            limit=50, batch_size=10, per_item_sleep_s=0.0, **msg_kw
-        ),
-        stages,
-    )
-
-    listings = _listings_for(msg_id)
-    listing_results: List[Dict[str, Any]] = []
-    for pl in listings:
-        # Refresh after WP AI stages
-        pl.reload()
-        wa = _dry_run_whatsapp(pl)
-        pl.reload()
-        wp = _dry_run_wordpress(pl)
-        pl.reload()
-        podio = _dry_run_podio(pl)
-        pl.reload()
-        listing_results.append(
-            {
-                "listing": _listing_report(pl),
-                "whatsapp": wa,
-                "wordpress": wp,
-                "podio": podio,
+        parse_res = _stage("parse", lambda: _parse_seeded_email(fe), stages)
+        if not parse_res or not parse_res.get("ok"):
+            result = {
+                "ok": False,
+                "dry_run": True,
+                "dev": True,
+                "force_pass_gates": True,
+                "email_id": email_id,
+                "gmail_message_id": msg_id,
+                "stages": stages,
+                "error": (parse_res or {}).get("error") or "parse_failed",
             }
+            return result
+
+        msg_kw = {"gmail_message_id": msg_id}
+
+        _stage(
+            "media_verify",
+            lambda: verify_and_fill_missing_media_for_not_processed(
+                limit=50, max_workers=4, **msg_kw
+            ),
+            stages,
+        )
+        _force_advance(
+            msg_id,
+            to_status="verified",
+            from_statuses=["not_processed"],
+            note="media_verify incomplete",
+            stages=stages,
         )
 
-    summary = {
-        "listings_total": len(listing_results),
-        "whatsapp_would_send": sum(1 for r in listing_results if r["whatsapp"].get("would_send")),
-        "wordpress_would_send": sum(1 for r in listing_results if r["wordpress"].get("would_send")),
-        "podio_would_link": sum(1 for r in listing_results if r["podio"].get("would_link")),
-        "final_statuses": [r["listing"]["status"] for r in listing_results],
-    }
+        _stage(
+            "dedup_30d",
+            lambda: process_not_processed_with_duplicate_rule(limit=50, **msg_kw),
+            stages,
+        )
+        _force_advance(
+            msg_id,
+            to_status="processed",
+            from_statuses=["verified", "skipped"],
+            note="bypass dedup_30d for dry-run",
+            stages=stages,
+        )
 
-    if cleanup:
-        ParsedListing.objects(gmail_message_id=msg_id).delete()
-        FilteredListingEmail.objects(id=fe.id).delete()
+        _stage(
+            "ai_rules",
+            lambda: apply_ai_english_rules(
+                str(data_path("ai_listing_rules.yaml")), limit=50, **msg_kw
+            ),
+            stages,
+        )
+        _force_advance(
+            msg_id,
+            to_status="passed",
+            from_statuses=["processed", "skipped"],
+            note="bypass ai_rules skip for dry-run",
+            stages=stages,
+        )
 
-    return {
-        "ok": True,
-        "dry_run": True,
-        "email_id": email_id,
-        "gmail_message_id": msg_id,
-        "account_label": account_label,
-        "from_email": from_email,
-        "subject": subject,
-        "cleanup": cleanup,
-        "stages": stages,
-        "summary": summary,
-        "listings": listing_results,
-    }
+        _stage(
+            "post_selection",
+            lambda: select_passed_listings_for_post(
+                limit=50,
+                sort_by="created_at",
+                mark_ready_status=None,
+                skip_webhooks=True,
+                skip_daily_base_count=True,
+                skip_dropbox=True,
+                **msg_kw,
+            ),
+            stages,
+        )
+        _force_advance(
+            msg_id,
+            to_status="ready_for_image_processing",
+            from_statuses=["passed", "skipped", "skipped_quota"],
+            note="bypass post_selection gate for dry-run",
+            stages=stages,
+        )
+
+        _stage(
+            "image_curation",
+            lambda: process_listings_ready_for_image_processing(limit=50, **msg_kw),
+            stages,
+        )
+        _force_advance(
+            msg_id,
+            to_status="ready_for_primary_image_check",
+            from_statuses=["ready_for_image_processing", "image_curation_failed"],
+            note="bypass image_curation failure for dry-run",
+            stages=stages,
+        )
+
+        _stage(
+            "primary_image",
+            lambda: process_primary_image_verification(limit=50, **msg_kw),
+            stages,
+        )
+        _force_advance(
+            msg_id,
+            to_status="ready_to_post",
+            from_statuses=["ready_for_primary_image_check", "primary_image_failed"],
+            note="bypass primary_image gate for dry-run",
+            stages=stages,
+        )
+
+        _stage(
+            "whatsapp_ad_copy",
+            lambda: make_whatsapp_posts_from_ready_to_post(
+                str(data_path("ad_post_rules.txt")),
+                limit=50,
+                skip_webhook=True,
+                **msg_kw,
+            ),
+            stages,
+        )
+
+        _stage(
+            "wordpress_keys",
+            lambda: ai_build_wp_payload_for_posted(limit=50, batch_size=10, **msg_kw),
+            stages,
+        )
+        _stage(
+            "wordpress_description",
+            lambda: ai_build_wp_property_description_for_posted(
+                limit=50, batch_size=10, per_item_sleep_s=0.0, **msg_kw
+            ),
+            stages,
+        )
+
+        listings = _listings_for(msg_id)
+        listing_results: List[Dict[str, Any]] = []
+        for pl in listings:
+            pl.reload()
+            wa = _dry_run_whatsapp(pl)
+            wp = _dry_run_wordpress(pl)
+            podio = _dry_run_podio(pl)
+            listing_results.append(
+                {
+                    "listing": _listing_report(pl),
+                    "whatsapp": wa,
+                    "wordpress": wp,
+                    "podio": podio,
+                }
+            )
+
+        summary = {
+            "listings_total": len(listing_results),
+            "whatsapp_would_send": sum(
+                1 for r in listing_results if r["whatsapp"].get("would_send")
+            ),
+            "wordpress_would_send": sum(
+                1 for r in listing_results if r["wordpress"].get("would_send")
+            ),
+            "podio_would_link": sum(
+                1 for r in listing_results if r["podio"].get("would_link")
+            ),
+            "final_statuses": [r["listing"]["status"] for r in listing_results],
+        }
+
+        result = {
+            "ok": True,
+            "dry_run": True,
+            "dev": True,
+            "force_pass_gates": True,
+            "email_id": email_id,
+            "gmail_message_id": msg_id,
+            "account_label": account_label,
+            "from_email": from_email,
+            "subject": subject,
+            "cleanup": cleanup,
+            "stages": stages,
+            "summary": summary,
+            "listings": listing_results,
+            "note": (
+                "Dev dry-run: gates force-passed so WhatsApp copy is generated. "
+                "No WhatsApp/WP/Podio outbound. Temporary Mongo docs deleted after run "
+                "unless cleanup=false."
+            ),
+        }
+        return result
+    finally:
+        if cleanup and msg_id:
+            try:
+                cleanup_info = _cleanup_seeded(msg_id, email_id)
+                result["cleanup_result"] = cleanup_info
+                logger.info(
+                    "test_pipeline cleanup msg_id=%s result=%s", msg_id, cleanup_info
+                )
+            except Exception:
+                logger.exception("test_pipeline cleanup failed for %s", msg_id)
+                result["cleanup_result"] = {"ok": False, "error": "cleanup_failed"}
