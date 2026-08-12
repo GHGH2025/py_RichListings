@@ -74,11 +74,13 @@ def _wholeseller_from_listing(pl: ParsedListing) -> tuple[Optional[str], Optiona
 
 
 def _apply_wholeseller(metric: ListingPipelineMetric, pl: ParsedListing) -> None:
+    # Email is the Podio Wholesellers match key; only stamp when present.
     name, email = _wholeseller_from_listing(pl)
+    if not email:
+        return
+    metric.wholeseller_email = email
     if name:
         metric.wholeseller_name = name
-    if email:
-        metric.wholeseller_email = email
 
 
 def _email_received_at(email_doc: FilteredListingEmail) -> Optional[datetime]:
