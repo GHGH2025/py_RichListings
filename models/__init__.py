@@ -625,6 +625,8 @@ class ListingPipelineMetric(Document):
     wp_status = StringField()
     whatsapp_status = StringField()
     direct_wholeseller = StringField()
+    wholeseller_name = StringField()
+    wholeseller_email = StringField()
     skip_reason = StringField()
 
     events = ListField(EmbeddedDocumentField(StageEvent), default=list)
