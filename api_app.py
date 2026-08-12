@@ -139,7 +139,8 @@ class TestEmailPipelinePayload(BaseModel):
     from_name: str = "Test Sender"
     subject: str = "[test-pipeline] seeded email"
     text: str = ""
-    cleanup: bool = False
+    # Default True: wipe temporary Mongo docs after the run (debug: set false to inspect).
+    cleanup: bool = True
 
 
 class CatchupFromVerifiedPayload(BaseModel):
@@ -209,13 +210,17 @@ def run_manny_special_avails(background_tasks: BackgroundTasks):
 @app.post("/tasks/test-email-pipeline")
 def test_email_pipeline(payload: TestEmailPipelinePayload):
     """
-    Dry-run the live listing pipeline for one email HTML body.
+    DEV dry-run for one email HTML body.
 
     - Seeds a FilteredListingEmail with gmail_message_id prefix `test_`
-    - Runs parse → media verify → dedup → AI rules → post selection →
-      image curation → WhatsApp ad copy → WordPress AI (no cron)
-    - Does NOT send WhatsApp, create WordPress posts, write Podio, or fire webhooks
-    - Returns per-listing would-send payloads for WhatsApp / WordPress / Podio
+    - Runs parse → media → dedup → AI rules → post selection → images →
+      WhatsApp ad copy → WordPress AI
+    - Force-passes gate skips (dedup/rules/selection/image fails) so WhatsApp
+      post_content is always generated when parse succeeds
+    - Does NOT send WhatsApp, create WordPress posts, write Podio, bump daily
+      caps, upload Dropbox, or fire webhooks
+    - Deletes temporary Mongo docs afterward (cleanup=true by default)
+    - Returns listings[].whatsapp.post_content / payload.text
     """
     if run_test_email_pipeline is None:
         raise HTTPException(

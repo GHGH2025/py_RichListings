@@ -136,6 +136,8 @@ def _find_recent_prior(addr: str, city: Optional[str], zip_: Optional[str],
             & Q(status__in=HISTORICAL_STATUSES)
             & Q(skipped_or_posted_at__gte=since)
             & Q(id__ne=exclude_id)
+            # Dev/test dry-run seeds use gmail_message_id prefix test_ — never treat as live history.
+            & Q(gmail_message_id__not__startswith="test_")
         )
         .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status")
         .order_by("-skipped_or_posted_at")
@@ -229,6 +231,7 @@ def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
         Q(status__in=HISTORICAL_STATUSES)
         & Q(skipped_or_posted_at__gte=since)
         & Q(id__ne=pl.id)
+        & Q(gmail_message_id__not__startswith="test_")
     )
 
     # 1) exact place_id

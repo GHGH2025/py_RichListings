@@ -375,12 +375,19 @@ def select_passed_listings_for_post(
     mark_ready_status: Optional[str] = None,  # e.g., "image_processed" or None to leave "passed"
     gmail_message_id: Optional[str] = None,
     skip_webhooks: bool = False,
+    skip_daily_base_count: bool = False,
+    skip_dropbox: bool = False,
 ) -> Dict[str, any]:
     """
     Pull 'passed' listings, filter to allowed regions, enforce 35% cap for rest_of_florida,
     skip overflow with reason, and (optionally) advance the kept ones to next status.
 
     Returns summary dict with IDs of kept and skipped.
+
+    Dry-run knobs:
+      - skip_webhooks: no skipped-listing webhooks
+      - skip_daily_base_count: do not bump DailyBaseCount (read-only cap math)
+      - skip_dropbox: do not upload gallery folders to Dropbox
     """
     # init_db()
 
@@ -482,8 +489,18 @@ def select_passed_listings_for_post(
     # 3) enforce 35% cap for rest_of_florida relative to NON-REST
     base_count = len(non_rest)  # current batch base count
 
-    # Use total daily base count (previous + this batch)
-    final_base_count = _update_and_get_daily_base_count(base_count, now)
+    # Use total daily base count (previous + this batch). Dry-run reads only — no DailyBaseCount write.
+    if skip_daily_base_count:
+        day_start = datetime(now.year, now.month, now.day)
+        next_day_start = day_start + timedelta(days=1)
+        daily_doc = DailyBaseCount.objects(
+            current_date__gte=day_start,
+            current_date__lt=next_day_start,
+        ).first()
+        existing = (daily_doc.daily_base_count or 0) if daily_doc else 0
+        final_base_count = existing + max(base_count, 0)
+    else:
+        final_base_count = _update_and_get_daily_base_count(base_count, now)
 
     # Use final_base_count instead of base_count in the cap formula
     rest_cap = math.floor(0.35 * final_base_count)  # allowed count from rest_of_florida for today-so-far
@@ -542,7 +559,7 @@ def select_passed_listings_for_post(
             already = (pl.other_images_dropbox_link or "").strip()
             print("src", src)
             print("already", already)
-            if src and not already:
+            if (not skip_dropbox) and src and not already:
                 # pick address from top-level field, or from the complete_info blob, or fallback to id
                 addr = (pl.address or (pl.complete_info or {}).get("address") or str(pl.id)).strip()
                 folder_slug = slugify_for_folder(addr, fallback=str(pl.id))
