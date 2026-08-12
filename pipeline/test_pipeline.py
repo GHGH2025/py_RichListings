@@ -6,8 +6,9 @@ qualification stages as live (scoped to that message id), force-advances past
 gate skips so WhatsApp ad copy is always generated, builds would-send payloads,
 then deletes all seeded DB docs.
 
+Does run live Dropbox gallery upload (same handle_Link path as post_selection).
 Never sends WhatsApp, creates WordPress posts, writes Podio, bumps daily caps,
-uploads Dropbox galleries, or fires webhooks.
+or fires webhooks.
 """
 from __future__ import annotations
 
@@ -43,6 +44,8 @@ from integrations.wordpress.ai_property_description import (
 from integrations.wordpress.sync_poster import _build_post_body
 from config.runtime import get_whatsapp_send_mode, get_group_jids_for_account
 from core.paths import data_path
+from media.dropbox_upload import handle_Link
+from media.slugify import slugify_for_folder
 from whatsapp.sender import TEAM_NUMBERS, _first_image_url
 
 logger = logging.getLogger(__name__)
@@ -342,6 +345,77 @@ def _dry_run_podio(pl: ParsedListing) -> Dict[str, Any]:
         return base
 
 
+def _ensure_dropbox_links(msg_id: str) -> Dict[str, Any]:
+    """
+    Same Dropbox gallery upload as live post_selection (handle_Link → shared folder link).
+    Runs for every listing on this message that still needs a link, including ones
+    that were force-advanced past post_selection without going through the kept path.
+    """
+    uploaded = 0
+    already_had = 0
+    skipped_no_source = 0
+    errors: List[Dict[str, str]] = []
+    results: List[Dict[str, Any]] = []
+
+    for pl in ParsedListing.objects(gmail_message_id=msg_id).order_by("+list_index"):
+        src = (getattr(pl, "other_images_source", None) or "").strip()
+        already = (getattr(pl, "other_images_dropbox_link", None) or "").strip()
+        entry: Dict[str, Any] = {
+            "id": str(pl.id),
+            "other_images_source": src or None,
+            "other_images_dropbox_link": already or None,
+        }
+
+        if already:
+            already_had += 1
+            entry["status"] = "already_had_link"
+            results.append(entry)
+            continue
+        if not src:
+            skipped_no_source += 1
+            entry["status"] = "no_source"
+            results.append(entry)
+            continue
+
+        try:
+            addr = (
+                pl.address
+                or (pl.complete_info or {}).get("address")
+                or str(pl.id)
+            ).strip()
+            folder_slug = slugify_for_folder(addr, fallback=str(pl.id))
+            shared_links = handle_Link([src], folder=folder_slug)
+            link = (shared_links[0] if shared_links else None) or None
+            if link:
+                ParsedListing.objects(id=pl.id).update_one(
+                    set__other_images_dropbox_link=link,
+                    set__updated_at=datetime.utcnow(),
+                )
+                uploaded += 1
+                entry["other_images_dropbox_link"] = link
+                entry["folder_slug"] = folder_slug
+                entry["status"] = "uploaded"
+            else:
+                entry["status"] = "no_shared_link_returned"
+                entry["folder_slug"] = folder_slug
+                errors.append({"id": str(pl.id), "error": "no_shared_link_returned"})
+        except Exception as e:
+            logger.exception("dry-run dropbox upload failed for %s", pl.id)
+            entry["status"] = "error"
+            entry["error"] = str(e)
+            errors.append({"id": str(pl.id), "error": str(e)})
+
+        results.append(entry)
+
+    return {
+        "uploaded": uploaded,
+        "already_had": already_had,
+        "skipped_no_source": skipped_no_source,
+        "errors": errors,
+        "results": results,
+    }
+
+
 def _listing_report(pl: ParsedListing) -> Dict[str, Any]:
     return {
         "id": str(pl.id),
@@ -358,6 +432,8 @@ def _listing_report(pl: ParsedListing) -> Dict[str, Any]:
         "wp_status": getattr(pl, "wp_status", None),
         "direct_wholeseller": getattr(pl, "direct_wholeseller", None),
         "post_content": getattr(pl, "post_content", None),
+        "other_images_source": getattr(pl, "other_images_source", None),
+        "other_images_dropbox_link": getattr(pl, "other_images_dropbox_link", None),
         "images": list(getattr(pl, "images", None) or [])[:5],
     }
 
@@ -465,7 +541,8 @@ def run_test_email_pipeline(
                 mark_ready_status=None,
                 skip_webhooks=True,
                 skip_daily_base_count=True,
-                skip_dropbox=True,
+                # Live Dropbox path inside post_selection for kept listings.
+                skip_dropbox=False,
                 **msg_kw,
             ),
             stages,
@@ -477,6 +554,8 @@ def run_test_email_pipeline(
             note="bypass post_selection gate for dry-run",
             stages=stages,
         )
+        # Explicit Dropbox stage so force-advanced listings still get live gallery links.
+        _stage("dropbox_gallery", lambda: _ensure_dropbox_links(msg_id), stages)
 
         _stage(
             "image_curation",
@@ -555,6 +634,11 @@ def run_test_email_pipeline(
             "podio_would_link": sum(
                 1 for r in listing_results if r["podio"].get("would_link")
             ),
+            "dropbox_links": sum(
+                1
+                for r in listing_results
+                if (r["listing"].get("other_images_dropbox_link") or "").strip()
+            ),
             "final_statuses": [r["listing"]["status"] for r in listing_results],
         }
 
@@ -574,8 +658,8 @@ def run_test_email_pipeline(
             "listings": listing_results,
             "note": (
                 "Dev dry-run: gates force-passed so WhatsApp copy is generated. "
-                "No WhatsApp/WP/Podio outbound. Temporary Mongo docs deleted after run "
-                "unless cleanup=false."
+                "Dropbox gallery upload runs like live. No WhatsApp/WP/Podio outbound. "
+                "Temporary Mongo docs deleted after run unless cleanup=false."
             ),
         }
         return result
