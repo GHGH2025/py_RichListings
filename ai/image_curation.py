@@ -175,6 +175,8 @@ def classify_primary_image(url: str, model: Optional[str] = None, listing_id: Op
     """
     from observability.openai_usage import tracked_chat_create
 
+    model = (model or OPENAI_MODEL_VISION or "").strip() or "gpt-5.6-luna"
+
     content = [
         {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
         {"type": "text", "text": f"PRIMARY_CHECK_URL: {url}"},
@@ -395,8 +397,13 @@ def process_primary_image_verification(
     total = checked = passed = failed = no_image = 0
     errors: List[str] = []
 
-    primary_model = model
-    secondary_model = "gpt-5.6-luna"
+    # Live cron passes model explicitly; dry-run/catchup may omit it.
+    primary_model = (model or OPENAI_MODEL_VISION or "").strip() or "gpt-5.6-luna"
+    secondary_model = (
+        os.getenv("OPENAI_PRIMARY_IMAGE_SECONDARY_MODEL", "").strip()
+        or OPENAI_MODEL_VISION
+        or "gpt-5.6-luna"
+    )
 
     for pl in qs:
         total += 1
