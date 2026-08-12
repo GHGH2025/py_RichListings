@@ -218,9 +218,12 @@ def test_email_pipeline(payload: TestEmailPipelinePayload):
     - Force-passes gate skips (dedup/rules/selection/image fails) so WhatsApp
       post_content is always generated when parse succeeds
     - Does NOT send WhatsApp, create WordPress posts, write Podio, bump daily
-      caps, upload Dropbox, or fire webhooks
+      caps, or fire webhooks
+    - DOES run Dropbox gallery upload (same handle_Link path as live), including
+      for listings force-advanced past post_selection
     - Deletes temporary Mongo docs afterward (cleanup=true by default)
-    - Returns listings[].whatsapp.post_content / payload.text
+    - Returns listings[].whatsapp.post_content and
+      listings[].listing.other_images_dropbox_link
     """
     if run_test_email_pipeline is None:
         raise HTTPException(
