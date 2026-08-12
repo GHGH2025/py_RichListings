@@ -63,6 +63,24 @@ def _compose_full_address(
     return ", ".join(parts)
 
 
+def _wholeseller_from_listing(pl: ParsedListing) -> tuple[Optional[str], Optional[str]]:
+    """Prefer complete_info agent_* stamped by direct-wholesaler map (or AI extract)."""
+    info = getattr(pl, "complete_info", None) or {}
+    if not isinstance(info, dict):
+        info = {}
+    name = (info.get("agent_name") or "").strip() or None
+    email = (info.get("agent_email") or "").strip() or None
+    return name, email
+
+
+def _apply_wholeseller(metric: ListingPipelineMetric, pl: ParsedListing) -> None:
+    name, email = _wholeseller_from_listing(pl)
+    if name:
+        metric.wholeseller_name = name
+    if email:
+        metric.wholeseller_email = email
+
+
 def _email_received_at(email_doc: FilteredListingEmail) -> Optional[datetime]:
     internal = getattr(email_doc, "internal_date", None)
     if internal and getattr(internal, "ts_ms", None):
@@ -188,6 +206,7 @@ def record_listing_created(listing_id: str) -> None:
         if not metric.created_at:
             metric.created_at = now
 
+        _apply_wholeseller(metric, pl)
         _append_event(metric, "parsed", status=pl.status, at=now)
         _recompute_durations(metric, now)
         metric.save()
@@ -273,6 +292,8 @@ def record_listing_stage(
             metric.skip_reason = skip_reason
         elif detail and stage.endswith("skipped"):
             metric.skip_reason = detail
+
+        _apply_wholeseller(metric, pl)
 
         event_detail = detail
         if stage == "image_curation" and dropbox_link and not event_detail:
