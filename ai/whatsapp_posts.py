@@ -12,6 +12,11 @@ from pipeline.address_utils import resolve_street_address
 import time, random
 import requests 
 from whatsapp.sender import send_listing_to_whatsapp
+from whatsapp.link_guard import (
+    canonical_dropbox_link,
+    redact_non_dropbox_urls,
+    sanitize_whatsapp_post_text,
+)
 
 load_dotenv()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -96,6 +101,7 @@ SYSTEM_PROMPT = """You create short wholesale property posts for WHATSAPP.
 Follow the human-written RULES exactly, but interpret **BOLD** as WhatsApp bold using *asterisks* (e.g., *text*).
 Use ONLY the values from the LISTING object provided. Do NOT invent data.
 Never include any item the rules prohibit.
+ABSOLUTE: the only URL allowed in the post is other_images_dropbox_link. Never paste any other link.
 Your output MUST be valid JSON of the form: {"post_content": "<the final WhatsApp message>"} with no extra keys."""
 
 USER_TMPL = """RULES (verbatim text file):
@@ -110,6 +116,7 @@ TASK:
   - Bold address and price using *asterisks* (WhatsApp style).
   - Short, sales-friendly lines/bullets.
 - Do NOT include any disallowed items from the rules (strip them if present in the source).
+- The only allowed URL is other_images_dropbox_link. If it is missing, omit the pictures line. Never use any other URL.
 - Use US dollar formatting for price (commas, no cents).
 - Return ONLY JSON: {{"post_content": "..."}}
 """
@@ -120,6 +127,9 @@ def _listing_payload(pl: ParsedListing) -> Dict[str, Any]:
     ci = dict(pl.complete_info or {})
     # Internal buyer-matching flags — never include in WhatsApp post text
     ci.pop("special_preferences_detected", None)
+    # Never give the model original gallery / tracking / listing URLs
+    ci = redact_non_dropbox_urls(ci)
+    dropbox_link = canonical_dropbox_link(getattr(pl, "other_images_dropbox_link", None))
 
     d: Dict[str, Any] = {
         "account_label": pl.account_label,
@@ -131,9 +141,7 @@ def _listing_payload(pl: ParsedListing) -> Dict[str, Any]:
         "state": pl.state,
         "zip": pl.zip,
         "price": pl.price,
-        "images": list(pl.images or []),
-        "other_images_source": pl.other_images_source,
-        "other_images_dropbox_link": pl.other_images_dropbox_link,
+        "other_images_dropbox_link": dropbox_link,
         "rules_ai_rule_id": pl.rules_ai_rule_id,
         "rules_ai_version": pl.rules_ai_version,
         "rules_ai_reason": pl.rules_ai_reason,
@@ -174,7 +182,8 @@ def _compose_post(rules_text: str, listing_obj: Dict[str, Any], listing_id: Opti
     post = (data.get("post_content") or "").strip()
     if not post:
         raise ValueError("empty post_content")
-    return post
+    dropbox_link = canonical_dropbox_link(listing_obj.get("other_images_dropbox_link"))
+    return sanitize_whatsapp_post_text(post, dropbox_link)
 
 def make_whatsapp_posts_from_ready_to_post(
     rules_path: str,

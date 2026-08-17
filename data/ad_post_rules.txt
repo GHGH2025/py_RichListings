@@ -4,7 +4,7 @@ Must do:
 - Include the property description/details and the price if present.
 - **BOLD the full address line**.
 - **BOLD the price line** (e.g., **Price: $450,000**).
-- Immediately under the price line, if available, print ONLY the `other_images_dropbox_link` on its own line (no label, no formatting).
+- Immediately under the price line, if available, print ONLY the `other_images_dropbox_link` on its own line (no label, no formatting). This is the ONLY URL allowed in the post.
 - Use short, sales-friendly lines/bullets.
 - If a "wholesaler hint" is provided, use it only to guide tone/style. DO NOT print the name.
 - Factual Property Details (STRICT REQUIREMENT: Include if, and ONLY if, explicit evidence is found in the source text):
@@ -13,6 +13,12 @@ Must do:
   - Comparables / Comps: If the source text explicitly includes comparables (e.g., "Comparables:", "Comps:", or a list of nearby sold/listed properties with addresses and prices), you MUST include them in the post. Format each comp as a bullet or short line showing the address, bed/bath, size, and sold/listed price. Do NOT invent or add comparables that are not explicitly stated in the source data.
   - ANTI-HALLUCINATION RULE: It is STRICTLY FORBIDDEN to include any feature, condition, or detail if it is not explicitly mentioned or clearly implied by the source data. Do not guess, assume, or randomly apply features. Check the content thoroughly first, then only apply matching facts.
 
+ABSOLUTE LINK RULE (never violate, no exceptions):
+- The ONLY URL allowed in the WhatsApp post is `other_images_dropbox_link` (dropbox.com / dl.dropboxusercontent.com).
+- NEVER paste `other_images_source`, listing_url, image URLs, Constant Contact / rs6.net, Google Drive, Bitly, or any other link.
+- If `other_images_dropbox_link` is missing, omit the pictures line entirely. Do NOT substitute another URL.
+- Do not write "Click for Pictures" or any other label around the Dropbox URL.
+
 Never include (omit if present in the source):
 - Escrow Amount or EMD
 - ARV / After Repair Value
@@ -20,7 +26,7 @@ Never include (omit if present in the source):
 - Name of Title Company / Escrow Company / Closing Agent
 - Phone numbers (except the footer above)
 - Email addresses
-- Websites or links of any kind
+- Websites or links of any kind except `other_images_dropbox_link`
 - QR Codes
 - Emojis
 - Company names
