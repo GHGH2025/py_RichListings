@@ -12,6 +12,7 @@ from mongoengine.queryset.visitor import Q
 
 from models import ParsedListing  # your MongoEngine model
 from config.runtime import get_whatsapp_send_mode, get_group_jids_for_account
+from whatsapp.link_guard import sanitize_whatsapp_post_text
 
 TEAM_NUMBERS = [n.strip() for n in os.getenv("TEAM_WHATSAPP_NUMBERS","").split(",") if n.strip()]
 
@@ -73,6 +74,22 @@ def _headers() -> Dict[str, Any]:
         h["Authorization"] = f"Bearer {GATEWAY_AUTH_KEY}"
     return h
 
+def _post_text_for_send(pl: ParsedListing) -> str:
+    """Last-line defense: WhatsApp body may contain only our Dropbox URL."""
+    raw = (getattr(pl, "post_content", "") or "").strip()
+    dropbox = getattr(pl, "other_images_dropbox_link", None)
+    cleaned = sanitize_whatsapp_post_text(raw, dropbox)
+    if cleaned != raw:
+        logging.warning(
+            "stripped non-dropbox URL(s) from WhatsApp post id=%s",
+            getattr(pl, "id", None),
+        )
+        try:
+            ParsedListing.objects(id=pl.id).update_one(set__post_content=cleaned)
+        except Exception:
+            logging.exception("failed to persist sanitized post_content id=%s", pl.id)
+    return cleaned
+
 def _parse_sent(resp: requests.Response) -> Tuple[bool, str]:
     """
     Returns (is_sent, debug_text).
@@ -103,7 +120,7 @@ def _send_dm(pl: ParsedListing, to_numbers: List[str]) -> bool:
         logging.info("DM mode: no recipients; skipping send")
         return False
 
-    text = (getattr(pl, "post_content", "") or "").strip()
+    text = _post_text_for_send(pl)
     if not text:
         logging.warning("DM mode: empty post_content; skipping")
         return False
@@ -149,7 +166,7 @@ def _send_group(pl: ParsedListing) -> bool:
         )
         return False
 
-    text = (getattr(pl, "post_content", "") or "").strip()
+    text = _post_text_for_send(pl)
     if not text:
         logging.warning("Group mode: empty post_content; skipping")
         return False
@@ -217,7 +234,8 @@ def process_whatsapp_queue(
         q = q & Q(gmail_message_id__not__startswith="test_")
 
     qs = ParsedListing.objects(q).only(
-        "id", "post_content", "images", "whatsapp_status", "account_label"
+        "id", "post_content", "images", "whatsapp_status", "account_label",
+        "other_images_dropbox_link",
     ).limit(limit)
 
     total = sent = failed = 0
