@@ -17,6 +17,7 @@ from buyers.special_preferences import (
     build_extraction_prompt_block,
     finalize_extracted_special_preferences,
 )
+from ingestion.whatsapp import first_http_url, is_jg_equity_group
 
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -408,6 +409,25 @@ def _compose_raw_for_google(addr: str, city: str, state: str, zip_: str) -> str:
     parts = [p.strip() for p in [addr, city, state, zip_] if p and str(p).strip()]
     return ", ".join(parts + ["USA"]) if parts else ""
 
+def _jg_equity_gallery_fallback(source_email_doc) -> Optional[str]:
+    """
+    JG Equity WA deals are a Constant Contact link. If AI did not find a
+    gallery URL, use that page URL so post-selection can scrape images
+    after the listing passes address / dedup checks.
+    """
+    if not source_email_doc:
+        return None
+    if getattr(source_email_doc, "account_label", "") != "whatsapp":
+        return None
+    subject = (getattr(source_email_doc, "subject", None) or "").strip()
+    group = subject[3:].strip() if subject.upper().startswith("WA ") else subject
+    if not (is_jg_equity_group(group) or is_jg_equity_group(subject)):
+        return None
+    bodies = getattr(source_email_doc, "bodies", None)
+    text = (getattr(bodies, "text", None) or "") if bodies else ""
+    return first_http_url(text) or None
+
+
 def _sender_email_safe(source_email_doc) -> str:
     """
     Safely get the sender email from FilteredListingEmail.
@@ -584,7 +604,11 @@ def upsert_parsed_listings_from_html(
                 "set__zip": zip_,
                 "set__price": price_val,
                 "set__images": _clean_images(lst.get("images")),
-                "set__other_images_source": (lst.get("other_images_source") or "").strip() or None,
+                "set__other_images_source": (
+                    (lst.get("other_images_source") or "").strip()
+                    or _jg_equity_gallery_fallback(source_email_doc)
+                    or None
+                ),
                 "set__complete_info": lst,
                 "set__extracted_special_preferences": extracted_special_prefs,
                 "set_on_insert__status": status_for_insert,  # brand-new only
