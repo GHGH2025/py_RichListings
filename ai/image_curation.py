@@ -398,12 +398,7 @@ def process_primary_image_verification(
     errors: List[str] = []
 
     # Live cron passes model explicitly; dry-run/catchup may omit it.
-    primary_model = (model or OPENAI_MODEL_VISION or "").strip() or "gpt-5.6-luna"
-    secondary_model = (
-        os.getenv("OPENAI_PRIMARY_IMAGE_SECONDARY_MODEL", "").strip()
-        or OPENAI_MODEL_VISION
-        or "gpt-5.6-luna"
-    )
+    check_model = (model or OPENAI_MODEL_VISION or "").strip() or "gpt-5.6-luna"
 
     for pl in qs:
         total += 1
@@ -429,37 +424,18 @@ def process_primary_image_verification(
         primary_url = images[0]
         checked += 1
 
-
         try:
-            # 1st pass: main model (gpt-5.6-luna)
-            result_1 = classify_primary_image(primary_url, model=primary_model, listing_id=str(pl.id))
-            keep_1 = bool(result_1.get("keep", False))
-            reason_1 = (result_1.get("reason") or "").strip()
+            result = classify_primary_image(primary_url, model=check_model, listing_id=str(pl.id))
+            keep = bool(result.get("keep", False))
+            reason = (result.get("reason") or "").strip()
 
-            # 2nd pass: gpt-5.6-luna
-            result_2 = classify_primary_image(primary_url, model=secondary_model, listing_id=str(pl.id))
-            keep_2 = bool(result_2.get("keep", False))
-            reason_2 = (result_2.get("reason") or "").strip()
-
-            both_keep = keep_1 and keep_2
-
-            if both_keep:
-                # Accept: move to ready_to_post
+            if keep:
                 pl.update(
                     set__primary_image_check={
                         "url": primary_url,
                         "keep": True,
-                        "reason": "both_models_keep_true",
-                        "model_primary": {
-                            "name": primary_model,
-                            "keep": keep_1,
-                            "reason": reason_1
-                        },
-                        "model_secondary": {
-                            "name": secondary_model,
-                            "keep": keep_2,
-                            "reason": reason_2
-                        },
+                        "reason": reason,
+                        "model": check_model,
                     },
                     set__status=PRIMARY_PASS_STATUS,
                     set__updated_at=now,
@@ -471,22 +447,12 @@ def process_primary_image_verification(
                     pass
                 passed += 1
             else:
-                # Reject: at least one model said keep=False (or both)
                 pl.update(
                     set__primary_image_check={
                         "url": primary_url,
                         "keep": False,
-                        "reason": "one_or_both_models_rejected",
-                        "model_primary": {
-                            "name": primary_model,
-                            "keep": keep_1,
-                            "reason": reason_1
-                        },
-                        "model_secondary": {
-                            "name": secondary_model,
-                            "keep": keep_2,
-                            "reason": reason_2
-                        },
+                        "reason": reason or "primary_image_rejected",
+                        "model": check_model,
                     },
                     set__status=PRIMARY_FAIL_STATUS,
                     set__updated_at=now,

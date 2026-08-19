@@ -43,9 +43,9 @@ This document lists every **active** OpenAI call in the RichListings Python work
 |---|----------|------|---------------|---------|---------|
 | 6 | `classify_single_image` | `image_curation.py` | `OPENAI_VISION_MODEL` → `gpt-4.1-mini` | Per image during curation | Vision: keep/skip non-property images (logos, flyers, etc.) |
 | 7 | `order_property_images` | `image_curation.py` | `OPENAI_VISION_MODEL` → `gpt-4.1-mini` | Once per listing after filtering | Vision: rank kept photos; pick best cover image |
-| 8 | `classify_primary_image` | `image_curation.py` | Caller-provided (scheduler uses `gpt-5.1`) + `gpt-5-mini` | Scheduled: `process_primary_image_verification` (every 2 min, limit 5) | Stricter dual-model primary-image gate before posting |
+| 8 | `classify_primary_image` | `image_curation.py` | Caller-provided (scheduler uses `gpt-5.6-luna`) | Scheduled: `process_primary_image_verification` (every 2 min, limit 5) | Stricter single-model primary-image gate before posting |
 
-**Volume note:** For a listing with *N* images, curation typically makes **N + 1** AI calls (N classifications + 1 ordering). Primary verification adds **2** more calls per listing (main model + `gpt-5-mini`).
+**Volume note:** For a listing with *N* images, curation typically makes **N + 1** AI calls (N classifications + 1 ordering). Primary verification adds **1** more call per listing.
 
 ### 4. Content generation (WhatsApp & WordPress)
 
@@ -98,7 +98,7 @@ From `server_runner.py`:
 | Every 1 min | Email → listing parse | `extract_listings_from_email_html`, `ai_address_search_keys` |
 | Every 2 min | Media verify | `ai_verify_media_for_listing` |
 | Every 2 min | Image curation | `classify_single_image`, `order_property_images` |
-| Every 2 min | Primary image check | `classify_primary_image` × 2 models |
+| Every 2 min | Primary image check | `classify_primary_image` |
 | Every 2 min | WhatsApp ad gen | `_compose_post` |
 | Every 2 min | WP price/media updates | `ai_verify_same_listing` |
 | Every 3 min | WP taxonomy | `ai_build_wp_payload_catalog_first` |

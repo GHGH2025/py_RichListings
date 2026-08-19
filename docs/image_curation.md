@@ -12,7 +12,7 @@ Wholesaler emails often include logos, flyers, agent headshots, maps, and other 
 
 1. **Filters** invalid images using OpenAI vision (per-image classification)
 2. **Orders** kept images with the best cover photo first
-3. **Verifies** the primary image (`images[0]`) with a dual-model consensus check
+3. **Verifies** the primary image (`images[0]`) with a stricter vision check
 
 This ensures WhatsApp and WordPress receive clean, property-relevant photos.
 
@@ -27,7 +27,7 @@ This ensures WhatsApp and WordPress receive clean, property-relevant photos.
 
 Both jobs are scheduled from `server_runner.py` every **2 minutes**, processing up to **5** listings each.
 
-**Vision model:** `OPENAI_VISION_MODEL` env var (default `gpt-4.1-mini`) for curation; primary check uses `gpt-5.1` + `gpt-5-mini`.
+**Vision model:** `OPENAI_VISION_MODEL` env var (default `gpt-5.6-luna`) for curation and the primary check. The scheduler passes `gpt-5.6-luna` explicitly.
 
 ---
 
@@ -100,7 +100,7 @@ If the curation job throws an exception:
 
 ## Stage 2 — Primary image verification
 
-A stricter **dual-model** check on `images[0]` before posting.
+A stricter **single-model** check on `images[0]` before posting.
 
 ### Flow
 
@@ -110,15 +110,13 @@ ready_for_primary_image_check
     ├─ no images?
     │     → ready_to_post (edge case — same as empty curation path)
     │
-    └─ classify images[0] with TWO models:
-          gpt-5.1 (primary)
-          gpt-5-mini (secondary)
+    └─ classify images[0] once (OPENAI_VISION_MODEL / scheduler model)
           │
-          ├─ BOTH keep=true  → ready_to_post
-          └─ either rejects   → primary_image_failed
+          ├─ keep=true  → ready_to_post
+          └─ keep=false → primary_image_failed
 ```
 
-Both models must agree the primary image is a genuine property photo. This reduces false positives where a logo or flyer slipped through curation.
+This is a second look at the cover photo after curation, so logos or flyers that slipped through are less likely to post.
 
 ### Audit field
 
@@ -128,13 +126,10 @@ Full results are stored in `primary_image_check`:
 {
   "url": "https://...",
   "keep": true,
-  "reason": "both_models_keep_true",
-  "model_primary": { "name": "gpt-5.1", "keep": true, "reason": "property exterior" },
-  "model_secondary": { "name": "gpt-5-mini", "keep": true, "reason": "property exterior" }
+  "reason": "property exterior",
+  "model": "gpt-5.6-luna"
 }
 ```
-
-On failure, `reason` is `one_or_both_models_rejected` with per-model details.
 
 ---
 
@@ -145,7 +140,7 @@ On failure, `reason` is `one_or_both_models_rejected` with per-model details.
 | `ready_for_image_processing` | Waiting for curation job |
 | `ready_for_primary_image_check` | Curation done; waiting for primary verification |
 | `ready_to_post` | Passed all image checks (or had no images) |
-| `primary_image_failed` | Primary photo rejected by one or both models |
+| `primary_image_failed` | Primary photo rejected by the vision check |
 | `image_curation_failed` | Curation job crashed |
 
 ---
@@ -164,7 +159,7 @@ On failure, `reason` is `one_or_both_models_rejected` with per-model details.
 
 | Field | Action |
 |-------|--------|
-| `primary_image_check` | Full dual-model audit object |
+| `primary_image_check` | Audit object (`url`, `keep`, `reason`, `model`) |
 | `status` | → `ready_to_post` or `primary_image_failed` |
 
 ---

@@ -9,7 +9,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, List
 
 import emoji
+import requests
 
+from ingestion.email_extract import _strip_for_ai
 from models import (
     Bodies,
     FilteredListingEmail,
@@ -22,6 +24,21 @@ from models.whatsapp_tracked_messages import WhatsappTrackedMessage
 logger = logging.getLogger(__name__)
 
 ACCOUNT_LABEL = "whatsapp"
+
+# Link-only deals: fetch the page HTML, then the normal pipeline parses it.
+# Image scrape / Dropbox happens later, and only if the listing is not a duplicate.
+JG_EQUITY_GROUP_NAME = "jg equity direct deals"
+
+_HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
+DEAL_HOST_NEEDLES = ("conta.cc", "constantcontact.com", "rs6.net", "ccsend.com")
+_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
 # Arrows / bullets used in WA deal blasts that are not always in emoji data (e.g. →).
 _DECORATIVE_ARROWS_RE = re.compile(
@@ -93,6 +110,58 @@ def _media_urls(msg: WhatsappTrackedMessage) -> List[str]:
     return urls
 
 
+def is_jg_equity_group(name: str) -> bool:
+    return JG_EQUITY_GROUP_NAME in (name or "").strip().lower()
+
+
+def http_urls(text: str) -> List[str]:
+    seen = set()
+    urls: List[str] = []
+    for match in _HTTP_URL_RE.finditer(text or ""):
+        url = match.group(0).rstrip(").,]>\"'")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
+def first_http_url(text: str) -> str:
+    urls = http_urls(text)
+    return urls[0] if urls else ""
+
+
+def deal_page_urls(text: str) -> List[str]:
+    """Prefer conta.cc / Constant Contact links; otherwise all http(s) URLs."""
+    urls = http_urls(text)
+    deal = [u for u in urls if any(n in u.lower() for n in DEAL_HOST_NEEDLES)]
+    return deal or urls
+
+
+def fetch_deal_page_html(url: str) -> str:
+    try:
+        response = requests.get(
+            url,
+            headers=_FETCH_HEADERS,
+            timeout=25,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        body = (response.text or "").strip()
+        if not body:
+            return ""
+        ctype = (response.headers.get("Content-Type") or "").lower()
+        looks_html = (
+            "html" in ctype
+            or "text/" in ctype
+            or body[:200].lower().lstrip().startswith(("<!", "<html", "<body"))
+        )
+        return body if looks_html else ""
+    except Exception:
+        logger.exception("jg equity page fetch failed url=%s", url)
+        return ""
+
+
 def _wrap_body(text: str, media_urls: List[str] | None = None) -> Bodies:
     plain = (text or "").strip()
     urls = media_urls or []
@@ -119,6 +188,40 @@ def _wrap_body(text: str, media_urls: List[str] | None = None) -> Bodies:
     return Bodies(text=plain_out, html_full=wrapped, html_ai=wrapped)
 
 
+def _wrap_body_from_page(
+    text: str,
+    page_html: str,
+    media_urls: List[str] | None = None,
+    page_url: str = "",
+) -> Bodies:
+    plain_parts = []
+    if page_url:
+        plain_parts.append(page_url)
+    cleaned = (text or "").strip()
+    if cleaned and cleaned not in plain_parts:
+        plain_parts.append(cleaned)
+    for u in media_urls or []:
+        if u not in plain_parts:
+            plain_parts.append(u)
+
+    prefix = ""
+    if page_url:
+        safe_url = html.escape(page_url, quote=True)
+        prefix = f'<p><a href="{safe_url}">More Pictures</a></p>\n'
+    html_full = f"{prefix}{page_html}"
+    extra_imgs = "".join(
+        f'<img src="{html.escape(u, quote=True)}" />\n' for u in (media_urls or [])
+    )
+    if extra_imgs:
+        html_full = f"{html_full}\n{extra_imgs}"
+
+    return Bodies(
+        text="\n".join(plain_parts),
+        html_full=html_full,
+        html_ai=_strip_for_ai(html_full),
+    )
+
+
 def _sender_lookup_email(msg: WhatsappTrackedMessage) -> str:
     """
     Prefer configured seller email (matches direct_wholesalers.sender_email).
@@ -130,16 +233,18 @@ def _sender_lookup_email(msg: WhatsappTrackedMessage) -> str:
     return (msg.sender_phone or "").strip().lower()
 
 
-def _upsert_filtered_email(msg: WhatsappTrackedMessage) -> str:
+def _write_filtered_email(
+    msg: WhatsappTrackedMessage,
+    gmail_message_id: str,
+    subject: str,
+    bodies: Bodies,
+) -> str:
     dt = _message_dt(msg)
     ts_ms = int(dt.timestamp() * 1000)
     epoch = int(dt.timestamp())
     push_name = _push_name(msg)
     sender_phone = (msg.sender_phone or "").strip()
     sender_lookup = _sender_lookup_email(msg)
-    gmail_message_id = _gmail_message_id(msg)
-    media_urls = _media_urls(msg)
-    text = _strip_emojis(msg.text or "")
 
     q = FilteredListingEmail.objects(
         account_label=ACCOUNT_LABEL,
@@ -148,7 +253,7 @@ def _upsert_filtered_email(msg: WhatsappTrackedMessage) -> str:
 
     q.update_one(
         upsert=True,
-        set__subject=_subject(msg),
+        set__subject=subject,
         set__window=WindowRange(after_epoch=epoch, before_epoch=epoch + 1),
         set__from_info=FromInfo(
             raw=(msg.sender_jid or sender_phone or ""),
@@ -157,7 +262,7 @@ def _upsert_filtered_email(msg: WhatsappTrackedMessage) -> str:
         ),
         set__rfc822_date=dt.isoformat(),
         set__internal_date=InternalDate(ts_ms=ts_ms, iso=dt.isoformat()),
-        set__bodies=_wrap_body(text, media_urls),
+        set__bodies=bodies,
         set_on_insert__status="not_processed",
         set__updated_at=datetime.utcnow(),
         set_on_insert__created_at=datetime.utcnow(),
@@ -176,6 +281,53 @@ def _upsert_filtered_email(msg: WhatsappTrackedMessage) -> str:
         logger.exception("record_email_ingested failed for whatsapp email_id=%s", saved_id)
 
     return saved_id
+
+
+def _upsert_filtered_emails(msg: WhatsappTrackedMessage) -> List[str]:
+    media_urls = _media_urls(msg)
+    text = _strip_emojis(msg.text or "")
+    base_id = _gmail_message_id(msg)
+    base_subject = _subject(msg)
+
+    if not is_jg_equity_group(msg.group_name):
+        return [_write_filtered_email(msg, base_id, base_subject, _wrap_body(text, media_urls))]
+
+    page_urls = deal_page_urls(text)
+    if not page_urls:
+        logger.warning(
+            "jg equity message has no URL group=%s message_id=%s",
+            msg.group_jid,
+            msg.message_id,
+        )
+        return [_write_filtered_email(msg, base_id, base_subject, _wrap_body(text, media_urls))]
+
+    saved_ids: List[str] = []
+    failed: List[str] = []
+    total = len(page_urls)
+
+    for i, page_url in enumerate(page_urls, start=1):
+        page_html = fetch_deal_page_html(page_url)
+        if not page_html:
+            failed.append(page_url)
+            continue
+
+        email_id = f"{base_id}:link{i}"
+        subject = f"{base_subject} [{i}/{total}]"
+        bodies = _wrap_body_from_page(text, page_html, media_urls, page_url)
+        saved_ids.append(_write_filtered_email(msg, email_id, subject, bodies))
+        logger.info(
+            "jg equity fetched page url=%s chars=%s message_id=%s email=%s",
+            page_url,
+            len(page_html),
+            msg.message_id,
+            email_id,
+        )
+
+    if failed:
+        raise RuntimeError(f"jg_equity_fetch_failed: {', '.join(failed)}")
+    if not saved_ids:
+        raise RuntimeError("jg_equity_fetch_failed: no pages saved")
+    return saved_ids
 
 
 def _mark_error(msg_id: Any, error_message: str) -> None:
@@ -216,16 +368,16 @@ def process_pending_whatsapp(limit: int = 10) -> dict:
                 stats["error"] += 1
                 continue
 
-            email_id = _upsert_filtered_email(msg)
+            email_ids = _upsert_filtered_emails(msg)
             WhatsappTrackedMessage.objects(id=msg.id).update_one(
                 set__status="processed",
                 set__errorMessage="",
             )
             stats["processed"] += 1
             logger.info(
-                "whatsapp ingest processed message_id=%s → email_id=%s",
+                "whatsapp ingest processed message_id=%s → email_ids=%s",
                 msg.message_id,
-                email_id,
+                email_ids,
             )
         except Exception as e:
             logger.exception(
