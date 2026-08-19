@@ -159,7 +159,7 @@ Do-not-post cities:
             stage="post_selection",
             call_name="do_not_post_city",
             listing_id=listing_id,
-            model="gpt-4o-mini",
+            model="gpt-5.6-luna",
             messages=[
                 {
                     "role": "system",
