@@ -8,7 +8,9 @@ from models import ParsedListing
 import re
 
 NEXT_STATUS_ON_PASS = "processed"                 # what to set on pass
-HISTORICAL_STATUSES = ("skipped", "posted", "ready_to_post", "passed","processed","ready_for_image_processing","ready_for_primary_image_check")
+# Only a real post starts/resets the 30-day clock. Skipped copies must not
+# extend the window (otherwise every dup-skip stamps skipped_or_posted_at=now).
+HISTORICAL_STATUSES = ("posted",)
 PRICE_DROP_THRESHOLD = 0.06                       # 6%
 
 
@@ -111,8 +113,9 @@ def _sanitize_match_text(value: Optional[str]) -> Optional[str]:
 def _find_recent_prior(addr: str, city: Optional[str], zip_: Optional[str],
                        since: datetime, exclude_id) -> Optional[ParsedListing]:
     """
-    Find most-recent prior in last 30 days with SAME address (and city/zip when present),
-    across top-level vs complete_info fields. Excludes the current doc.
+    Find most-recent prior POST in last 30 days with SAME address (and city/zip when present),
+    across top-level vs complete_info fields. Excludes the current doc. Skipped listings
+    are ignored so a dup-skip cannot keep the 30-day window rolling.
     """
     addr = _sanitize_match_text(addr)
     city = _sanitize_match_text(city)
@@ -218,7 +221,7 @@ def _ensure_geo(pl) -> Optional[dict]:
 
 def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
     """
-    Fallback search for recent prior using stored (or freshly-fetched) geo_code_response.
+    Fallback search for a recent posted prior using stored (or freshly-fetched) geo_code_response.
     Priority: place_id → formatted_address → postal+route substring match → lat/lng proximity.
     """
 
@@ -284,11 +287,12 @@ def process_not_processed_with_duplicate_rule(
     gmail_message_id: Optional[str] = None,
 ) -> dict:
     """
-    For each `not_processed` listing:
-      - If NO prior (same address/city/zip) within 30d => status -> processed (clear reason)
-      - If prior exists:
-          * If current price is >= 6% lower than prior => processed
+    For each `verified` listing:
+      - If NO prior posted listing (same address/city/zip) within 30d => status -> processed
+      - If a posted prior exists:
+          * If current price is >= 6% lower than that post => processed
           * Else => skipped with rules_ai_reason explaining why
+    Skipped listings are not used as history.
     """
 
     since = _now() - timedelta(days=30)
