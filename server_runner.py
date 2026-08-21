@@ -40,6 +40,7 @@ from models import (
     SpecialAvailInactiveJobRun,
 )
 from models.special_avail_list import SpecialAvailList
+from models.wp_proxy_request_log import WpProxyRequestLog
 from integrations.podio.direct_wholesaler import process_direct_wholeseller_batch
 from whatsapp.keepalive import send_keepalive_template, parse_recipients_env
 
@@ -332,6 +333,7 @@ if __name__ == "__main__":
         WhatsappTrackedMessage,
         SpecialAvailInactiveTracker,
         SpecialAvailInactiveJobRun,
+        WpProxyRequestLog,
     ):
         try:
             model.ensure_indexes()
