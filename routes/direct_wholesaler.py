@@ -4,6 +4,10 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from integrations.podio.direct_wholesaler import (
+    find_wholeseller_item_by_email,
+    get_podio_access_token,
+)
 from models.direct_wholesaler import DirectWholesaler
 from services.direct_wholesaler_service import (
     create_wholesaler,
@@ -53,6 +57,17 @@ class ImportJsonResponse(BaseModel):
     total: int
 
 
+class PodioWholesellerMatch(BaseModel):
+    email: str
+    found: bool
+    item_id: Optional[int] = None
+    error: Optional[str] = None
+
+
+class PodioWholesellerLookupResponse(BaseModel):
+    items: List[PodioWholesellerMatch]
+
+
 @router.get("/direct-wholesalers", response_model=List[DirectWholesalerResponse])
 def list_direct_wholesalers(updateFlagForPodio: Optional[bool] = None):
     qs = DirectWholesaler.objects
@@ -67,6 +82,45 @@ def get_direct_wholesaler_by_sender(sender_email: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Direct wholesaler not found")
     return doc_to_response(doc)
+
+
+@router.get("/direct-wholesalers/podio", response_model=PodioWholesellerLookupResponse)
+def lookup_podio_wholesellers(emails: str):
+    keys = []
+    seen = set()
+    for raw in (emails or "").split(","):
+        email = raw.strip().lower()
+        if not email or "@" not in email or email in seen:
+            continue
+        seen.add(email)
+        keys.append(email)
+        if len(keys) >= 15:
+            break
+
+    if not keys:
+        return PodioWholesellerLookupResponse(items=[])
+
+    try:
+        token = get_podio_access_token()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Podio auth failed: {e}")
+
+    items: List[PodioWholesellerMatch] = []
+    for email in keys:
+        try:
+            item_id = find_wholeseller_item_by_email(token, email)
+            items.append(
+                PodioWholesellerMatch(
+                    email=email,
+                    found=item_id is not None,
+                    item_id=item_id,
+                )
+            )
+        except Exception as e:
+            items.append(
+                PodioWholesellerMatch(email=email, found=False, error=str(e))
+            )
+    return PodioWholesellerLookupResponse(items=items)
 
 
 @router.get("/direct-wholesalers/{doc_id}", response_model=DirectWholesalerResponse)

@@ -62,6 +62,7 @@ from config.runtime import set_whatsapp_send_mode, get_whatsapp_send_mode
 from buyers.submissions_api import router as buyer_submissions_router
 from buyers.matching_api import router as buyer_matching_router
 from routes.direct_wholesaler import router as direct_wholesaler_router
+from routes.podio_wholeseller import router as podio_wholeseller_router
 from routes.scraping_list import router as scraping_list_router
 from routes.special_avail_list import router as special_avail_list_router
 from routes.wordpress_proxy import router as wordpress_proxy_router
@@ -118,6 +119,7 @@ app.include_router(rc_media_router)
 app.include_router(buyer_submissions_router)
 app.include_router(buyer_matching_router)
 app.include_router(direct_wholesaler_router)
+app.include_router(podio_wholeseller_router)
 app.include_router(scraping_list_router)
 app.include_router(special_avail_list_router)
 app.include_router(wordpress_proxy_router)
