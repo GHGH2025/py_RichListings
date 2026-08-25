@@ -389,7 +389,7 @@ posted
 | **Dropbox shared folders** | Dropbox API | `dropboxImageUpload.py` |
 | **S3 image URLs** | AWS S3 bucket | `ai_media_verify.py` |
 | **Podio CRM items/fields** | Podio API | `podio_direct_wholeseller.py`, `podio_web_form_submissions.py`, `special_avails.py`, buyer matching |
-| **HTTP webhooks (Podio Flow)** | External URLs | Posted/skipped listings, special avail, buyer notifications |
+| **HTTP webhooks (Podio Flow)** | External URLs | Create wholesaler, posted/skipped listings, special avail, buyer notifications |
 | **RingCentral SMS** | RingCentral REST API | `matched_buyers_process.py` |
 | **Buyer update-link emails** | External email API | `buyer_submissions_api.py` → `BUYER_UPDATE_EMAIL_API_URL` |
 | **Local OAuth/state files** | `accounts/*/state.json`, `token.json`, `rc_token.json` | Gmail/RC auth refresh |
@@ -398,6 +398,7 @@ posted
 
 | Variable | Event |
 |----------|-------|
+| Create-wholesaler catch (`https://workflow-automation.podio.com/catch/121qm9y2p78yt0o`) | New Podio Wholesellers item (`name`, `email`) |
 | `POSTED_LISTING_WEBHOOK_URL` | Listing posted to WhatsApp |
 | `SKIPPED_LISTING_WEBHOOK_URL` | Listing skipped by rules |
 | `SPECIAL_AVAIL_MATCH_WEBHOOK_URL` | Special availability match found |
