@@ -49,11 +49,11 @@ The response includes the workspace name.
 
 ---
 
-## The five Podio flows
+## The Podio flows
 
 ### 1. Direct wholesaler linking
 
-**What it does:** When a listing is scraped from a known direct-wholesaler email, RichListings stamps the contact from Mongo, then finds the matching **Active** property in Podio and sets the **Wholeseller** field. Nothing is created in Podio on miss — lookup and link only.
+**What it does:** When a listing is scraped from a known direct-wholesaler email, RichListings stamps the contact from Mongo, then finds the matching **Active** property in Podio and sets the **Wholeseller** field. The linker does **not** create a Wholesellers item on miss — lookup and link only. To add a new wholesaler in Podio first, use the create catch webhook below.
 
 Full config and flow: [direct_wholesalers.md](./direct_wholesalers.md).
 
@@ -91,6 +91,30 @@ Full config and flow: [direct_wholesalers.md](./direct_wholesalers.md).
 - Server logs: `run_direct_wholeseller_linking`, `Setting Wholeseller reference on property item ...`
 - MongoDB: `db.parsed_listings.find({ direct_wholeseller: "processed" })`
 - Podio UI: open a property and check the Wholeseller field
+
+---
+
+### 1b. Create a new Wholeseller (catch webhook)
+
+**What it does:** Posts `name` and `email` to a Podio Workflow Automation catch URL. That flow creates a new item in the **Wholesellers** app. `name` and `email` are dynamic (whatever contact you are onboarding). This is the supported way to create a wholesaler in Podio from the Py Server / ops side.
+
+**URL:** `https://workflow-automation.podio.com/catch/121qm9y2p78yt0o`
+
+```bash
+curl --request POST \
+  --url https://workflow-automation.podio.com/catch/121qm9y2p78yt0o \
+  --header 'Content-Type: application/json' \
+  --data '{
+  "name": "test21",
+  "email": "test21@gmail.com"
+}'
+```
+
+The **Email** on the new item must match the Mongo `direct_wholesalers.email` used later for linking. After the item exists, add the Mongo map and wait for the linker (see [direct_wholesalers.md](./direct_wholesalers.md)).
+
+**How to check:**
+- Podio Workflow Automation → this catch flow → run history
+- Podio UI: new item in the **Wholesellers** app with that name and email
 
 ---
 
@@ -267,6 +291,7 @@ Buyer form submissions run **immediately** when the API is called — not on a s
 | `PODIO_WEB_FORM_SUBMISSIONS_APP_ID` | Buyer form app (default `30585451`) |
 | `PODIO_BUYERS_APP_ID` | Buyer matching (default `30585451`) |
 | `PODIO_PROPERTIES_SPECIAL_PREFERENCES_FIELD_ID` | Manual special prefs on properties |
+| Create-wholesaler catch (`https://workflow-automation.podio.com/catch/121qm9y2p78yt0o`) | New Wholesellers item (`name`, `email`) |
 | `POSTED_LISTING_WEBHOOK_URL` | Posted listing webhook |
 | `SKIPPED_LISTING_WEBHOOK_URL` | Skipped listing webhook |
 | `PRICE_DROP_PODIO_ACTIVE_WEBHOOK_URL` | ≥6% pass → mark property Active |
@@ -297,7 +322,7 @@ Buyer form submissions run **immediately** when the API is called — not on a s
 | `Podio auth error` in logs | Wrong username/password or expired OAuth app | Check `.env` credentials |
 | Wholeseller not updating | `updateFlagForPodio` is `false` for that wholesaler | Set to `true` in `direct_wholesalers` collection |
 | `property_not_found` | Address in email does not match any Active property in Podio | Check address spelling; verify property exists and is Active |
-| `wholeseller_not_found` | Agent email not in Wholesellers app | Add wholeseller record in Podio |
+| `wholeseller_not_found` | Agent email not in Wholesellers app | POST the create-wholesaler catch URL with that `name` / `email` (see §1b) |
 | Buyer form `podio_status: "failed"` | Check `podio_error` field in MongoDB | Fix field mapping or auth |
 | Webhook not firing | URL not set or listing never reached `posted` / `skipped` | Check env vars and listing `status` |
 | Wrong workspace | Using credentials for a different Podio account | Confirm `podioUsername` matches the workspace you expect |
