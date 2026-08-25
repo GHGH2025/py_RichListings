@@ -10,7 +10,9 @@ For Podio app IDs, scheduled jobs, and troubleshooting, see also [podio.md](./po
 
 ## End-to-end flow (email scrape → Podio)
 
-Mapping is **lookup-and-link**, not create-on-miss. RichListings does **not** create new Wholesellers or Properties items in Podio.
+The listing linker is **lookup-and-link**, not create-on-miss. It does **not** create Properties items, and it will not invent a Wholesellers item if the email is missing.
+
+To **create** a new Wholesellers contact in Podio, POST `name` and `email` to the catch webhook below, then add the Mongo map.
 
 ```
 Gmail From
@@ -72,7 +74,7 @@ Every **3 minutes**, `server_runner` → `process_direct_wholeseller_batch()` in
 | `property_not_found` | No matching Active property in Podio |
 | `wholeseller_not_found` | Property found; no Wholesellers item with that email |
 
-On miss, **nothing is auto-created** in Podio. Ops must add the wholeseller (and/or Mongo map entry) manually.
+On miss, the linker does **not** auto-create a Wholesellers item. Create it with the catch webhook in the checklist below, then add or fix the Mongo map.
 
 ### How to check
 
@@ -83,13 +85,32 @@ On miss, **nothing is auto-created** in Podio. Ops must add the wholeseller (and
 
 ### Adding a new wholesaler (ops checklist)
 
-Nothing auto-creates the Podio Wholesellers record or the Mongo map. Do these in order:
+The Mongo map is still added via API. The Podio Wholesellers item is created with the catch webhook (or reused if that email already exists). Do these in order:
 
 #### 1. Create (or confirm) the Podio Wholesellers item
 
-In the **Wholesellers** app, create a contact (or reuse an existing one) whose **Email** field is the real contact email you will use for matching (not a `*.ccsend.com` proxy unless that is truly what Podio has).
+If the contact is not already in the **Wholesellers** app, create it by POSTing dynamic `name` and `email` to Podio Workflow Automation. That catch flow creates the new wholesaler in Podio.
+
+Use the **real contact email** you will match on later (not a `*.ccsend.com` proxy unless that is truly what Podio has).
+
+```bash
+curl --request POST \
+  --url https://workflow-automation.podio.com/catch/121qm9y2p78yt0o \
+  --header 'Content-Type: application/json' \
+  --data '{
+  "name": "S Guerrero",
+  "email": "sguerrero@housingig.com"
+}'
+```
+
+| Field | What to send |
+|-------|----------------|
+| `name` | Display name for the new Wholesellers item |
+| `email` | Same contact email you will store as Mongo `direct_wholesalers.email` |
 
 RichListings matches Podio wholesellers by that email **exactly** (lowercased). If this step is missing, listings will end as `wholeseller_not_found`.
+
+Confirm in Podio UI (or the catch flow run history) that the item exists before relying on the linker.
 
 #### 2. Allow their emails to be scraped (if needed)
 
@@ -149,7 +170,7 @@ The property must already exist in Podio as **Active**. This flow does not creat
 | Mongo listing | `direct_wholeseller: "processed"` |
 | Listing agent fields | Map’s name / phone / email |
 | Podio property | Wholeseller field points at the new contact |
-| Failures | `not_found` → bad/missing Mongo `sender_email`; `wholeseller_not_found` → Podio email mismatch; `property_not_found` → no Active property for that address |
+| Failures | `not_found` → bad/missing Mongo `sender_email`; `wholeseller_not_found` → Podio email mismatch or create webhook not run; `property_not_found` → no Active property for that address |
 
 #### Optional extras
 
