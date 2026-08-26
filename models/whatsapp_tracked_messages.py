@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from mongoengine import DateTimeField, DictField, Document, ListField, StringField
+from mongoengine import BooleanField, DateTimeField, DictField, Document, ListField, StringField
 
 
 class WhatsappTrackedMessage(Document):
@@ -39,3 +39,4 @@ class WhatsappTrackedMessage(Document):
         default="pending",
     )
     errorMessage = StringField(default="")
+    job = BooleanField(default=False)

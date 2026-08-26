@@ -24,6 +24,7 @@ from services.special_avail_list_service import (
     get_wholesaler_config,
     get_wholesaler_podio_bucket,
 )
+from integrations.wordpress.post_status import set_wp_post_status
 from special_avails.processor import (
     _fetch_active_properties_for_wholesaler,
     _format_full_address,
@@ -130,6 +131,19 @@ def _fire_inactive_webhook(address: str) -> bool:
         return False
 
 
+def _mark_wp_private(address: str) -> bool:
+    """Set WordPress post_status to private (same as POST /public/wp/create)."""
+    ok, status_code, payload = set_wp_post_status(address, "private")
+    if not ok:
+        logging.warning(
+            "special_avail_inactive: WP private failed status=%s address=%s body=%s",
+            status_code,
+            address,
+            str(payload)[:300],
+        )
+    return ok
+
+
 def _get_or_create_tracker(
     *,
     podio_item_id: int,
@@ -170,6 +184,8 @@ def _persist_job_run(result: Dict[str, Any]) -> None:
             skipped_no_email=int(result.get("skipped_no_email") or 0),
             webhooks_fired=int(result.get("webhooks_fired") or 0),
             webhook_failures=int(result.get("webhook_failures") or 0),
+            wp_privates_ok=int(result.get("wp_privates_ok") or 0),
+            wp_private_failures=int(result.get("wp_private_failures") or 0),
             fired_addresses=list(result.get("fired_addresses") or []),
             wholesaler_summaries=list(result.get("wholesaler_summaries") or []),
             errors=list(result.get("errors") or []),
@@ -190,7 +206,8 @@ def run_special_avail_inactive_check(
       1) Load Active Podio properties created within lookback_days
       2) Build today's (EST) email address set from that wholesaler's sender emails
       3) If wholesaler sent no email today → skip miss increment for their props
-      4) Else mark found / miss; after miss_threshold consecutive misses → webhook once
+      4) Else mark found / miss; after miss_threshold consecutive misses →
+         webhook once, then set WP post_status to private
     """
     init_db()
 
@@ -223,6 +240,8 @@ def run_special_avail_inactive_check(
             "skipped_no_email": int(existing.skipped_no_email or 0),
             "webhooks_fired": int(existing.webhooks_fired or 0),
             "webhook_failures": int(existing.webhook_failures or 0),
+            "wp_privates_ok": int(getattr(existing, "wp_privates_ok", 0) or 0),
+            "wp_private_failures": int(getattr(existing, "wp_private_failures", 0) or 0),
             "fired_addresses": list(existing.fired_addresses or []),
             "wholesaler_summaries": list(existing.wholesaler_summaries or []),
             "errors": [],
@@ -246,6 +265,8 @@ def run_special_avail_inactive_check(
             "skipped_no_email": 0,
             "webhooks_fired": 0,
             "webhook_failures": 0,
+            "wp_privates_ok": 0,
+            "wp_private_failures": 0,
             "fired_addresses": [],
             "wholesaler_summaries": [],
             "errors": [],
@@ -271,6 +292,8 @@ def run_special_avail_inactive_check(
             "skipped_no_email": 0,
             "webhooks_fired": 0,
             "webhook_failures": 0,
+            "wp_privates_ok": 0,
+            "wp_private_failures": 0,
             "fired_addresses": [],
             "wholesaler_summaries": [],
             "errors": [str(exc)],
@@ -283,6 +306,8 @@ def run_special_avail_inactive_check(
     skipped_no_email = 0
     webhooks_fired = 0
     webhook_failures = 0
+    wp_privates_ok = 0
+    wp_private_failures = 0
     properties_checked = 0
     wholesalers_checked = 0
     fired_addresses: List[str] = []
@@ -300,6 +325,8 @@ def run_special_avail_inactive_check(
             "missed": 0,
             "skipped_no_email": 0,
             "webhooks_fired": 0,
+            "wp_privates_ok": 0,
+            "wp_private_failures": 0,
             "email_address_count": 0,
         }
 
@@ -432,6 +459,16 @@ def run_special_avail_inactive_check(
                         webhooks_fired += 1
                         wh_summary["webhooks_fired"] += 1
                         fired_addresses.append(addr)
+
+                        wp_ok = _mark_wp_private(addr)
+                        tracker.wp_private_ok = wp_ok
+                        tracker.wp_private_at = datetime.utcnow()
+                        if wp_ok:
+                            wp_privates_ok += 1
+                            wh_summary["wp_privates_ok"] += 1
+                        else:
+                            wp_private_failures += 1
+                            wh_summary["wp_private_failures"] += 1
                     else:
                         tracker.webhook_ok = False
                         webhook_failures += 1
@@ -456,6 +493,8 @@ def run_special_avail_inactive_check(
         "skipped_no_email": skipped_no_email,
         "webhooks_fired": webhooks_fired,
         "webhook_failures": webhook_failures,
+        "wp_privates_ok": wp_privates_ok,
+        "wp_private_failures": wp_private_failures,
         "fired_addresses": fired_addresses,
         "wholesaler_summaries": wholesaler_summaries,
         "errors": errors,
@@ -463,11 +502,12 @@ def run_special_avail_inactive_check(
     }
     _persist_job_run(result)
     logging.info(
-        "special_avail_inactive: done target=%s checked=%s found=%s missed=%s fired=%s",
+        "special_avail_inactive: done target=%s checked=%s found=%s missed=%s fired=%s wp_private_ok=%s",
         target_date,
         properties_checked,
         found_count,
         missed_count,
         webhooks_fired,
+        wp_privates_ok,
     )
     return result

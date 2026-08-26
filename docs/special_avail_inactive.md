@@ -22,6 +22,8 @@ This is separate from the existing special-avail snapshot/match flow (`special_a
 
 to `SPECIAL_AVAIL_INACTIVE_WEBHOOK_URL`.
 
+8. After a successful webhook → set WordPress `post_status` to `private` via `set_wp_post_status()` (same payload as `POST /public/wp/create`: `token`, `posttitle` = address, `post_status` = `private`). Tracked on the inactive tracker as `wp_private_ok` / `wp_private_at`.
+
 ## MongoDB
 
 | Collection | Purpose |
