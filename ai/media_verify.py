@@ -10,9 +10,16 @@ from datetime import datetime as _dt
 
 # Reuse your env + client
 import os
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+
+def _model_supports_temperature(model: Optional[str]) -> bool:
+    """gpt-5* models often reject temperature; omit it for that family."""
+    if not model:
+        return True
+    return not str(model).lower().startswith("gpt-5")
 import io, mimetypes, os, uuid, requests, boto3, tempfile
 from urllib.parse import urlparse
 
@@ -245,16 +252,23 @@ def ai_verify_media_for_listing(
     from observability.openai_usage import tracked_chat_create
 
     msg = _USER_TMPL.format(address=address.strip(), html_ai=(html_ai or "").strip())
+    use_model = model or OPENAI_MODEL
+    create_kwargs: Dict[str, Any] = {
+        "model": use_model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": msg},
+        ],
+        "response_format": _response_format(),
+    }
+    if _model_supports_temperature(use_model):
+        create_kwargs["temperature"] = 0.1
     chat = tracked_chat_create(
         client,
         stage="verified",
         call_name="ai_verify_media",
         listing_id=listing_id,
-        model=(model or OPENAI_MODEL),
-        messages=[{"role": "system", "content": _SYSTEM_PROMPT},
-                  {"role": "user", "content": msg}],
-        temperature=0.1,
-        response_format=_response_format()
+        **create_kwargs,
     )
     data = json.loads(chat.choices[0].message.content)
     # light sanitation

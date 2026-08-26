@@ -29,7 +29,7 @@ import logging
 # Load environment variables
 load_dotenv()
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # supports structured outputs
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")  # supports structured outputs
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # client = OpenAI(api_key=OPENAI_API_KEY)
 client = OpenAI(
@@ -37,6 +37,13 @@ client = OpenAI(
     timeout=800.0,        # 30s hard timeout for network+read
     max_retries=0        # keep low; you can set 0 or 1
 )
+
+
+def _model_supports_temperature(model: Optional[str]) -> bool:
+    """gpt-5* models often reject temperature; omit it for that family."""
+    if not model:
+        return True
+    return not str(model).lower().startswith("gpt-5")
 
 
 ADDRESS_KEYS_POOL = ThreadPoolExecutor(max_workers=6)  # tune as you like
@@ -349,12 +356,14 @@ def extract_listings_from_email_html(email_html: str,
 
     # First try: Structured Outputs (json_schema strict)
     try:
-        chat = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0.3,
-            response_format=_response_format()
-        )
+        create_kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "response_format": _response_format(),
+        }
+        if _model_supports_temperature(model):
+            create_kwargs["temperature"] = 0.3
+        chat = client.chat.completions.create(**create_kwargs)
         content = chat.choices[0].message.content
         data = json.loads(content)
         data.setdefault("notes", [])
@@ -363,15 +372,17 @@ def extract_listings_from_email_html(email_html: str,
         # Fallback: JSON mode (still asks for JSON, not schema-validated)
         try:
             print("Inside expection",e)
-            chat = client.chat.completions.create(
-                model=model,
-                messages=[
+            fallback_kwargs: Dict[str, Any] = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system_prompt + "\nYou must output valid JSON only."},
                     {"role": "user", "content": _USER_INSTRUCTIONS_TEMPLATE.format(email_html=compact_html)}
                 ],
-                temperature=temperature,
-                response_format={"type": "json_object"}
-            )
+                "response_format": {"type": "json_object"},
+            }
+            if _model_supports_temperature(model):
+                fallback_kwargs["temperature"] = temperature
+            chat = client.chat.completions.create(**fallback_kwargs)
             content = chat.choices[0].message.content
             data = json.loads(content)
             data.setdefault("notes", [])
