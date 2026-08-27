@@ -125,6 +125,7 @@ class ParsedListing(Document):
     price             = FloatField()  # store USD price (list_price_usd)
 
     images            = ListField(StringField())   # array of URLs
+    images_s3         = ListField(StringField())   # remirrored public S3 URLs
     skipped_images    = DictField() 
     other_images_source = StringField()            # single URL
     other_images_dropbox_link  = StringField()
