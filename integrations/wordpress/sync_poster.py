@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse, parse_qsl, urlunparse, urlencode
 from models import ParsedListing  # mongoengine document
 from pipeline.address_utils import resolve_street_address
+from ai.media_verify import _image_mirror_updates, mirror_images_to_s3
 import logging
 
 WP_TOKEN = os.getenv("WP_API_TOKEN")  # <-- set in env
@@ -111,8 +112,20 @@ def _build_post_body(pl: ParsedListing) -> Dict[str, Any]:
     if desc:
         body["postdesc"] = desc
 
-    # featured image (first)
-    imgs = getattr(pl, "images", None) or []
+    # featured image (first) — remirror to S3 and persist images + images_s3
+    orig_imgs = list(getattr(pl, "images", None) or [])
+    imgs = mirror_images_to_s3(orig_imgs)
+    persist = _image_mirror_updates(orig_imgs, imgs)
+    if persist:
+        try:
+            persist["set__updated_at"] = datetime.utcnow()
+            ParsedListing.objects(id=pl.id).update_one(**persist)
+            if persist.get("set__images"):
+                pl.images = persist["set__images"]
+            if persist.get("set__images_s3"):
+                pl.images_s3 = persist["set__images_s3"]
+        except Exception:
+            logging.exception("Failed to persist S3-mirrored images | listing_id=%s", pl.id)
     img0 = _first(imgs)
     if _trim(img0):
         body["featured_image"] = _clean_featured_image_url(img0)

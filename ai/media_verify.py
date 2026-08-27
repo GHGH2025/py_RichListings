@@ -59,72 +59,84 @@ def upload_to_s3(local_path: str, bucket: str, key: str, region: str) -> str:
     return f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
 
 # ---------- image fetch + upload wiring ----------
-def _guess_ext(content_type: str, url: str) -> str:
-    if content_type:
-        ext = mimetypes.guess_extension(content_type.split(";")[0].strip())
-        if ext:
-            return ext
-    path = urlparse(url).path.lower()
-    for e in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
-        if path.endswith(e):
-            return e
-    return ".jpg"
+def _sniff_image(content: bytes) -> Optional[str]:
+    """Return a file extension if bytes look like a real image. Dropbox often lies about Content-Type."""
+    if not content or len(content) < 12:
+        return None
+    if content[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if content[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+def _is_our_s3_url(url: str) -> bool:
+    host = (urlparse(url).netloc or "").lower()
+    if not host:
+        return False
+    if S3_BUCKET and host.startswith(f"{S3_BUCKET.lower()}.s3"):
+        return True
+    return "amazonaws.com" in host and "s3" in host
 
 def _build_s3_key(ext: str) -> str:
     # S3 key = <prefix>/<uuid><ext>
     name = uuid.uuid4().hex + (ext or "")
     return f"{S3_PREFIX}/{name}" if S3_PREFIX else name
 
+def _fetch_image_bytes(url: str) -> Optional[bytes]:
+    # Keep the full URL, including query params (e.g. Dropbox rlkey). Those are access keys.
+    attempts = (
+        {"timeout": 15},
+        {"timeout": 25, "headers": UA_HEADERS},
+    )
+    for kwargs in attempts:
+        try:
+            r = requests.get(url, allow_redirects=True, **kwargs)
+            if r.status_code == 200 and _sniff_image(r.content):
+                return r.content
+        except requests.RequestException:
+            continue
+    return None
+
+def _upload_bytes_to_s3(content: bytes, ext: str) -> str:
+    s3key = _build_s3_key(ext)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tf:
+        tf.write(content)
+        tmp_path = tf.name
+    try:
+        return upload_to_s3(tmp_path, S3_BUCKET, s3key, AWS_REGION)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
 def _fetch_forbidden_then_upload(url: str) -> str:
     """
-    Try GET (no headers). If 200 -> keep original.
-    If not 200, retry with UA; if success, upload to S3 and return S3 URL.
-    If still not accessible, return original URL.
+    Download the image and remirror to S3 so WordPress gets a clean public .jpg URL.
+    Keep the original only if it is already our S3 object or the fetch fails.
     """
-    # quick sanity
+    if _is_our_s3_url(url):
+        return url
     if not S3_BUCKET:
         raise RuntimeError("LISTINGS_S3_BUCKET is not set")
 
+    content = _fetch_image_bytes(url)
+    if not content:
+        return url
+    ext = _sniff_image(content)
+    if not ext:
+        return url
     try:
-        r0 = requests.get(url, timeout=15, allow_redirects=True)
-        if r0.status_code == 200:
-            return url
-        # fall through to UA attempt
-    except requests.RequestException:
-        pass
-
-    try:
-        r1 = requests.get(url, headers=UA_HEADERS, timeout=25, allow_redirects=True)
-        if r1.status_code == 200 and r1.content:
-            ctype = r1.headers.get("Content-Type", "image/jpeg")
-            ext   = _guess_ext(ctype, url)
-            s3key = _build_s3_key(ext)
-
-            # Write bytes to a temp file then upload (matches your tested approach)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tf:
-                tf.write(r1.content)
-                tmp_path = tf.name
-
-            try:
-                public_url = upload_to_s3(tmp_path, S3_BUCKET, s3key, AWS_REGION)
-                return public_url
-            finally:
-                # best-effort cleanup
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-    except requests.RequestException:
-        pass
-
-    # Could not fetch → keep original (better than dropping)
-    return url
+        return _upload_bytes_to_s3(content, ext)
+    except Exception:
+        return url
 
 def _fix_forbidden_images(urls: list[str]) -> list[str]:
-    """
-    For each URL, if plain request fails but UA fetch works,
-    upload to S3 and replace with the S3 URL. Otherwise keep original.
-    """
+    """Remirror each non-S3 image URL to a public S3 URL. Keep the original on failure."""
     out = []
     for u in urls or []:
         if not isinstance(u, str) or not u.strip():
@@ -135,6 +147,17 @@ def _fix_forbidden_images(urls: list[str]) -> list[str]:
         except Exception:
             out.append(u.strip())
     return out
+
+mirror_images_to_s3 = _fix_forbidden_images
+
+def _image_mirror_updates(original, mirrored) -> dict:
+    """Persist remirrored S3 URLs. Also replace images when the list changed."""
+    updates = {}
+    if mirrored != list(original or []):
+        updates["set__images"] = mirrored
+    if mirrored:
+        updates["set__images_s3"] = mirrored
+    return updates
 
 
 # ---------- utils ----------
@@ -426,19 +449,15 @@ def verify_and_fill_missing_media_for_not_processed(
             # If both present → no AI, just verify
             if has_imgs and has_other:
 
-                # 🔽 fix any 403 images in place
+                # 🔽 remirror to S3 (and persist images_s3)
                 fixed = _fix_forbidden_images(pl.images)
-                if fixed != pl.images:
-                    ParsedListing.objects(id=pl.id).update_one(
-                        set__images=fixed,
-                        set__updated_at=_now(),
-                    )
-
-                ParsedListing.objects(id=pl.id).update_one(
-                    set__status="verified",
-                    set__wp_check="pending",
-                    set__updated_at=_now(),
-                )
+                verify_updates = {
+                    "set__status": "verified",
+                    "set__wp_check": "pending",
+                    "set__updated_at": _now(),
+                }
+                verify_updates.update(_image_mirror_updates(pl.images, fixed))
+                ParsedListing.objects(id=pl.id).update_one(**verify_updates)
                 try:
                     from observability.pipeline_metrics import record_listing_stage
                     record_listing_stage(str(pl.id), "verified", listing_status="verified")
@@ -462,19 +481,16 @@ def verify_and_fill_missing_media_for_not_processed(
 
             updates = {}
             if (not has_imgs) and ai_images:
-                # updates["set__images"] = ai_images
-                            # 🔽 pre-fix 403s before saving
                 safe_imgs = _fix_forbidden_images(ai_images)
-                updates["set__images"] = safe_imgs
+                updates.update(_image_mirror_updates([], safe_imgs))
             if (not has_other) and ai_other:
                 updates["set__other_images_source"] = ai_other
 
-             # If we already had images originally, still fix them now
-            if has_imgs and not updates.get("set__images"):
+            # If we already had images originally, still remirror them now
+            if has_imgs and not updates.get("set__images") and not updates.get("set__images_s3"):
                 fixed_existing = _fix_forbidden_images(pl.images)
                 print("fixed_existing",fixed_existing)
-                if fixed_existing != pl.images:
-                    updates["set__images"] = fixed_existing
+                updates.update(_image_mirror_updates(pl.images, fixed_existing))
 
             # Mark verified (and apply any updates)
             updates["set__status"] = "verified"
