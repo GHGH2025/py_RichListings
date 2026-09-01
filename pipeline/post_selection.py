@@ -17,6 +17,7 @@ from openai import OpenAI
 import requests
 from bson import ObjectId
 from pipeline.address_utils import resolve_street_address
+from pipeline.publication_gate import apply_publication_gate
 from media.slugify import slugify_for_folder
 from core.paths import data_path
 load_dotenv()
@@ -393,6 +394,7 @@ def select_passed_listings_for_post(
 
     # Fetch all PASSED that are candidates for posting
     q = ParsedListing.objects(status="passed")
+    q = apply_publication_gate(q)
     if gmail_message_id:
         q = q.filter(gmail_message_id=gmail_message_id)
     else:

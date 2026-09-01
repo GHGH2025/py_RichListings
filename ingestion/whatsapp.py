@@ -263,6 +263,8 @@ def _write_filtered_email(
         set__rfc822_date=dt.isoformat(),
         set__internal_date=InternalDate(ts_ms=ts_ms, iso=dt.isoformat()),
         set__bodies=bodies,
+        set__input_source="whatsapp",
+        set__source_website=None,
         set_on_insert__status="not_processed",
         set__updated_at=datetime.utcnow(),
         set_on_insert__created_at=datetime.utcnow(),

@@ -33,6 +33,7 @@ from integrations.wordpress.ai_property_description import (
 )
 from integrations.wordpress.sync_poster import sync_wp_for_descriptions
 from whatsapp.sender import process_whatsapp_queue
+from pipeline.publication_gate import apply_publication_gate
 from core.paths import data_path
 
 logger = logging.getLogger(__name__)
@@ -103,11 +104,11 @@ def find_verified_since(since: str, limit: int = 100) -> Dict[str, Any]:
     limit = max(1, int(limit or 100))
 
     qs = (
-        ParsedListing.objects(
+        apply_publication_gate(ParsedListing.objects(
             status="verified",
             updated_at__gte=since_dt,
             gmail_message_id__not__startswith="test_",
-        )
+        ))
         .order_by("+updated_at")
         .limit(limit)
         .only(
