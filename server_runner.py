@@ -14,6 +14,7 @@ import uvicorn
 from ingestion.gmail import process_account, _ensure_paths, ACCOUNTS, build_service_by_account
 from ingestion.whatsapp import process_pending_whatsapp, reset_stale_processing_whatsapp
 from pipeline.process_email import process_pending, reset_stale_processing_emails
+from pipeline.scrape_ingest import process_pending_scraped_listings
 from pipeline.dedup import process_not_processed_with_duplicate_rule
 from pipeline.price_drop_activate import process_price_drop_activations
 from ai.rules_runner import apply_ai_english_rules
@@ -28,8 +29,10 @@ from ingestion.forward_completed import forward_completed_source_emails
 from whatsapp.sender import process_whatsapp_queue
 from db.mongo_engine_conn import init_db
 from models import (
+    FilteredListing,
     FilteredListingEmail,
     ParsedListing,
+    RawListing,
     ScrapingList,
     WebFormBuyerSubmission,
     ListingPipelineMetric,
@@ -114,6 +117,13 @@ def run_gmail_job():
 def run_process_email():
     logging.info("run_process_email")
     process_pending()
+
+@repeat(every(1).minutes)
+@safe_scheduled_job
+def run_process_pending_scraped_listings():
+    logging.info("process_pending_scraped_listings")
+    result = process_pending_scraped_listings(limit=5)
+    logging.info("process_pending_scraped_listings: result=%s", result)
 
 @repeat(every(1).minutes)
 @safe_scheduled_job
@@ -324,6 +334,8 @@ if __name__ == "__main__":
     for model in (
         FilteredListingEmail,
         ParsedListing,
+        RawListing,
+        FilteredListing,
         WebFormBuyerSubmission,
         ScrapingList,
         SpecialAvailList,
