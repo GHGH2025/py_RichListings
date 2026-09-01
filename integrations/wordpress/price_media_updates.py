@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, Tuple, List
 from mongoengine.queryset.visitor import Q
 from models import ParsedListing  # mongoengine document
 from pipeline.address_utils import resolve_street_address
+from pipeline.publication_gate import apply_publication_gate
 from media.slugify import slugify_for_folder
 from media.dropbox_upload import handle_Link
 WP_TOKEN = os.getenv("WP_API_TOKEN")
@@ -206,7 +207,7 @@ def process_wp_price_and_media_updates(limit: int = 200) -> Dict[str, Any]:
              - Finally set wp_check='processed'.
     """
     # Pull minimal fields required
-    qs = ParsedListing.objects(wp_check="pending") \
+    qs = apply_publication_gate(ParsedListing.objects(wp_check="pending")) \
         .only("id", "address", "city", "state", "zip", "price",
               "address_search_keys", "wp_check", "wp_check_post_id",
               "other_images_dropbox_link","other_images_source",

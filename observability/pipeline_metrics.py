@@ -195,6 +195,12 @@ def record_listing_created(listing_id: str) -> None:
         metric.account_label = pl.account_label
         metric.gmail_message_id = pl.gmail_message_id
         metric.list_index = pl.list_index
+        metric.input_source = getattr(pl, "input_source", None) or "email"
+        metric.source_website = getattr(pl, "source_website", None)
+        metric.web_publish_enabled = (
+            bool(getattr(pl, "web_publish_enabled", False))
+            if metric.input_source == "web" else True
+        )
         metric.address_received = street or (pl.address or "").strip() or None
         metric.city_received = city or None
         metric.state_received = state or None

@@ -13,6 +13,7 @@ from mongoengine.queryset.visitor import Q
 from models import ParsedListing  # your MongoEngine model
 from config.runtime import get_whatsapp_send_mode, get_group_jids_for_account
 from whatsapp.link_guard import sanitize_whatsapp_post_text
+from pipeline.publication_gate import apply_publication_gate
 
 TEAM_NUMBERS = [n.strip() for n in os.getenv("TEAM_WHATSAPP_NUMBERS","").split(",") if n.strip()]
 
@@ -233,7 +234,7 @@ def process_whatsapp_queue(
     else:
         q = q & Q(gmail_message_id__not__startswith="test_")
 
-    qs = ParsedListing.objects(q).only(
+    qs = apply_publication_gate(ParsedListing.objects(q)).only(
         "id", "post_content", "images", "whatsapp_status", "account_label",
         "other_images_dropbox_link",
     ).limit(limit)

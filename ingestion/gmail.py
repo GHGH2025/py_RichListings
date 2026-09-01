@@ -352,6 +352,8 @@ def process_account(acct: AccountConfig) -> None:
             set__rfc822_date=date_h,
             set__internal_date=InternalDate(ts_ms=internal_ts_ms, iso=internal_dt),
             set__bodies=Bodies(text=plain, html_full=html_full, html_ai=html_ai),
+            set__input_source="email",
+            set__source_website=None,
             set_on_insert__status="not_processed",
             set__updated_at=datetime.utcnow(),
             set_on_insert__created_at=datetime.utcnow(),
