@@ -11,12 +11,15 @@ class RawListing(Document):
         "strict": False,
         "indexes": [
             {"fields": ["listing_id"], "unique": True, "name": "uniq_listing_id"},
+            {"fields": ["source", "listing_id"], "unique": True, "name": "uniq_source_listing_id"},
             {"fields": ["updated_at"], "name": "raw_updated_at_idx"},
         ],
     }
 
     listing_id = StringField(required=True)
     source = StringField(default="florida_off_market")
+    source_website = StringField()
+    source_listing_id = StringField()
     address = StringField()
     address_norm = StringField()
     city = StringField()
@@ -45,6 +48,7 @@ class FilteredListing(Document):
     listing_id = StringField()
     raw_id = StringField()
     source = StringField(default="florida_off_market")
+    source_website = StringField()
     address = StringField()
     address_norm = StringField()
     city = StringField()

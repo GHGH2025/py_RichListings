@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from models import ParsedListing
 from pipeline.address_utils import resolve_street_address
+from pipeline.publication_gate import apply_publication_gate
 
 load_dotenv()
 
@@ -342,6 +343,34 @@ def find_wholeseller_item_by_email(token: str, email: str) -> Optional[int]:
 
     # logging.warning("No Wholeseller item found with email '%s'", email)
     return None
+
+
+def create_wholeseller_item(token: str, email: str) -> Optional[int]:
+    """Create the minimal Podio wholesaler record; email is the required field."""
+    normalized = (email or "").strip().lower()
+    if not normalized:
+        return None
+    data = _podio_request(
+        "POST",
+        f"/item/app/{WHOLESELLERS_APP_ID}",
+        token=token,
+        json={
+            "fields": [
+                {
+                    "field_id": WHOLESELLER_EMAIL_FIELD_ID,
+                    "values": [{"value": normalized}],
+                }
+            ]
+        },
+    )
+    item_id = (data or {}).get("item_id")
+    return int(item_id) if item_id is not None else None
+
+
+def find_or_create_wholeseller_item_by_email(token: str, email: str) -> Optional[int]:
+    """Use email as the idempotent Podio wholesaler key."""
+    existing = find_wholeseller_item_by_email(token, email)
+    return existing if existing is not None else create_wholeseller_item(token, email)
 # new with true false for podio update
 def set_wholeseller_reference_on_property(
     token: str,
@@ -909,7 +938,7 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
 
         
     # Case 2: No wholeseller or mismatched -> find the right one by email
-    target_wholeseller_item_id = find_wholeseller_item_by_email(token, agent_email)
+    target_wholeseller_item_id = find_or_create_wholeseller_item_by_email(token, agent_email)
    
     if not target_wholeseller_item_id:
         # We couldn't find a matching wholeseller record; leave as 'not_processed'
@@ -961,10 +990,10 @@ def process_direct_wholeseller_batch(batch_limit: int = 3) -> None:
     logging.debug("Effective batch limit after clamp: %s", limit)
 
     listings = list(
-        ParsedListing.objects(
+        apply_publication_gate(ParsedListing.objects(
             direct_wholeseller="not_processed",
             gmail_message_id__not__startswith="test_",
-        )[:limit]
+        ))[:limit]
     )
     print("listings==========", listings)  # kept as-is
     if not listings:

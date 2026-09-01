@@ -621,6 +621,13 @@ def upsert_parsed_listings_from_html(
                     or None
                 ),
                 "set__complete_info": lst,
+                "set__input_source": getattr(source_email_doc, "input_source", None) or (
+                    "whatsapp" if account_label == "whatsapp" else "email"
+                ),
+                "set__source_website": getattr(source_email_doc, "source_website", None),
+                "set_on_insert__web_publish_enabled": (
+                    getattr(source_email_doc, "input_source", None) != "web"
+                ),
                 "set__extracted_special_preferences": extracted_special_prefs,
                 "set_on_insert__status": status_for_insert,  # brand-new only
                 "set__direct_wholeseller": direct_wholeseller_flag,

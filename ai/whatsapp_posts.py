@@ -9,6 +9,7 @@ from openai import OpenAI
 from db.mongo_engine_conn import init_db
 from models import ParsedListing
 from pipeline.address_utils import resolve_street_address
+from pipeline.publication_gate import apply_publication_gate
 import time, random
 import requests 
 from whatsapp.sender import send_listing_to_whatsapp
@@ -204,6 +205,7 @@ def make_whatsapp_posts_from_ready_to_post(
 
     total = done = failed = 0
     q = ParsedListing.objects(status="ready_to_post")
+    q = apply_publication_gate(q)
     if gmail_message_id:
         q = q.filter(gmail_message_id=gmail_message_id)
     else:

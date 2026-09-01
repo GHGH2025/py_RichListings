@@ -40,6 +40,8 @@ class FilteredListingEmail(Document):
     # keys
     account_label    = StringField(required=True)
     gmail_message_id = StringField(required=True)
+    input_source     = StringField()  # email | whatsapp | web
+    source_website   = StringField()  # e.g. florida_off_market | rezzie
 
     # refs / convenience
     gmail_thread_id  = StringField()
@@ -116,6 +118,9 @@ class ParsedListing(Document):
     gmail_message_id  = StringField(required=True)
     list_index        = IntField(required=True)
     source_email      = ReferenceField(FilteredListingEmail, required=True)
+    input_source      = StringField()  # email | whatsapp | web
+    source_website    = StringField()
+    web_publish_enabled = BooleanField(default=False)
 
     # requested fields
     address      = StringField()
@@ -583,6 +588,9 @@ class ListingPipelineMetric(Document):
     account_label = StringField()
     gmail_message_id = StringField()
     list_index = IntField()
+    input_source = StringField()
+    source_website = StringField()
+    web_publish_enabled = BooleanField(default=False)
 
     address_received = StringField()
     city_received = StringField()

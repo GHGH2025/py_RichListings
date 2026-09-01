@@ -14,6 +14,7 @@ import requests
 
 from models import ParsedListing
 from integrations.wordpress.post_status import set_wp_post_status
+from pipeline.publication_gate import apply_publication_gate
 
 WEBHOOK_URL = os.getenv(
     "PRICE_DROP_PODIO_ACTIVE_WEBHOOK_URL",
@@ -129,10 +130,10 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
     checked = activated = wp_ok = podio_ok = failed = skipped_no_addr = skipped_no_price = 0
 
     candidates = (
-        ParsedListing.objects(
+        apply_publication_gate(ParsedListing.objects(
             price_drop_pass=True,
             price_drop_activated__ne=True,
-        )
+        ))
         .order_by("updated_at")
         .limit(limit)
     )
