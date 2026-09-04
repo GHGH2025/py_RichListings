@@ -9,6 +9,12 @@ from urllib.parse import urlparse, parse_qsl, urlunparse, urlencode
 from models import ParsedListing  # mongoengine document
 from pipeline.address_utils import resolve_street_address
 from ai.media_verify import _image_mirror_updates, mirror_images_to_s3
+from integrations.wordpress.wp_lookup import search_keys, UNREACHABLE
+from integrations.wordpress.address_dedup import (
+    classify as _dedup_classify, mongo_finder as _dedup_finder,
+    DUPLICATE as _DEDUP_DUP, NEEDS_REVIEW as _DEDUP_REVIEW,
+    post_is_live as _post_is_live,
+)
 import logging
 
 WP_TOKEN = os.getenv("WP_API_TOKEN")  # <-- set in env
@@ -231,30 +237,25 @@ def _extract_first_post_id(get_json: Dict[str, Any]) -> Optional[int]:
     except Exception:
         return None
 
-def _try_search_in_wp(pl: ParsedListing) -> Optional[int]:
+def _try_search_in_wp(pl: ParsedListing):
     """
-    Try main "<address>, <city>" first; if not found, try each address_search_keys variant.
-    Return first post_id found, else None.
+    Try main "<address>, <city>" first, then each address_search_keys variant.
+
+    Returns (post_id, state, detail). UNREACHABLE means WordPress never
+    answered - the caller must NOT create a post then, because we cannot tell
+    whether one is already there. Creating on a failed check is what produced
+    the duplicate posts.
     """
-    # 1) main key
+    keys = []
     main_key = _main_search_key(pl)
     if main_key:
-        js = _wp_get(main_key)
-        pid = _extract_first_post_id(js) if js else None
-        if pid:
-            return pid
-
-    # 2) variants from address_search_keys
-    variants: List[str] = getattr(pl, "address_search_keys", None) or []
-    for key in variants:
+        keys.append(main_key)
+    for key in (getattr(pl, "address_search_keys", None) or []):
         key = _trim(key)
-        if not key:
-            continue
-        js = _wp_get(key)
-        pid = _extract_first_post_id(js) if js else None
-        if pid:
-            return pid
-    return None
+        if key:
+            keys.append(key)
+    state, pid, _item, detail = search_keys(GET_URL, WP_TOKEN, keys, REQUEST_TIMEOUT)
+    return pid, state, detail
 
 def sync_wp_for_descriptions(
     *,
@@ -308,7 +309,29 @@ def sync_wp_for_descriptions(
                 continue
 
             # search
-            found_id = _try_search_in_wp(pl)
+            found_id, _state, _detail = _try_search_in_wp(pl)
+
+            if _state == UNREACHABLE:
+                # Never create on a failed check. wp_status stays des_generated,
+                # so the listing is picked up again on the next run.
+                logging.warning("WP unreachable, not creating | id=%s | %s",
+                                pl.id, _detail)
+                results.append({
+                    "id": str(pl.id),
+                    "ok": False,
+                    "status": "wp_unreachable",
+                    "reason": str(_detail)[:200],
+                })
+                continue
+
+            if found_id and _post_is_live(found_id) is False:
+                # getproperty's mapping can hold a stale post_id whose WP post
+                # was deleted (root cause of POST_LOST). Do not link to a dead
+                # post - treat as not found so the dup-gate / create path runs.
+                logging.warning("WP returned stale post_id %s (post not live) | id=%s - will re-create",
+                                found_id, pl.id)
+                found_id = None
+
             if found_id:
                 pl.update(
                     set__wp_status="already_found",
@@ -324,6 +347,33 @@ def sync_wp_for_descriptions(
                 processed += 1
                 already += 1
             else:
+                # --- Cloud A dup-gate (2026-09-04): normalised-address check before
+                # creating. Catches duplicates the exact WP search missed, and routes
+                # non-standard addresses. Option (b): masked -> post + flag; no house
+                # number / unusable -> review (do not post). See address_dedup.py.
+                _dg_addr = resolve_street_address(pl)
+                _dg_city = getattr(pl, "city", None)
+                _dg_status, _dg_detail = _dedup_classify(
+                    _dg_addr, _dg_city, find_existing=_dedup_finder(exclude_id=pl.id))
+                if _dg_status == _DEDUP_DUP:
+                    _dg_pid = getattr(_dg_detail, "post_id", None)
+                    pl.update(set__wp_status="already_found", set__post_id=_dg_pid,
+                              set__updated_at=datetime.utcnow())
+                    results.append({"id": str(pl.id), "ok": True, "status": "dedup_linked",
+                                    "post_id": _dg_pid})
+                    processed += 1
+                    already += 1
+                    continue
+                if _dg_status == _DEDUP_REVIEW and _dg_detail != "masked":
+                    pl.update(set__wp_status="needs_address_review",
+                              set__address_review=str(_dg_detail),
+                              set__updated_at=datetime.utcnow())
+                    results.append({"id": str(pl.id), "ok": False,
+                                    "status": "needs_address_review", "reason": str(_dg_detail)})
+                    processed += 1
+                    continue
+                if _dg_status == _DEDUP_REVIEW:  # masked -> post but flag
+                    pl.update(set__address_review="masked")
                 # create
                 body = _build_post_body(pl)
                 # fail early if posttitle is missing

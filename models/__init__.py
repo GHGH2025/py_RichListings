@@ -161,12 +161,18 @@ class ParsedListing(Document):
     wp_parsed_data = DictField()
 
     wp_status = StringField(
-        choices=("ready_to_process", "keys_generated", "description_generated","posted","failed")
+        choices=("ready_to_process", "keys_generated", "description_generated","posted","failed",
+                 "needs_address_review")
     )
+    address_review = StringField()
 
     wp_check = StringField(
-        choices=("pending", "processed")
+        # every value the pipeline actually writes. "unreachable" means the
+        # lookup never got an answer, so no verdict was recorded.
+        choices=("pending", "processed", "not_found", "found_but_rejected",
+                 "unreachable")
     )
+    wp_check_detail = StringField()
 
     wp_check_post_id = IntField() 
 
