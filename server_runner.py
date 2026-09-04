@@ -219,6 +219,15 @@ def run_sync_wp_for_descriptions():
     result = sync_wp_for_descriptions(limit=5, per_item_sleep_s=0.2)
     logging.info("run_sync_wp_for_descriptions: result=%s", result)
 
+@repeat(every(2).hours)
+@safe_scheduled_job
+def run_needs_review_alert_job():
+    # Cloud A: digest of listings the dup-gate flagged needs_address_review.
+    # Inert unless NEEDS_REVIEW_ALERT_EMAIL / _SMS is set (see needs_review_digest).
+    from integrations.wordpress.needs_review_digest import run_needs_review_alert
+    logging.info("needs_review_alert")
+    logging.info("run_needs_review_alert: result=%s", run_needs_review_alert())
+
 @repeat(every(3).minutes)
 @safe_scheduled_job
 def run_direct_wholeseller_linking():
