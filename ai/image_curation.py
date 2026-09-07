@@ -1,4 +1,5 @@
 # image_curation.py
+import base64
 import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional
@@ -267,6 +268,55 @@ def classify_single_image(url: str, listing_id: Optional[str] = None) -> Dict[st
     if not isinstance(data.get("reason"), str):
         data["reason"] = ""
 
+    return data
+
+
+def classify_image_bytes(
+    image_bytes: bytes,
+    content_type: str = "image/jpeg",
+    filename: str = "image",
+    listing_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Classify an image before it is uploaded to the Dropbox gallery.
+
+    Gallery sources such as Drive folders and Dropbox ZIPs do not always
+    expose a stable public URL for each file. Send the downloaded bytes as a
+    data URL so the same vision rules can be applied before upload.
+    """
+    from observability.openai_usage import tracked_chat_create
+
+    media_type = (content_type or "image/jpeg").split(";", 1)[0].strip()
+    if not media_type.startswith("image/"):
+        return {"url": filename, "keep": True, "reason": "non-image-media"}
+
+    encoded = base64.b64encode(image_bytes or b"").decode("ascii")
+    data_url = f"data:{media_type};base64,{encoded}"
+    model = (OPENAI_MODEL_VISION or "").strip() or "gpt-5.6-luna"
+    content = [
+        {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
+        {"type": "text", "text": f"IMAGE_SOURCE_NAME: {filename}"},
+        {"type": "image_url", "image_url": {"url": data_url}},
+    ]
+    kwargs = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "response_format": {"type": "json_object"},
+    }
+    if _model_supports_temperature(model):
+        kwargs["temperature"] = 0
+
+    resp = tracked_chat_create(
+        client,
+        stage="image_curation",
+        call_name="classify_image_bytes",
+        listing_id=listing_id,
+        **kwargs,
+    )
+    data = json.loads(resp.choices[0].message.content)
+    if not isinstance(data.get("keep"), bool):
+        return {"url": filename, "keep": False, "reason": "invalid_keep_value"}
+    data["url"] = filename
+    data["reason"] = str(data.get("reason") or "")
     return data
 
 
