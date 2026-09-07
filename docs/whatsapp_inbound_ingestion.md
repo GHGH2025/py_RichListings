@@ -134,10 +134,10 @@ You do **not** need to manually push messages into the pipeline once tracking is
 
 ## Step 5 — Gallery links (Drive → Dropbox)
 
-If the WhatsApp post includes a **gallery or media link** in the text (Google Drive, Dropbox, Google Photos, a CDN, MLS, or another HTTP(S) host):
+If the WhatsApp post includes a **gallery or media link** in the text (Google Drive, Dropbox, a CDN, MLS, or another HTTP(S) host):
 
-1. AI / media steps can copy it into `other_images_source` (same as email). The domain is not the allowlist; the URL is treated as a candidate based on its context.
-2. At **post selection**, the system resolves the URL, scrapes static/lazy/meta image URLs, and uses a rendered browser fallback for JavaScript galleries, then creates `other_images_dropbox_link`.
+1. AI / media steps can copy it into `other_images_source` (same as email). The domain is not the allowlist; the URL must still look like a photo/gallery link.
+2. At **post selection**, the system resolves the URL, scrapes static/lazy/meta image URLs, and uses a rendered browser fallback only when the static page has no images, then creates `other_images_dropbox_link`. JavaScript-only albums (including many Google Photos links) may still yield no images.
 3. That Dropbox link can appear in the final outbound WhatsApp caption (per ad rules).
 
 This only works if:

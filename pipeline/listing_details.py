@@ -202,7 +202,6 @@ IMAGE_RULES_DEFAULT = """
      - Do not whitelist hosts. A CDN, short URL, Google Photos, MLS host, private marketing site, Google Drive, or Dropbox URL can all be valid.
      - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
          (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", or any URL presented as the property's photo source).
-     - If this listing has exactly one otherwise-unknown HTTP(S) URL, return it as a candidate; the media worker will open it and reject it if it contains no usable media.
      - Preserve the selected URL verbatim, including short-link form and query parameters. The media worker will follow redirects and inspect the destination HTML.
     - Do NOT infer from surrounding prose like "link to all the pics" if the link itself is just a generic webpage/newsletter/property page URL.
     - Do NOT use generic newsletter/web-view links, landing pages, "view in browser", unsubscribe, mailto, call/text links, or general property detail pages unless they explicitly indicate photos/gallery.
@@ -223,7 +222,6 @@ IMAGE_RULES_NEAREST = """
      - Do not whitelist hosts. A CDN, short URL, Google Photos, MLS host, private marketing site, Google Drive, or Dropbox URL can all be valid.
      - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
          (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", or any URL presented as the property's photo source).
-     - If this listing has exactly one otherwise-unknown HTTP(S) URL, return it as a candidate; the media worker will open it and reject it if it contains no usable media.
      - Preserve the selected URL verbatim, including short-link form and query parameters. The media worker will follow redirects and inspect the destination HTML.
     - Do NOT infer from surrounding prose like "link to all the pics" if the link itself is just a generic webpage/newsletter/property page URL.
     - Do NOT use generic newsletter/web-view links, landing pages, "view in browser", unsubscribe, mailto, call/text links, or general property detail pages unless they explicitly indicate photos/gallery.

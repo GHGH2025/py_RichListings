@@ -1,9 +1,9 @@
+import asyncio
 from urllib.parse import urljoin, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
 
-VALID_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif")
 MAX_IMAGE_LINKS = 50
 
 SKIP_HOST_NEEDLES = (
@@ -26,17 +26,6 @@ SKIP_URL_NEEDLES = (
     "facebook.svg",
     "x-logo",
 )
-
-
-def _is_constant_contact_url(url: str) -> bool:
-    host = (urlsplit(url or "").netloc or "").lower()
-    return (
-        host == "conta.cc"
-        or host.endswith(".conta.cc")
-        or "constantcontact.com" in host
-        or host.endswith(".rs6.net")
-        or host == "rs6.net"
-    )
 
 
 def _safe_int(value):
@@ -128,9 +117,15 @@ def _render_page_html(url: str) -> tuple[str, str]:
     """Render a page when its images are injected by JavaScript.
 
     Playwright is optional at import time so the normal pipeline still starts
-    if browser binaries are not installed. In that case the static result is
-    returned and the caller logs the reason.
+    if browser binaries are not installed. Sync Playwright cannot run inside an
+    existing asyncio loop (FastAPI webhook); skip in that case.
     """
+    try:
+        asyncio.get_running_loop()
+        return "", "playwright_sync_in_asyncio_loop"
+    except RuntimeError:
+        pass
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -139,67 +134,63 @@ def _render_page_html(url: str) -> tuple[str, str]:
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
+            try:
+                page = browser.new_page(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    )
                 )
-            )
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            # Give client-side album code time to insert images, then scroll
-            # a few times for lazy-loaded galleries.
-            page.wait_for_timeout(1500)
-            for _ in range(3):
-                page.mouse.wheel(0, 1800)
-                page.wait_for_timeout(500)
-            rendered = page.content()
-            final_url = page.url or url
-            browser.close()
-            return rendered, final_url
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                # Give client-side album code time to insert images, then scroll
+                # a few times for lazy-loaded galleries.
+                page.wait_for_timeout(1500)
+                for _ in range(3):
+                    page.mouse.wheel(0, 1800)
+                    page.wait_for_timeout(500)
+                rendered = page.content()
+                return rendered, page.url or url
+            finally:
+                browser.close()
     except Exception as exc:
         return "", f"browser_render_failed:{type(exc).__name__}:{exc}"
 
 
-def extract_image_links(url: str) -> list:
+def extract_image_links(url: str, html: str | None = None) -> list:
     if not (url or "").strip().lower().startswith(("http://", "https://")):
         return []
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
-    }
-
     static_links = []
     final_url = url
-    try:
-        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-        response.raise_for_status()
-        final_url = response.url or url
-        static_links = extract_image_links_from_html(response.text, final_url)
-    except Exception as exc:
-        print(f"Static media scrape failed for {url}: {exc}")
+    if html is not None:
+        static_links = extract_image_links_from_html(html, url)
+    else:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+        try:
+            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+            response.raise_for_status()
+            final_url = response.url or url
+            static_links = extract_image_links_from_html(response.text, final_url)
+        except Exception as exc:
+            print(f"Static media scrape failed for {url}: {exc}")
 
-    # A rendered pass handles Google Photos, short links, CDN galleries, and
-    # other pages whose <img> nodes are created only after JavaScript runs.
-    # It is intentionally attempted even when static HTML has images because
-    # a static page may expose only a preview while the album is dynamic.
+    if static_links:
+        return static_links
+
+    # JS galleries only. A static hit is enough; do not spawn Chromium per listing.
     rendered_html, rendered_url_or_error = _render_page_html(final_url or url)
     if rendered_html:
-        rendered_links = extract_image_links_from_html(
+        return extract_image_links_from_html(
             rendered_html,
             rendered_url_or_error or final_url or url,
         )
-        if rendered_links:
-            merged = []
-            seen = set()
-            for candidate in static_links + rendered_links:
-                _add_candidate(merged, seen, candidate)
-            return merged
-    elif rendered_url_or_error:
+    if rendered_url_or_error:
         print(f"Rendered media scrape skipped for {url}: {rendered_url_or_error}")
-
     return static_links

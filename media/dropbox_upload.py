@@ -10,7 +10,7 @@ from dropbox.files import WriteMode
 from media.scrape_images import extract_image_links
 from media.check_direct_link import (
     safe_filename_from_url,
-    is_direct_image_url,
+    guess_media_extension,
     blocked_image_filename_reason,
 )
 from dropbox.exceptions import ApiError
@@ -34,6 +34,22 @@ ALLOWED_EXTS = {
     # Videos    
     ".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v"
 }
+
+_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+
+def _close_http_response(response) -> None:
+    try:
+        if response is not None:
+            response.close()
+    except Exception:
+        pass
 
 ################################
 #handle dropbox links
@@ -223,7 +239,7 @@ def _upload_http_media_response(
     file_name = safe_filename_from_url(response.url or source_url, content_type)
     _, ext = os.path.splitext(file_name.lower())
     if ext not in ALLOWED_EXTS:
-        guessed = mimetypes.guess_extension(content_type.split(";")[0].strip())
+        guessed = guess_media_extension(content_type)
         if guessed in ALLOWED_EXTS:
             file_name = os.path.splitext(file_name)[0] + guessed
         else:
@@ -257,30 +273,28 @@ def _process_generic_http_link(
     dropbox_folder: str,
     curate_media: bool = False,
     listing_id: str | None = None,
+    prefetched=None,
 ) -> list:
-    """Process one arbitrary HTTP URL exactly once.
+    """Process one arbitrary HTTP URL.
 
     A direct media response is uploaded from that response. HTML is scraped
-    once, and discovered media URLs are downloaded directly without feeding
-    them back through the page-scraping loop.
+    from the same body when possible, and discovered media URLs are downloaded
+    directly without feeding them back through the page-scraping loop.
     """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
-    }
-    response = None
+    response = prefetched
+    html = None
+    final_url = link
     try:
-        response = requests.get(
-            link,
-            headers=headers,
-            stream=True,
-            timeout=60,
-            allow_redirects=True,
-        )
+        if response is None:
+            response = requests.get(
+                link,
+                headers=_HTTP_HEADERS,
+                stream=True,
+                timeout=60,
+                allow_redirects=True,
+            )
         response.raise_for_status()
+        content_type = (response.headers.get("Content-Type") or "").lower()
         direct = _upload_http_media_response(
             response,
             link,
@@ -291,17 +305,18 @@ def _process_generic_http_link(
         final_url = response.url or link
         if direct:
             return [direct]
+        if content_type.startswith(("image/", "video/")):
+            return []
+        if "html" in content_type or content_type.startswith("text/") or not content_type:
+            html = response.text
     except Exception as e:
         print(f"Error fetching generic media link {link}: {e}")
         final_url = link
     finally:
-        try:
-            response.close()
-        except Exception:
-            pass
+        _close_http_response(response)
 
     try:
-        image_links = extract_image_links(final_url)
+        image_links = extract_image_links(final_url, html=html)
     except Exception as e:
         print(f"Error extracting images from {final_url}: {e}")
         return []
@@ -312,7 +327,7 @@ def _process_generic_http_link(
         try:
             image_response = requests.get(
                 image_link,
-                headers=headers,
+                headers=_HTTP_HEADERS,
                 stream=True,
                 timeout=60,
                 allow_redirects=True,
@@ -330,10 +345,7 @@ def _process_generic_http_link(
         except Exception as e:
             print(f"Error uploading scraped media {image_link}: {e}")
         finally:
-            try:
-                image_response.close()
-            except Exception:
-                pass
+            _close_http_response(image_response)
     return shared
 
 
@@ -592,7 +604,7 @@ def upload_drive_folder_to_dropbox(
                  print(f"Skipping non-media file: {file_name} ({content_type})")
                  continue
 
-            extension = mimetypes.guess_extension(content_type)
+            extension = guess_media_extension(content_type)
             if extension and not file_name.endswith(extension):
                 file_name += extension
 
@@ -649,27 +661,37 @@ def handle_Link(links, folder="", curate_media: bool = False, listing_id: str | 
 
     shared_links = []
     os.makedirs("downloads", exist_ok=True)
+    dropbox_folder = f"/PropertyListings/{folder}" if folder else "/PropertyListings"
 
     for link in links:
 
-        #resolve to final link
         original_link = link
+        resolved = None
         try:
-            response = requests.get(link, allow_redirects=True, timeout=15)
-            link = response.url or link
+            resolved = requests.get(
+                link,
+                headers=_HTTP_HEADERS,
+                stream=True,
+                timeout=60,
+                allow_redirects=True,
+            )
+            resolved.raise_for_status()
+            link = resolved.url or link
         except Exception as e:
             # Keep the original short/CDN URL. The generic scraper can retry
-            # it with browser rendering; redirect resolution must not prevent
-            # arbitrary HTTP sources from being considered.
+            # it; redirect resolution must not prevent arbitrary HTTP sources
+            # from being considered.
             print(f"Could not resolve link {original_link}: {e}; using original URL")
+            _close_http_response(resolved)
+            resolved = None
             link = original_link
-        # print(f"Resolved link: {link}")
         if "drive.google.com/drive/folders/" in link:
+            _close_http_response(resolved)
             print(f"Processing Google Drive folder link: {link}")
             try:
                 shared_link = upload_drive_folder_to_dropbox(
                     link,
-                    f"/PropertyListings/{folder}" if folder else "/PropertyListings",
+                    dropbox_folder,
                     curate_media=curate_media,
                     listing_id=listing_id,
                 )
@@ -679,11 +701,11 @@ def handle_Link(links, folder="", curate_media: bool = False, listing_id: str | 
                 print(f"Error processing Google Drive link {link}: {e}")
 
         elif re.search(r"(?:^https?://)?(?:www\.)?(?:dropbox\.com|dl\.dropboxusercontent\.com)/", link):
-            # print(f"Processing Dropbox link: {link}")
+            _close_http_response(resolved)
             try:
                 uploaded = process_dropbox_link(
                     link,
-                    f"/PropertyListings/{folder}" if folder else "/PropertyListings",
+                    dropbox_folder,
                     curate_media=curate_media,
                     listing_id=listing_id,
                 )
@@ -691,16 +713,17 @@ def handle_Link(links, folder="", curate_media: bool = False, listing_id: str | 
             except Exception as e:
                 print(f"Error processing Dropbox link {link}: {e}")
 
-
         elif link.startswith("http"):
             shared_links.extend(_process_generic_http_link(
                 link,
-                f"/PropertyListings/{folder}" if folder else "/PropertyListings",
+                dropbox_folder,
                 curate_media=curate_media,
                 listing_id=listing_id,
+                prefetched=resolved,
             ))
 
         else:
+            _close_http_response(resolved)
             print(f"Unsupported link format: {link}")
 
     return list(set(shared_links)) 

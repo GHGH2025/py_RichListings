@@ -149,6 +149,15 @@ For each **kept** listing:
 
 The address slug is derived from the listing address (sanitized, max 80 chars). Dropbox failures are logged but **do not block** the listing from advancing.
 
+Generic HTTP galleries are scraped from static HTML first. A headless Chromium pass runs only when that scrape finds no images. That fallback needs Playwright Chromium on the worker:
+
+```bash
+pip install -r requirements.txt
+python -m playwright install chromium
+```
+
+`pip install playwright` does not install the browser binary. Google Photos albums are not guaranteed to expose a full gallery as `<img>` tags even after rendering.
+
 The Dropbox link is later included in WhatsApp ad copy (see [WhatsApp ad generation](./whatsapp_ad_generation.md)).
 
 ---
