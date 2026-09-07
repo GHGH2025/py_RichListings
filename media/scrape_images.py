@@ -46,17 +46,21 @@ def _safe_int(value):
         return None
 
 
-def _is_junk_image(url: str, img) -> bool:
+def _is_junk_image(url: str, img, check_dimensions: bool = True) -> bool:
     host = (urlsplit(url).netloc or "").lower()
     if any(needle in host for needle in SKIP_HOST_NEEDLES):
         return True
     low = url.lower()
     if any(needle in low for needle in SKIP_URL_NEEDLES):
         return True
-    width = _safe_int(img.get("width"))
-    height = _safe_int(img.get("height"))
-    if (width is not None and width <= 40) or (height is not None and height <= 40):
-        return True
+    # A tiny `src` is often a tracking placeholder while the real image is
+    # in data-src/srcset. Do not apply the placeholder dimensions to lazy
+    # attributes; only apply them to the actual src candidate.
+    if check_dimensions and img is not None:
+        width = _safe_int(img.get("width"))
+        height = _safe_int(img.get("height"))
+        if (width is not None and width <= 40) or (height is not None and height <= 40):
+            return True
     return False
 
 
@@ -94,20 +98,28 @@ def extract_image_links_from_html(html: str, base_url: str = "") -> list:
 
     for img in soup.find_all("img"):
         # Modern pages frequently keep the real URL in a lazy-loading
-        # attribute or srcset instead of src.
-        if _is_junk_image((img.get("src") or img.get("data-src") or ""), img):
-            continue
+        # attribute or srcset instead of src. Evaluate each attribute
+        # independently so a tracking src cannot hide data-src.
         for attr in ("src", "data-src", "data-lazy-src", "data-original"):
-            _add_candidate(image_links, seen, img.get(attr), base_url)
+            value = img.get(attr)
+            if value and not _is_junk_image(
+                value,
+                img,
+                check_dimensions=(attr == "src"),
+            ):
+                _add_candidate(image_links, seen, value, base_url)
         for src in _srcset_urls(img.get("srcset") or img.get("data-srcset") or ""):
-            _add_candidate(image_links, seen, src, base_url)
+            if not _is_junk_image(src, img, check_dimensions=False):
+                _add_candidate(image_links, seen, src, base_url)
 
     # Album pages often expose a preview image through Open Graph/Twitter
     # metadata even when the actual gallery is rendered later.
     for meta in soup.find_all("meta"):
         key = (meta.get("property") or meta.get("name") or "").lower()
         if key in {"og:image", "og:image:url", "twitter:image", "twitter:image:src"}:
-            _add_candidate(image_links, seen, meta.get("content"), base_url)
+            value = meta.get("content")
+            if value and not _is_junk_image(value, meta, check_dimensions=False):
+                _add_candidate(image_links, seen, value, base_url)
 
     return image_links
 
@@ -173,10 +185,8 @@ def extract_image_links(url: str) -> list:
 
     # A rendered pass handles Google Photos, short links, CDN galleries, and
     # other pages whose <img> nodes are created only after JavaScript runs.
-    # A single OG/lazy preview is not enough to declare an album complete.
-    if len(static_links) >= 3:
-        return static_links
-
+    # It is intentionally attempted even when static HTML has images because
+    # a static page may expose only a preview while the album is dynamic.
     rendered_html, rendered_url_or_error = _render_page_html(final_url or url)
     if rendered_html:
         rendered_links = extract_image_links_from_html(
