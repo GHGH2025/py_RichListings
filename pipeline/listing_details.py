@@ -199,8 +199,10 @@ IMAGE_RULES_DEFAULT = """
     - If URLs are relative, include them as-is.
     - Cap to the first 12 unique URLs per listing.
   • "other_images_source": return a single URL ONLY when the listing has an EXPLICIT photo/gallery link for that listing itself.
-    - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
-        (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", Google Drive photo folder, Dropbox photo folder, MLS photo link).
+     - Do not whitelist hosts. A CDN, short URL, Google Photos, MLS host, private marketing site, Google Drive, or Dropbox URL can all be valid.
+     - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
+         (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", or any URL presented as the property's photo source).
+     - Preserve the selected URL verbatim, including short-link form and query parameters. The media worker will follow redirects and inspect the destination HTML.
     - Do NOT infer from surrounding prose like "link to all the pics" if the link itself is just a generic webpage/newsletter/property page URL.
     - Do NOT use generic newsletter/web-view links, landing pages, "view in browser", unsubscribe, mailto, call/text links, or general property detail pages unless they explicitly indicate photos/gallery.
     - If the photo intent is not explicit from the link/button text or URL itself, return null.
@@ -217,8 +219,10 @@ IMAGE_RULES_NEAREST = """
     - Ignore obvious non-property images (logos, social icons, tiny spacer GIFs, generic dividers/banners).
     - Cap to the first 12 unique URLs per listing.
   • "other_images_source": return a single URL ONLY when the listing has an EXPLICIT photo/gallery link for that listing itself.
-    - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
-        (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", Google Drive photo folder, Dropbox photo folder, MLS photo link).
+     - Do not whitelist hosts. A CDN, short URL, Google Photos, MLS host, private marketing site, Google Drive, or Dropbox URL can all be valid.
+     - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
+         (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", or any URL presented as the property's photo source).
+     - Preserve the selected URL verbatim, including short-link form and query parameters. The media worker will follow redirects and inspect the destination HTML.
     - Do NOT infer from surrounding prose like "link to all the pics" if the link itself is just a generic webpage/newsletter/property page URL.
     - Do NOT use generic newsletter/web-view links, landing pages, "view in browser", unsubscribe, mailto, call/text links, or general property detail pages unless they explicitly indicate photos/gallery.
     - If the photo intent is not explicit from the link/button text or URL itself, return null.

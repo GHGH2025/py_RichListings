@@ -64,17 +64,29 @@ def is_direct_image_url(url: str) -> tuple[bool, str | None]:
         pass
     return False, None
 
+def guess_media_extension(content_type: str | None) -> str | None:
+    """Map a Content-Type to a file extension.
+
+    Python's mimetypes.guess_extension('image/jpeg') is `.jpe` on some builds.
+    """
+    if not content_type:
+        return None
+    mime = content_type.split(";")[0].strip().lower()
+    if mime in {"image/jpeg", "image/jpg"}:
+        return ".jpg"
+    guessed = mimetypes.guess_extension(mime)
+    return ".jpg" if guessed == ".jpe" else guessed
+
+
 def safe_filename_from_url(url: str, content_type: str | None = None) -> str:
     """Derive a filename from URL path; if missing an extension, infer from Content-Type."""
     path = urlsplit(url).path
     base = os.path.basename(path) or "downloaded_file"
     name, ext = os.path.splitext(base)
     if ext.lower() not in IMG_EXTS:
-        # Try to infer extension from content-type (e.g., image/jpeg -> .jpg)
-        if content_type:
-            guessed = mimetypes.guess_extension(content_type.split(";")[0].strip())
-            if guessed:
-                ext = guessed
+        guessed = guess_media_extension(content_type)
+        if guessed:
+            ext = guessed
         if not ext:
             ext = ".jpg"  # last-resort default
         base = f"{name or 'image_' + str(int(time.time()*1000))}{ext}"

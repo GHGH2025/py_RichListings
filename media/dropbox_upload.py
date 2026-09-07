@@ -5,11 +5,12 @@ import dropbox
 import re
 from dotenv import load_dotenv
 import shutil
+from urllib.parse import urlsplit
 from dropbox.files import WriteMode
 from media.scrape_images import extract_image_links
 from media.check_direct_link import (
     safe_filename_from_url,
-    is_direct_image_url,
+    guess_media_extension,
     blocked_image_filename_reason,
 )
 from dropbox.exceptions import ApiError
@@ -34,9 +35,30 @@ ALLOWED_EXTS = {
     ".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v"
 }
 
+_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+
+def _close_http_response(response) -> None:
+    try:
+        if response is not None:
+            response.close()
+    except Exception:
+        pass
+
 ################################
 #handle dropbox links
-def process_dropbox_link(dropbox_link: str, dropbox_folder: str = "/PropertyListings"):
+def process_dropbox_link(
+    dropbox_link: str,
+    dropbox_folder: str = "/PropertyListings",
+    curate_media: bool = False,
+    listing_id: str | None = None,
+):
     """
     Process a Dropbox shared link (file or folder), extract all images and videos,
     upload them to your Dropbox (using existing upload_to_dropbox),
@@ -100,7 +122,12 @@ def process_dropbox_link(dropbox_link: str, dropbox_folder: str = "/PropertyList
                     with zf.open(info) as src, open(extract_path, "wb") as dst:
                         dst.write(src.read())
                     try:
-                        link = upload_to_dropbox(extract_path, dropbox_folder)
+                        link = upload_to_dropbox(
+                            extract_path,
+                            dropbox_folder,
+                            curate_media=curate_media,
+                            listing_id=listing_id,
+                        )
                         if link:
                             uploaded_links.append(link)
                     except Exception as up_err:
@@ -187,13 +214,178 @@ def download_file_from_url(url, save_path):
         raise Exception(f"Failed to download file from {url}, status code: {response.status_code}")
 
 
-def upload_to_dropbox(local_path, dropbox_folder):
+def _upload_http_media_response(
+    response,
+    source_url: str,
+    dropbox_folder: str,
+    curate_media: bool = False,
+    listing_id: str | None = None,
+):
+    """Upload one already-fetched HTTP image/video response.
+
+    The response Content-Type is authoritative for extensionless CDN URLs;
+    this avoids a second HEAD request and avoids downloading the same media
+    twice. Returns the shared folder link, or None for non-media responses.
+    """
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    path = urlsplit(response.url or source_url).path.lower()
+    _, path_ext = os.path.splitext(path)
+    is_media = content_type.startswith(("image/", "video/")) or (
+        path_ext in ALLOWED_EXTS and not content_type.startswith(("text/", "application/json"))
+    )
+    if not is_media:
+        return None
+
+    file_name = safe_filename_from_url(response.url or source_url, content_type)
+    _, ext = os.path.splitext(file_name.lower())
+    if ext not in ALLOWED_EXTS:
+        guessed = guess_media_extension(content_type)
+        if guessed in ALLOWED_EXTS:
+            file_name = os.path.splitext(file_name)[0] + guessed
+        else:
+            return None
+
+    blocked = blocked_image_filename_reason(file_name)
+    if blocked:
+        print(f"Skipping direct link {source_url} ({file_name}): {blocked}")
+        return None
+
+    os.makedirs("downloads", exist_ok=True)
+    local_file = os.path.join("downloads", file_name)
+    try:
+        with open(local_file, "wb") as f:
+            for chunk in response.iter_content(1024 * 64):
+                if chunk:
+                    f.write(chunk)
+        return upload_to_dropbox(
+            local_file,
+            dropbox_folder,
+            curate_media=curate_media,
+            listing_id=listing_id,
+        )
+    finally:
+        if os.path.exists(local_file):
+            os.remove(local_file)
+
+
+def _process_generic_http_link(
+    link: str,
+    dropbox_folder: str,
+    curate_media: bool = False,
+    listing_id: str | None = None,
+    prefetched=None,
+) -> list:
+    """Process one arbitrary HTTP URL.
+
+    A direct media response is uploaded from that response. HTML is scraped
+    from the same body when possible, and discovered media URLs are downloaded
+    directly without feeding them back through the page-scraping loop.
+    """
+    response = prefetched
+    html = None
+    final_url = link
+    try:
+        if response is None:
+            response = requests.get(
+                link,
+                headers=_HTTP_HEADERS,
+                stream=True,
+                timeout=60,
+                allow_redirects=True,
+            )
+        response.raise_for_status()
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        direct = _upload_http_media_response(
+            response,
+            link,
+            dropbox_folder,
+            curate_media=curate_media,
+            listing_id=listing_id,
+        )
+        final_url = response.url or link
+        if direct:
+            return [direct]
+        if content_type.startswith(("image/", "video/")):
+            return []
+        if "html" in content_type or content_type.startswith("text/") or not content_type:
+            html = response.text
+    except Exception as e:
+        print(f"Error fetching generic media link {link}: {e}")
+        final_url = link
+    finally:
+        _close_http_response(response)
+
+    try:
+        image_links = extract_image_links(final_url, html=html)
+    except Exception as e:
+        print(f"Error extracting images from {final_url}: {e}")
+        return []
+
+    shared = []
+    for image_link in image_links:
+        image_response = None
+        try:
+            image_response = requests.get(
+                image_link,
+                headers=_HTTP_HEADERS,
+                stream=True,
+                timeout=60,
+                allow_redirects=True,
+            )
+            image_response.raise_for_status()
+            uploaded = _upload_http_media_response(
+                image_response,
+                image_link,
+                dropbox_folder,
+                curate_media=curate_media,
+                listing_id=listing_id,
+            )
+            if uploaded:
+                shared.append(uploaded)
+        except Exception as e:
+            print(f"Error uploading scraped media {image_link}: {e}")
+        finally:
+            _close_http_response(image_response)
+    return shared
+
+
+def upload_to_dropbox(
+    local_path,
+    dropbox_folder,
+    curate_media: bool = False,
+    listing_id: str | None = None,
+):
     file_name = os.path.basename(local_path)
 
     blocked = blocked_image_filename_reason(file_name)
     if blocked:
         print(f"Skipping upload of {file_name}: {blocked}")
         return None
+
+    if curate_media and os.path.splitext(file_name.lower())[1] in {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif",
+    }:
+        try:
+            from ai.image_curation import classify_image_bytes
+
+            with open(local_path, "rb") as f:
+                result = classify_image_bytes(
+                    f.read(),
+                    content_type=mimetypes.guess_type(file_name)[0] or "image/jpeg",
+                    filename=file_name,
+                    listing_id=listing_id,
+                )
+            if result.get("keep") is not True:
+                print(
+                    f"Skipping non-property gallery image {file_name}: "
+                    f"{result.get('reason') or 'vision_rejected'}"
+                )
+                return None
+        except Exception as e:
+            # Fail closed for gallery curation: do not place an unverified
+            # image in the public Dropbox folder when the vision check fails.
+            print(f"Skipping gallery image {file_name}: vision check failed: {e}")
+            return None
 
     # Ensure the folder exists
     try:
@@ -324,7 +516,13 @@ def ensure_dropbox_folder(path: str):
         # Ignore if it already exists or other non-fatal path conflicts
         pass
 
-def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUploads", seen_ids=None):
+def upload_drive_folder_to_dropbox(
+    drive_folder_link,
+    dropbox_folder="/DriveUploads",
+    seen_ids=None,
+    curate_media: bool = False,
+    listing_id: str | None = None,
+):
     """Download files from a public Google Drive folder (including nested subfolders)
     and upload them to Dropbox, preserving folder structure.
     Only allows images and videos."""
@@ -367,7 +565,13 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
 
             subfolder_link = f"https://drive.google.com/drive/folders/{file_id}"
             try:
-                upload_drive_folder_to_dropbox(subfolder_link, child_dropbox_folder, seen_ids)
+                upload_drive_folder_to_dropbox(
+                    subfolder_link,
+                    child_dropbox_folder,
+                    seen_ids,
+                    curate_media=curate_media,
+                    listing_id=listing_id,
+                )
             except Exception as e:
                 print(f"Failed to process subfolder {file_name}: {e}")
             continue
@@ -400,7 +604,7 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
                  print(f"Skipping non-media file: {file_name} ({content_type})")
                  continue
 
-            extension = mimetypes.guess_extension(content_type)
+            extension = guess_media_extension(content_type)
             if extension and not file_name.endswith(extension):
                 file_name += extension
 
@@ -416,8 +620,29 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
                 for chunk in r.iter_content(1024):
                     f.write(chunk)
 
+        # The file is checked before the low-level upload. Read it while the
+        # temporary file is still available, then close it before deleting a
+        # rejected file (important on Windows workers).
+        if curate_media and content_type.startswith("image/"):
+            from ai.image_curation import classify_image_bytes
+            with open(local_path, "rb") as f:
+                image_bytes = f.read()
+            result = classify_image_bytes(
+                image_bytes,
+                content_type=content_type,
+                filename=file_name,
+                listing_id=listing_id,
+            )
+            if result.get("keep") is not True:
+                print(
+                    f"Skipping non-property gallery image {file_name}: "
+                    f"{result.get('reason') or 'vision_rejected'}"
+                )
+                os.remove(local_path)
+                continue
+
+        dropbox_path = f"{dropbox_folder}/{file_name}"
         with open(local_path, "rb") as f:
-            dropbox_path = f"{dropbox_folder}/{file_name}"
             dbx.files_upload(f.read(), dropbox_path, mode=WriteMode("overwrite"))
             print(f"Uploaded {file_name} to Dropbox: {dropbox_path}")
             uploaded_count += 1
@@ -432,110 +657,75 @@ def upload_drive_folder_to_dropbox(drive_folder_link, dropbox_folder="/DriveUplo
 
 
 
-def handle_Link(links, folder = ""):
+def handle_Link(links, folder="", curate_media: bool = False, listing_id: str | None = None):
 
     shared_links = []
     os.makedirs("downloads", exist_ok=True)
+    dropbox_folder = f"/PropertyListings/{folder}" if folder else "/PropertyListings"
 
     for link in links:
 
-        #resolve to final link
-        response = requests.get(link, allow_redirects=True, timeout=15)
-        link = response.url
-        # print(f"Resolved link: {link}")
+        original_link = link
+        resolved = None
+        try:
+            resolved = requests.get(
+                link,
+                headers=_HTTP_HEADERS,
+                stream=True,
+                timeout=60,
+                allow_redirects=True,
+            )
+            resolved.raise_for_status()
+            link = resolved.url or link
+        except Exception as e:
+            # Keep the original short/CDN URL. The generic scraper can retry
+            # it; redirect resolution must not prevent arbitrary HTTP sources
+            # from being considered.
+            print(f"Could not resolve link {original_link}: {e}; using original URL")
+            _close_http_response(resolved)
+            resolved = None
+            link = original_link
         if "drive.google.com/drive/folders/" in link:
+            _close_http_response(resolved)
             print(f"Processing Google Drive folder link: {link}")
             try:
-                shared_link = upload_drive_folder_to_dropbox(link, f"/PropertyListings/{folder}" if folder else "/PropertyListings")
+                shared_link = upload_drive_folder_to_dropbox(
+                    link,
+                    dropbox_folder,
+                    curate_media=curate_media,
+                    listing_id=listing_id,
+                )
                 if shared_link:
                     shared_links.append(shared_link)
             except Exception as e:
                 print(f"Error processing Google Drive link {link}: {e}")
 
         elif re.search(r"(?:^https?://)?(?:www\.)?(?:dropbox\.com|dl\.dropboxusercontent\.com)/", link):
-                # print(f"Processing Dropbox link: {link}")
-                try:
-                    uploaded = process_dropbox_link(
-                        link,
-                        f"/PropertyListings/{folder}" if folder else "/PropertyListings"
-                    )
-                    shared_links.extend(uploaded)
-                except Exception as e:
-                    print(f"Error processing Dropbox link {link}: {e}")
-
+            _close_http_response(resolved)
+            try:
+                uploaded = process_dropbox_link(
+                    link,
+                    dropbox_folder,
+                    curate_media=curate_media,
+                    listing_id=listing_id,
+                )
+                shared_links.extend(uploaded)
+            except Exception as e:
+                print(f"Error processing Dropbox link {link}: {e}")
 
         elif link.startswith("http"):
-            # Check is_direct_image_url first
-            is_img, ct = is_direct_image_url(link)
-            
-            # Check for allowed video types explicitly if not identified as image
-            is_valid_media = False
-            
-            if is_img:
-                is_valid_media = True
-            else:
-                 # Try HEAD request to see if it is video/
-                 try:
-                    head_r = requests.head(link, allow_redirects=True, timeout=10)
-                    h_ct = (head_r.headers.get("Content-Type") or "").lower()
-                    if h_ct.startswith("video/") or h_ct.startswith("image/"):
-                         is_valid_media = True
-                         ct = h_ct
-                 except:
-                     pass
-            
-            if is_valid_media:
-                # print(f"Processing direct media link: {link}")
-                try:
-                    file_name = safe_filename_from_url(link, ct)
-                    _, ext = os.path.splitext(file_name.lower())
-                    
-                    # Ensure extension is allowed
-                    if ext not in ALLOWED_EXTS:
-                         # try to guess from CT if missing or weird
-                         if ct and "video" in ct:
-                              guessed = mimetypes.guess_extension(ct.split(";")[0].strip())
-                              if guessed in ALLOWED_EXTS:
-                                   file_name = os.path.splitext(file_name)[0] + guessed
-                                   ext = guessed
+            shared_links.extend(_process_generic_http_link(
+                link,
+                dropbox_folder,
+                curate_media=curate_media,
+                listing_id=listing_id,
+                prefetched=resolved,
+            ))
 
-                    if ext in ALLOWED_EXTS:
-                        blocked = blocked_image_filename_reason(file_name)
-                        if blocked:
-                            print(f"Skipping direct link {link} ({file_name}): {blocked}")
-                            continue
-
-                        local_file = os.path.join("downloads", file_name)
-
-                        download_file_from_url(link, local_file)
-                        dropbox_path = upload_to_dropbox(
-                            local_file,
-                            f"/PropertyListings/{folder}" if folder else "/PropertyListings"
-                        )
-
-                        if os.path.exists(local_file):
-                            os.remove(local_file)
-
-                        if dropbox_path:
-                            shared_links.append(dropbox_path)
-                    else:
-                        print(f"Skipping direct link {link} - not a valid image/video extension")
-
-                except Exception as e:
-                    print(f"Error processing direct link {link}: {e}")
-            else:
-                # print("Processing web page for image scraping")
-                try:
-                    img_links = extract_image_links(link)
-                    # print(f"\n\n Extracted {len(img_links)} image links from {link}")
-                    links.extend(img_links)
-                    continue
-                except Exception as e:
-                    print(f"Error extracting images from {link}: {e}")
-                            
         else:
+            _close_http_response(resolved)
             print(f"Unsupported link format: {link}")
-    
+
     return list(set(shared_links)) 
 
     

@@ -7,6 +7,7 @@ openai
 PyYAML
 dropbox
 beautifulsoup4
+playwright
 html2text
 schedule
 langchain

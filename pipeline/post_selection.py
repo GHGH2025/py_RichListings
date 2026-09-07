@@ -567,7 +567,12 @@ def select_passed_listings_for_post(
                 folder_slug = slugify_for_folder(addr, fallback=str(pl.id))
                 # IMPORTANT: pass only the slug; handle_Link prepends "/PropertyListings/"
                 print("folder_slug", folder_slug)
-                shared_links = handle_Link([src], folder=folder_slug)  # returns list, usually one folder link
+                shared_links = handle_Link(
+                    [src],
+                    folder=folder_slug,
+                    curate_media=True,
+                    listing_id=str(pl.id),
+                )  # returns list, usually one folder link
                 if shared_links:
                     # store the first link; it’s a shared link to the folder
                     db_updates["set__other_images_dropbox_link"] = shared_links[0]
