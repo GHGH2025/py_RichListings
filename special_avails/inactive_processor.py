@@ -41,6 +41,10 @@ WEBHOOK_URL = os.getenv(
     "https://workflow-automation.podio.com/catch/5z8e56v1258k2hj",
 ).strip()
 WEBHOOK_TIMEOUT = int(os.getenv("SPECIAL_AVAIL_INACTIVE_WEBHOOK_TIMEOUT", "20"))
+# Report-only by default (2026-09-07): compute who WOULD be hidden and record it,
+# but do NOT fire the Podio webhook or private the WP post. Flip to apply only once
+# the Podio writeback is deterministic (item_id, confirmed) and the business rule is set.
+APPLY_HIDE = os.getenv("SPECIAL_AVAIL_INACTIVE_APPLY", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _est_day_range_utc(day) -> Tuple[datetime, datetime]:
@@ -186,6 +190,8 @@ def _persist_job_run(result: Dict[str, Any]) -> None:
             webhook_failures=int(result.get("webhook_failures") or 0),
             wp_privates_ok=int(result.get("wp_privates_ok") or 0),
             wp_private_failures=int(result.get("wp_private_failures") or 0),
+            would_fire=list(result.get("would_fire") or []),
+            would_fire_count=int(result.get("would_fire_count") or 0),
             fired_addresses=list(result.get("fired_addresses") or []),
             wholesaler_summaries=list(result.get("wholesaler_summaries") or []),
             errors=list(result.get("errors") or []),
@@ -307,6 +313,8 @@ def run_special_avail_inactive_check(
     webhooks_fired = 0
     webhook_failures = 0
     wp_privates_ok = 0
+    would_fire = []
+    would_fire_count = 0
     wp_private_failures = 0
     properties_checked = 0
     wholesalers_checked = 0
@@ -451,8 +459,14 @@ def run_special_avail_inactive_check(
                     and tracker.webhook_fired_at is None
                     and tracker.status != "fired"
                 ):
-                    ok = _fire_inactive_webhook(addr)
-                    if ok:
+                    ok = (False if not APPLY_HIDE else _fire_inactive_webhook(addr))
+                    if not APPLY_HIDE:
+                        # report-only: record intent, do NOT webhook or private
+                        tracker.would_fire_at = datetime.utcnow()
+                        would_fire_count += 1
+                        would_fire.append({"address": addr, "podio_item_id": prop_id})
+                        wh_summary["would_fire"] = wh_summary.get("would_fire", 0) + 1
+                    elif ok:
                         tracker.webhook_fired_at = datetime.utcnow()
                         tracker.webhook_ok = True
                         tracker.status = "fired"
@@ -495,6 +509,8 @@ def run_special_avail_inactive_check(
         "webhook_failures": webhook_failures,
         "wp_privates_ok": wp_privates_ok,
         "wp_private_failures": wp_private_failures,
+        "would_fire": would_fire,
+        "would_fire_count": would_fire_count,
         "fired_addresses": fired_addresses,
         "wholesaler_summaries": wholesaler_summaries,
         "errors": errors,
