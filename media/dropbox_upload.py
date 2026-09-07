@@ -440,8 +440,16 @@ def handle_Link(links, folder = ""):
     for link in links:
 
         #resolve to final link
-        response = requests.get(link, allow_redirects=True, timeout=15)
-        link = response.url
+        original_link = link
+        try:
+            response = requests.get(link, allow_redirects=True, timeout=15)
+            link = response.url or link
+        except Exception as e:
+            # Keep the original short/CDN URL. The generic scraper can retry
+            # it with browser rendering; redirect resolution must not prevent
+            # arbitrary HTTP sources from being considered.
+            print(f"Could not resolve link {original_link}: {e}; using original URL")
+            link = original_link
         # print(f"Resolved link: {link}")
         if "drive.google.com/drive/folders/" in link:
             print(f"Processing Google Drive folder link: {link}")
@@ -492,12 +500,13 @@ def handle_Link(links, folder = ""):
                     
                     # Ensure extension is allowed
                     if ext not in ALLOWED_EXTS:
-                         # try to guess from CT if missing or weird
-                         if ct and "video" in ct:
-                              guessed = mimetypes.guess_extension(ct.split(";")[0].strip())
-                              if guessed in ALLOWED_EXTS:
-                                   file_name = os.path.splitext(file_name)[0] + guessed
-                                   ext = guessed
+                        # CDN/media URLs often have no file extension. Use
+                        # the probed Content-Type for both images and videos.
+                        if ct:
+                            guessed = mimetypes.guess_extension(ct.split(";")[0].strip())
+                            if guessed in ALLOWED_EXTS:
+                                file_name = os.path.splitext(file_name)[0] + guessed
+                                ext = guessed
 
                     if ext in ALLOWED_EXTS:
                         blocked = blocked_image_filename_reason(file_name)

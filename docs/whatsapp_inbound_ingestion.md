@@ -134,16 +134,23 @@ You do **not** need to manually push messages into the pipeline once tracking is
 
 ## Step 5 — Gallery links (Drive → Dropbox)
 
-If the WhatsApp post includes a **Google Drive folder** (or similar gallery) link in the text:
+If the WhatsApp post includes a **gallery or media link** in the text (Google Drive, Dropbox, Google Photos, a CDN, MLS, or another HTTP(S) host):
 
-1. AI / media steps can copy it into `other_images_source` (same as email).
-2. At **post selection**, the system may download that gallery and create `other_images_dropbox_link`.
+1. AI / media steps can copy it into `other_images_source` (same as email). The domain is not the allowlist; the URL is treated as a candidate based on its context.
+2. At **post selection**, the system resolves the URL, scrapes static/lazy/meta image URLs, and uses a rendered browser fallback for JavaScript galleries, then creates `other_images_dropbox_link`.
 3. That Dropbox link can appear in the final outbound WhatsApp caption (per ad rules).
 
 This only works if:
 
-- The link is extractable and accessible, and  
+- The link is extractable and accessible, and
 - The listing reaches post selection with `other_images_source` set.
+
+The rendered fallback requires Playwright Chromium on the worker host:
+
+```bash
+pip install -r requirements.txt
+python -m playwright install chromium
+```
 
 The **photo attached** to the outbound WhatsApp message still comes from `images` (often the S3 URL from the inbound photo), not from Dropbox.
 

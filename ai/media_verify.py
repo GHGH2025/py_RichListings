@@ -250,6 +250,8 @@ What to do:
 - From that section:
   • Collect direct image URLs(http/https) that depict the property, might present under image tag, extract exact urls.
   • If there is a single "more pictures", "click here for more pictures" / "view photos" / "gallery" / shared drive link, return it as other_images_source VERBATIM (exact URL as it appears in the content). If multiple, pick the best main gallery.
+  • Do not restrict this to known domains: CDN URLs, Google Photos short links, MLS hosts, and unknown HTTP(S) hosts are valid candidates when the surrounding text identifies them as this property's photos. Preserve the URL exactly; the media worker follows redirects and renders HTML when needed.
+  • If the listing has exactly one otherwise-unknown HTTP(S) URL, return it as a candidate; the media worker will open it and reject it if it contains no usable media.
 - Ignore unsubscribe, logos, social icons, QR-code tracking, signatures, or generic banners.
 - If nothing is found, return matched=false with empty images and other_images_source=null.
 Rules:
