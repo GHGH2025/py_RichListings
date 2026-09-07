@@ -44,6 +44,7 @@ class SpecialAvailInactiveTracker(Document):
     webhook_ok = BooleanField()
     wp_private_at = DateTimeField()
     wp_private_ok = BooleanField()
+    would_fire_at = DateTimeField()
     last_result = StringField()  # found | missed | skipped_no_email
 
     created_at = DateTimeField(default=datetime.utcnow)
@@ -83,6 +84,8 @@ class SpecialAvailInactiveJobRun(Document):
     wp_privates_ok = IntField(default=0)
     wp_private_failures = IntField(default=0)
 
+    would_fire = ListField(DictField(), default=list)
+    would_fire_count = IntField(default=0)
     fired_addresses = ListField(StringField(), default=list)
     wholesaler_summaries = ListField(DictField(), default=list)
     errors = ListField(StringField(), default=list)
