@@ -91,7 +91,7 @@ def get_podio_access_token(force_refresh: bool = False) -> str:
 
     data = resp.json()
     token = data.get("access_token")
-    print("token=====", token)  # kept as-is
+    # (token print removed - security: leaked Podio access token to logs)
     if not token:
         logging.error("Podio auth response missing access_token: %r", data)
         raise RuntimeError(f"Podio auth response missing access_token: {data}")
