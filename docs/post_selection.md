@@ -156,7 +156,7 @@ pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-`pip install playwright` does not install the browser binary. Google Photos albums are not guaranteed to expose a full gallery as `<img>` tags even after rendering.
+`pip install playwright` does not install the browser binary. Public Google Photos albums (`photos.app.goo.gl` / `photos.google.com/share`) are scraped from the share-page photo tokens, not from the tiny `<img>` thumbs.
 
 The Dropbox link is later included in WhatsApp ad copy (see [WhatsApp ad generation](./whatsapp_ad_generation.md)).
 
