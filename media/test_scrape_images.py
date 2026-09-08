@@ -1,7 +1,11 @@
 """Self-check for HTML image extraction. Run: python -m media.test_scrape_images"""
 
 from media.check_direct_link import guess_media_extension
-from media.scrape_images import extract_image_links, extract_image_links_from_html
+from media.scrape_images import (
+    extract_google_photos_links,
+    extract_image_links,
+    extract_image_links_from_html,
+)
 
 HTML = """
 <html>
@@ -29,6 +33,24 @@ def main() -> None:
     assert reused == links, reused
     assert guess_media_extension("image/jpeg") == ".jpg"
     assert guess_media_extension("image/jpeg; charset=binary") == ".jpg"
+
+    ghtml = """
+    <html>
+      <img src="https://lh3.googleusercontent.com/pw/AP1GczPhotoOne=w54-h72-no">
+      <img src="https://lh3.googleusercontent.com/a/ACg8ocAvatar=s10-p-no">
+      <script>
+        const x = "https:\\/\\/lh3.googleusercontent.com\\/pw\\/AP1GczPhotoTwo=w54-h72-no";
+        const y = "https://lh3.googleusercontent.com/pw/AP1GczPhotoOne=w600-h315-p-k";
+      </script>
+    </html>
+    """
+    gphotos = extract_google_photos_links(ghtml)
+    assert gphotos == [
+        "https://lh3.googleusercontent.com/pw/AP1GczPhotoOne=w2048",
+        "https://lh3.googleusercontent.com/pw/AP1GczPhotoTwo=w2048",
+    ], gphotos
+    from_album = extract_image_links_from_html(ghtml, "https://photos.app.goo.gl/abc")
+    assert from_album == gphotos, from_album
     print("ok")
 
 
