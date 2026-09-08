@@ -1,10 +1,18 @@
 import asyncio
+import re
 from urllib.parse import urljoin, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
 
 MAX_IMAGE_LINKS = 50
+GOOGLE_PHOTOS_SIZE = "w2048"
+
+# Album photo tokens in share-page HTML, including JS-escaped URLs.
+_GPHOTOS_PW_RE = re.compile(
+    r"https:\\?/\\?/lh3\.googleusercontent\.com\\?/pw\\?/([A-Za-z0-9_-]+)",
+    re.I,
+)
 
 SKIP_HOST_NEEDLES = (
     "s.rs6.net",
@@ -71,6 +79,24 @@ def _srcset_urls(value: str) -> list:
     return [part.strip().split(" ", 1)[0] for part in (value or "").split(",") if part.strip()]
 
 
+def extract_google_photos_links(html: str) -> list:
+    """Unique full-size URLs from a public Google Photos album page.
+
+    Share HTML already embeds lh3.googleusercontent.com/pw/ tokens. The visible
+    <img> tags are 54x72 thumbs; rewrite each token to a usable size.
+    """
+    if not html:
+        return []
+    out = []
+    seen = set()
+    for token in _GPHOTOS_PW_RE.findall(html):
+        if token in seen or len(out) >= MAX_IMAGE_LINKS:
+            continue
+        seen.add(token)
+        out.append(f"https://lh3.googleusercontent.com/pw/{token}={GOOGLE_PHOTOS_SIZE}")
+    return out
+
+
 def extract_image_links_from_html(html: str, base_url: str = "") -> list:
     """Extract image candidates from ordinary or JavaScript-rendered HTML.
 
@@ -80,6 +106,10 @@ def extract_image_links_from_html(html: str, base_url: str = "") -> list:
     """
     if not html:
         return []
+
+    gphotos = extract_google_photos_links(html)
+    if gphotos:
+        return gphotos
 
     soup = BeautifulSoup(html, "html.parser")
     image_links = []
