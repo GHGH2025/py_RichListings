@@ -11,6 +11,7 @@ from media.scrape_images import (
     gallery_image_urls,
     gallery_url_from_text,
     http_urls,
+    is_gallery_url,
     page_urls_from_text,
 )
 
@@ -77,6 +78,14 @@ def main() -> None:
         "https://drive.google.com/drive/folders/abc123XYZ0"
     ]
     assert gallery_url_from_text("https://example.com/listing") == "https://example.com/listing"
+    assert is_gallery_url(
+        "https://drive.google.com/drive/folders/1Y7cYtCxDfvZvC06jwOzcjtYPVr7rbU5u"
+    )
+    assert is_gallery_url("https://www.dropbox.com/sh/abc/photos")
+    assert is_gallery_url("https://photos.app.goo.gl/abc")
+    assert not is_gallery_url("https://example.com/listing")
+    assert not is_gallery_url("https://cdn.example/primary.jpg")
+    assert not is_gallery_url("https://dl.dropboxusercontent.com/s/xx/primary.jpg")
     mixed = page_urls_from_text(
         "https://seller.example/unsubscribe\n"
         "https://example.com/listing\n"

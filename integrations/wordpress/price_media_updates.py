@@ -8,6 +8,7 @@ from pipeline.address_utils import resolve_street_address
 from pipeline.publication_gate import apply_publication_gate
 from media.slugify import slugify_for_folder
 from media.dropbox_upload import handle_Link
+from media.scrape_images import is_gallery_url
 WP_TOKEN = os.getenv("WP_API_TOKEN")
 GET_URL  = "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1/getproperty"
 POST_URL = "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1/create"
@@ -305,7 +306,7 @@ def process_wp_price_and_media_updates(limit: int = 200) -> Dict[str, Any]:
                 else:
                     # generate from other_images_source if available
                     src = _trim(getattr(pl, "other_images_source", None))
-                    if src:
+                    if src and is_gallery_url(src):
                         try:
                             # Choose a readable folder slug: top-level address or complete_info.address or the id
                             addr_for_slug = _trim(resolve_street_address(pl)) \
