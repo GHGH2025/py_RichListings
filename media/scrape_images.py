@@ -1,12 +1,52 @@
 import asyncio
 import re
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
 
 MAX_IMAGE_LINKS = 50
 GOOGLE_PHOTOS_SIZE = "w2048"
+
+_DRIVE_FOLDER_RE = re.compile(
+    r"(?:^https?://)?(?:www\.)?drive\.google\.com/drive/folders/([a-zA-Z0-9_-]+)",
+    re.I,
+)
+_DRIVE_FILE_RE = re.compile(
+    r'data-id="([a-zA-Z0-9_-]{10,})".*?aria-label="([^"]+)"',
+    re.I,
+)
+_DRIVE_IMG_NAME_RE = re.compile(
+    r"\.(?:png|jpe?g|gif|webp|bmp|heic|tif{1,2})$",
+    re.I,
+)
+_HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
+_GALLERY_HOST_NEEDLES = (
+    "drive.google",
+    "dropbox.com",
+    "dl.dropboxusercontent.com",
+    "photos.google",
+    "photos.app.goo.gl",
+    "sharepoint",
+    "imgur.com",
+    "cloudinary",
+)
+# ponytail: try every listing URL; curation drops logos. Cap pages so a
+# 40-link newsletter cannot spawn 40 Playwright jobs.
+MAX_PAGE_SCRAPES = 8
+_SKIP_PAGE_NEEDLES = (
+    "unsubscribe",
+    "mailto:",
+    "view-in-browser",
+    "viewinbrowser",
+    "view%20in%20browser",
+    "facebook.com",
+    "twitter.com",
+    "linkedin.com",
+    "instagram.com",
+    "google-analytics.com",
+    "doubleclick.net",
+)
 
 # Album photo tokens in share-page HTML, including JS-escaped URLs.
 _GPHOTOS_PW_RE = re.compile(
@@ -77,6 +117,149 @@ def _add_candidate(out: list, seen: set, raw_url: str, base_url: str = "") -> No
 
 def _srcset_urls(value: str) -> list:
     return [part.strip().split(" ", 1)[0] for part in (value or "").split(",") if part.strip()]
+
+
+def http_urls(text: str) -> list:
+    seen = set()
+    urls = []
+    for match in _HTTP_URL_RE.finditer(text or ""):
+        url = match.group(0).rstrip(").,]>\"'*_")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
+def _is_skip_page_url(url: str) -> bool:
+    low = (url or "").lower()
+    if not low.startswith(("http://", "https://")):
+        return True
+    if any(needle in low for needle in _SKIP_PAGE_NEEDLES):
+        return True
+    host = (urlsplit(url).netloc or "").lower()
+    return any(needle in host for needle in SKIP_HOST_NEEDLES)
+
+
+def page_urls_from_text(text: str) -> list:
+    """Every http(s) URL in the listing text, minus unsubscribe/social/tracking.
+
+    Known photo hosts (Drive, Dropbox, Photos) are listed first. Image curation
+    later drops logos and flyers; this step does not judge photo-intent.
+    """
+    prefer = []
+    other = []
+    for url in http_urls(text):
+        if _is_skip_page_url(url):
+            continue
+        if any(needle in url.lower() for needle in _GALLERY_HOST_NEEDLES):
+            prefer.append(url)
+        else:
+            other.append(url)
+    return prefer + other
+
+
+def gallery_url_from_text(text: str) -> str:
+    """First usable page URL. Drive/Dropbox win if present; else any http(s) link."""
+    urls = page_urls_from_text(text)
+    return urls[0] if urls else ""
+
+
+def drive_folder_id(url: str) -> str:
+    """Folder id only — strip ?usp=sharing and other query junk."""
+    match = _DRIVE_FOLDER_RE.search(url or "")
+    return match.group(1) if match else ""
+
+
+def drive_folder_page_url(url: str) -> str:
+    """Canonical folder page. Keep resourcekey; drop sharing noise like usp=."""
+    folder_id = drive_folder_id(url)
+    if not folder_id:
+        return ""
+    qs = parse_qs(urlsplit(url).query, keep_blank_values=True)
+    keep = {}
+    if "resourcekey" in qs:
+        keep["resourcekey"] = qs["resourcekey"]
+    query = urlencode(keep, doseq=True)
+    base = f"https://drive.google.com/drive/folders/{folder_id}"
+    return f"{base}?{query}" if query else base
+
+
+def drive_folder_image_urls_from_html(html: str, cap: int = MAX_IMAGE_LINKS) -> list:
+    """uc?export=download URLs for files in a public Drive folder listing page."""
+    if not html:
+        return []
+    out = []
+    seen = set()
+    for file_id, name in _DRIVE_FILE_RE.findall(html):
+        if file_id in seen:
+            continue
+        label = (name or "").strip()
+        if "Shared folder" in label or label == "Shared":
+            continue
+        if not (
+            _DRIVE_IMG_NAME_RE.search(label)
+            or "image" in label.lower()
+            or "photo" in label.lower()
+            or "img" in label.lower()
+        ):
+            continue
+        seen.add(file_id)
+        out.append(f"https://drive.google.com/uc?export=download&id={file_id}")
+        if len(out) >= cap:
+            break
+    return out
+
+
+def drive_folder_image_urls(url: str, cap: int = MAX_IMAGE_LINKS, html: str | None = None) -> list:
+    folder_id = drive_folder_id(url)
+    if not folder_id:
+        return []
+    if html is None:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+        try:
+            response = requests.get(
+                drive_folder_page_url(url) or f"https://drive.google.com/drive/folders/{folder_id}",
+                headers=headers,
+                timeout=15,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+            html = response.text
+        except Exception as exc:
+            print(f"Drive folder scrape failed for {url}: {exc}")
+            return []
+    return drive_folder_image_urls_from_html(html, cap=cap)
+
+
+def gallery_image_urls(url: str, cap: int = 12, html: str | None = None) -> list:
+    """Direct image URLs from a gallery/folder link. Drive folders are not HTML <img> pages."""
+    if not (url or "").strip().lower().startswith(("http://", "https://")):
+        return []
+    if drive_folder_id(url):
+        return drive_folder_image_urls(url, cap=cap, html=html)
+    return extract_image_links(url, html=html)[:cap]
+
+
+def gallery_image_urls_from_text(text: str, cap: int = 12) -> list:
+    """Scrape images from every listing URL. Curation filters non-property photos."""
+    out = []
+    seen = set()
+    for url in page_urls_from_text(text)[:MAX_PAGE_SCRAPES]:
+        for img in gallery_image_urls(url, cap=cap):
+            if img in seen:
+                continue
+            seen.add(img)
+            out.append(img)
+            if len(out) >= cap:
+                return out
+    return out
 
 
 def extract_google_photos_links(html: str) -> list:

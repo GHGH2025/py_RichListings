@@ -18,6 +18,7 @@ from buyers.special_preferences import (
     finalize_extracted_special_preferences,
 )
 from ingestion.whatsapp import first_http_url, is_jg_equity_group
+from media.scrape_images import gallery_url_from_text
 
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -98,6 +99,7 @@ def _listing_schema() -> Dict[str, Any]:
         "bathrooms_full": {"type": ["number", "null"]},
         "bathrooms_half": {"type": ["number", "null"]},
         "living_area_sqft": {"type": ["number", "null"]},
+        "occupancy": {"type": ["string", "null"]},
         "year_built": {"type": ["number", "null"]},
         "is_condo": {"type": ["boolean", "null"]},
 
@@ -198,14 +200,15 @@ IMAGE_RULES_DEFAULT = """
   • "images": collect direct image URLs (http/https) that *visually depict the property* within that listing's section, might present under img tag.
     - If URLs are relative, include them as-is.
     - Cap to the first 12 unique URLs per listing.
-  • "other_images_source": return a single URL ONLY when the listing has an EXPLICIT photo/gallery link for that listing itself.
-     - Do not whitelist hosts. A CDN, short URL, Google Photos, MLS host, private marketing site, Google Drive, or Dropbox URL can all be valid.
-     - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
-         (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", or any URL presented as the property's photo source).
-     - Preserve the selected URL verbatim, including short-link form and query parameters. The media worker will follow redirects and inspect the destination HTML.
-    - Do NOT infer from surrounding prose like "link to all the pics" if the link itself is just a generic webpage/newsletter/property page URL.
-    - Do NOT use generic newsletter/web-view links, landing pages, "view in browser", unsubscribe, mailto, call/text links, or general property detail pages unless they explicitly indicate photos/gallery.
-    - If the photo intent is not explicit from the link/button text or URL itself, return null.
+  • "other_images_source": return a page/gallery URL from THIS listing so we can scrape photos later.
+     - Any http(s) URL on this listing is valid: Google Drive, Dropbox, Google Photos, MLS,
+         a seller website, a short link, or a generic property/listing page.
+     - Prefer a Drive / Dropbox / Photos folder when one is present. Otherwise use the listing's
+         main http(s) link. Do not require the words photos/gallery/pics in the URL.
+     - Preserve the selected URL verbatim, including query parameters.
+    - Skip only unsubscribe, mailto, "view in browser", social icons, and tracking links.
+    - Image curation later drops logos and non-property photos. Do not reject a URL just because
+         it might also have a logo.
 """.strip()
 
 IMAGE_RULES_NEAREST = """
@@ -218,14 +221,15 @@ IMAGE_RULES_NEAREST = """
       attach each image to the NEAREST property address in that section.
     - Ignore obvious non-property images (logos, social icons, tiny spacer GIFs, generic dividers/banners).
     - Cap to the first 12 unique URLs per listing.
-  • "other_images_source": return a single URL ONLY when the listing has an EXPLICIT photo/gallery link for that listing itself.
-     - Do not whitelist hosts. A CDN, short URL, Google Photos, MLS host, private marketing site, Google Drive, or Dropbox URL can all be valid.
-     - The link/button text or the URL itself must clearly indicate photos/images/gallery/pics
-         (examples: "View more photos", "More Pictures", "Photo Gallery", "Pics", or any URL presented as the property's photo source).
-     - Preserve the selected URL verbatim, including short-link form and query parameters. The media worker will follow redirects and inspect the destination HTML.
-    - Do NOT infer from surrounding prose like "link to all the pics" if the link itself is just a generic webpage/newsletter/property page URL.
-    - Do NOT use generic newsletter/web-view links, landing pages, "view in browser", unsubscribe, mailto, call/text links, or general property detail pages unless they explicitly indicate photos/gallery.
-    - If the photo intent is not explicit from the link/button text or URL itself, return null.
+  • "other_images_source": return a page/gallery URL from THIS listing so we can scrape photos later.
+     - Any http(s) URL on this listing is valid: Google Drive, Dropbox, Google Photos, MLS,
+         a seller website, a short link, or a generic property/listing page.
+     - Prefer a Drive / Dropbox / Photos folder when one is present. Otherwise use the listing's
+         main http(s) link. Do not require the words photos/gallery/pics in the URL.
+     - Preserve the selected URL verbatim, including query parameters.
+    - Skip only unsubscribe, mailto, "view in browser", social icons, and tracking links.
+    - Image curation later drops logos and non-property photos. Do not reject a URL just because
+         it might also have a logo.
 """.strip()
 
 
@@ -258,6 +262,10 @@ Rules:
 - DO NOT GUESS. Only return values explicitly present in the HTML (or safe numeric conversions/derivations described below).
 - If a field is missing/unclear, return null or "unknown" (for enums).
 - Normalize numbers: strip $ and commas. Convert acres->sqft (1 acre = 43560 sqft) when only acres given.
+- `bedrooms` may be 0 for a studio / efficiency / 0-bed condo. 0 is a real value, not missing.
+- `occupancy`: copy the source wording when present (e.g. Vacant, Occupied, Tenant occupied).
+- Keep Bed/Bath, living area, occupancy, HOA amount+period, STR allowed, rehab, and assessment
+  lines inside `complete_info` verbatim — do not drop them.
 - Compute `hoa_total_monthly_usd` = fee + assessments (if both present).
 - Compute convenience booleans (is_condo, is_land_only, under_900_sqft, land_under_5000_sqft, has_hoa, water_exception_applicable).
 - Water exception applies only for water_feature in {{"oceanfront", "ocean_access", "intracoastal"}}.
@@ -424,23 +432,33 @@ def _compose_raw_for_google(addr: str, city: str, state: str, zip_: str) -> str:
     parts = [p.strip() for p in [addr, city, state, zip_] if p and str(p).strip()]
     return ", ".join(parts + ["USA"]) if parts else ""
 
-def _jg_equity_gallery_fallback(source_email_doc) -> Optional[str]:
-    """
-    JG Equity WA deals are a Constant Contact link. If AI did not find a
-    gallery URL, use that page URL so post-selection can scrape images
-    after the listing passes address / dedup checks.
+def _gallery_url_fallback(source_email_doc) -> Optional[str]:
+    """If AI missed the gallery URL, take Drive/Dropbox/Photos from the body.
+
+    JG Equity WA deals are often a Constant Contact page with no gallery host
+    in the URL; fall back to the first http(s) link for that group only.
     """
     if not source_email_doc:
         return None
+    bodies = getattr(source_email_doc, "bodies", None)
+    text = ""
+    if bodies:
+        text = (
+            getattr(bodies, "html_ai", None)
+            or getattr(bodies, "html_full", None)
+            or getattr(bodies, "text", None)
+            or ""
+        )
+    found = gallery_url_from_text(text)
+    if found:
+        return found
     if getattr(source_email_doc, "account_label", "") != "whatsapp":
         return None
     subject = (getattr(source_email_doc, "subject", None) or "").strip()
     group = subject[3:].strip() if subject.upper().startswith("WA ") else subject
     if not (is_jg_equity_group(group) or is_jg_equity_group(subject)):
         return None
-    bodies = getattr(source_email_doc, "bodies", None)
-    text = (getattr(bodies, "text", None) or "") if bodies else ""
-    return first_http_url(text) or None
+    return first_http_url(getattr(bodies, "text", None) or "" if bodies else "") or None
 
 
 def _sender_email_safe(source_email_doc) -> str:
@@ -621,7 +639,7 @@ def upsert_parsed_listings_from_html(
                 "set__images": _clean_images(lst.get("images")),
                 "set__other_images_source": (
                     (lst.get("other_images_source") or "").strip()
-                    or _jg_equity_gallery_fallback(source_email_doc)
+                    or _gallery_url_fallback(source_email_doc)
                     or None
                 ),
                 "set__complete_info": lst,

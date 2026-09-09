@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Any
 
 from db.mongo_engine_conn import init_db
 from models import ParsedListing, DailyBaseCount
-from media.dropbox_upload import handle_Link
+from media.dropbox_upload import first_image_temp_link, handle_Link
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -561,6 +561,7 @@ def select_passed_listings_for_post(
             already = (pl.other_images_dropbox_link or "").strip()
             print("src", src)
             print("already", already)
+            folder_slug = None
             if (not skip_dropbox) and src and not already:
                 # pick address from top-level field, or from the complete_info blob, or fallback to id
                 addr = (pl.address or (pl.complete_info or {}).get("address") or str(pl.id)).strip()
@@ -576,6 +577,19 @@ def select_passed_listings_for_post(
                 if shared_links:
                     # store the first link; it’s a shared link to the folder
                     db_updates["set__other_images_dropbox_link"] = shared_links[0]
+
+            if not (pl.images or []):
+                has_db = bool(db_updates.get("set__other_images_dropbox_link") or already)
+                if has_db:
+                    if not folder_slug:
+                        addr = (pl.address or (pl.complete_info or {}).get("address") or str(pl.id)).strip()
+                        folder_slug = slugify_for_folder(addr, fallback=str(pl.id))
+                    temp = first_image_temp_link(f"/PropertyListings/{folder_slug}")
+                    if temp:
+                        from ai.media_verify import _fetch_forbidden_then_upload, _is_our_s3_url
+                        cover = _fetch_forbidden_then_upload(temp)
+                        if cover and _is_our_s3_url(cover):
+                            db_updates["set__images"] = [cover]
         except Exception as e:
             print(f"dropbox_upload_error: {e}")
             # Don’t block posting if Dropbox fails

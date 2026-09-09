@@ -627,6 +627,31 @@ def process_listings_ready_for_image_processing(
             images = [u.strip() for u in images if isinstance(u, str) and u.strip()]
 
             if not images:
+                from media.scrape_images import (
+                    gallery_image_urls,
+                    gallery_image_urls_from_text,
+                )
+                from ai.media_verify import _usable_scraped_images
+
+                src = (getattr(pl, "other_images_source", None) or "").strip()
+                if src:
+                    images = _usable_scraped_images(gallery_image_urls(src))
+                if not images:
+                    se = getattr(pl, "source_email", None)
+                    bodies = getattr(se, "bodies", None) if se else None
+                    text = ""
+                    if bodies:
+                        text = (
+                            getattr(bodies, "html_ai", None)
+                            or getattr(bodies, "html_full", None)
+                            or getattr(bodies, "text", None)
+                            or ""
+                        )
+                    if text.strip():
+                        images = _usable_scraped_images(gallery_image_urls_from_text(text))
+                images = [u.strip() for u in images if isinstance(u, str) and u.strip()]
+
+            if not images:
                 # Nothing to curate — move forward
                 pl.update(
                     set__status="ready_to_post",

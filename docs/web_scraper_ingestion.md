@@ -72,9 +72,12 @@ cannot be identified.
 
 ## Operations
 
-Run the scraper scheduler headlessly on EC2. The Python server runner already
-consumes pending filtered web listings once per minute through
-`process_pending_scraped_listings`.
+The scheduler runs headlessly on EC2 `rich-ai` as systemd
+`richie-web-scraper.service` (`/home/ubuntu/apps/web_scraper`). Host, logs,
+and health-check commands: [docs/ec2-notes/scraper.md](../../docs/ec2-notes/scraper.md).
+
+The Python server runner already consumes pending filtered web listings once
+per minute through `process_pending_scraped_listings`.
 
 Never run the Podio direct-wholesaler worker against production credentials
 until the email-only Wholesalers app creation behavior has been approved.

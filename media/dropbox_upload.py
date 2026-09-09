@@ -6,8 +6,8 @@ import re
 from dotenv import load_dotenv
 import shutil
 from urllib.parse import urlsplit
-from dropbox.files import WriteMode
-from media.scrape_images import extract_image_links
+from dropbox.files import FileMetadata, FolderMetadata, WriteMode
+from media.scrape_images import drive_folder_id, drive_folder_page_url, extract_image_links
 from media.check_direct_link import (
     safe_filename_from_url,
     guess_media_extension,
@@ -406,6 +406,45 @@ def upload_to_dropbox(
     return create_folder_shared_link(dropbox_folder)
 
 
+_COVER_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+
+def first_image_temp_link(dropbox_folder: str, _depth: int = 0) -> str | None:
+    """Direct temporary URL for the first image already uploaded to this folder."""
+    if not dropbox_folder:
+        return None
+    try:
+        result = dbx.files_list_folder(dropbox_folder)
+    except Exception as e:
+        print(f"Dropbox list folder failed for {dropbox_folder}: {e}")
+        return None
+    nested = []
+    for entry in getattr(result, "entries", []) or []:
+        path = getattr(entry, "path_display", None) or getattr(entry, "path_lower", None)
+        if isinstance(entry, FolderMetadata) and path:
+            nested.append(path)
+            continue
+        if not isinstance(entry, FileMetadata):
+            continue
+        name = (getattr(entry, "name", None) or "").strip()
+        ext = os.path.splitext(name.lower())[1]
+        if not path or ext not in _COVER_IMAGE_EXTS:
+            continue
+        try:
+            return dbx.files_get_temporary_link(path).link
+        except Exception as e:
+            print(f"Dropbox temp link failed for {path}: {e}")
+            continue
+    # ponytail: one nested folder is enough for typical Drive "Photos/" albums
+    if _depth >= 1:
+        return None
+    for child in nested:
+        found = first_image_temp_link(child, _depth=_depth + 1)
+        if found:
+            return found
+    return None
+
+
 def create_folder_shared_link(dropbox_folder: str):
    
     try:
@@ -447,8 +486,8 @@ def create_folder_shared_link(dropbox_folder: str):
 
 def get_drive_folder_files(drive_folder_link):
 
-    folder_id = drive_folder_link.split("/")[-1]
-    url = f"https://drive.google.com/drive/folders/{folder_id}"
+    folder_id = drive_folder_id(drive_folder_link) or (drive_folder_link or "").split("/")[-1].split("?")[0]
+    url = drive_folder_page_url(drive_folder_link) or f"https://drive.google.com/drive/folders/{folder_id}"
     response = requests.get(url)
 
     if response.status_code != 200:
@@ -685,12 +724,15 @@ def handle_Link(links, folder="", curate_media: bool = False, listing_id: str | 
             _close_http_response(resolved)
             resolved = None
             link = original_link
-        if "drive.google.com/drive/folders/" in link:
+        drive_url = original_link if drive_folder_id(original_link) else (
+            link if drive_folder_id(link) else ""
+        )
+        if drive_url:
             _close_http_response(resolved)
-            print(f"Processing Google Drive folder link: {link}")
+            print(f"Processing Google Drive folder link: {drive_url}")
             try:
                 shared_link = upload_drive_folder_to_dropbox(
-                    link,
+                    drive_url,
                     dropbox_folder,
                     curate_media=curate_media,
                     listing_id=listing_id,
@@ -698,7 +740,7 @@ def handle_Link(links, folder="", curate_media: bool = False, listing_id: str | 
                 if shared_link:
                     shared_links.append(shared_link)
             except Exception as e:
-                print(f"Error processing Google Drive link {link}: {e}")
+                print(f"Error processing Google Drive link {drive_url}: {e}")
 
         elif re.search(r"(?:^https?://)?(?:www\.)?(?:dropbox\.com|dl\.dropboxusercontent\.com)/", link):
             _close_http_response(resolved)
