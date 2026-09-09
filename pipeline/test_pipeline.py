@@ -45,6 +45,7 @@ from integrations.wordpress.sync_poster import _build_post_body
 from config.runtime import get_whatsapp_send_mode, get_group_jids_for_account
 from core.paths import data_path
 from media.dropbox_upload import handle_Link
+from media.scrape_images import is_gallery_url
 from media.slugify import slugify_for_folder
 from whatsapp.sender import TEAM_NUMBERS, _first_image_url
 
@@ -371,9 +372,9 @@ def _ensure_dropbox_links(msg_id: str) -> Dict[str, Any]:
             entry["status"] = "already_had_link"
             results.append(entry)
             continue
-        if not src:
+        if not src or not is_gallery_url(src):
             skipped_no_source += 1
-            entry["status"] = "no_source"
+            entry["status"] = "no_source" if not src else "not_gallery"
             results.append(entry)
             continue
 

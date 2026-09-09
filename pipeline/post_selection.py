@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Any
 from db.mongo_engine_conn import init_db
 from models import ParsedListing, DailyBaseCount
 from media.dropbox_upload import first_image_temp_link, handle_Link
+from media.scrape_images import is_gallery_url
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -562,7 +563,7 @@ def select_passed_listings_for_post(
             print("src", src)
             print("already", already)
             folder_slug = None
-            if (not skip_dropbox) and src and not already:
+            if (not skip_dropbox) and is_gallery_url(src) and not already:
                 # pick address from top-level field, or from the complete_info blob, or fallback to id
                 addr = (pl.address or (pl.complete_info or {}).get("address") or str(pl.id)).strip()
                 folder_slug = slugify_for_folder(addr, fallback=str(pl.id))

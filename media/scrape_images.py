@@ -165,6 +165,17 @@ def gallery_url_from_text(text: str) -> str:
     return urls[0] if urls else ""
 
 
+def is_gallery_url(url: str) -> bool:
+    """True only for album/folder hosts. Listing pages and lone image files are not galleries."""
+    raw = (url or "").strip()
+    if not raw.lower().startswith(("http://", "https://")):
+        return False
+    if _DRIVE_IMG_NAME_RE.search(urlsplit(raw).path):
+        return False
+    low = raw.lower()
+    return any(needle in low for needle in _GALLERY_HOST_NEEDLES)
+
+
 def drive_folder_id(url: str) -> str:
     """Folder id only — strip ?usp=sharing and other query junk."""
     match = _DRIVE_FOLDER_RE.search(url or "")
