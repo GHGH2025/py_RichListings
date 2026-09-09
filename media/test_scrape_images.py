@@ -2,9 +2,16 @@
 
 from media.check_direct_link import guess_media_extension
 from media.scrape_images import (
+    drive_folder_id,
+    drive_folder_image_urls,
+    drive_folder_page_url,
     extract_google_photos_links,
     extract_image_links,
     extract_image_links_from_html,
+    gallery_image_urls,
+    gallery_url_from_text,
+    http_urls,
+    page_urls_from_text,
 )
 
 HTML = """
@@ -51,6 +58,48 @@ def main() -> None:
     ], gphotos
     from_album = extract_image_links_from_html(ghtml, "https://photos.app.goo.gl/abc")
     assert from_album == gphotos, from_album
+
+    wa_text = (
+        "Photo link:\n"
+        "https://drive.google.com/drive/folders/1Y7cYtCxDfvZvC06jwOzcjtYPVr7rbU5u?usp=sharing"
+    )
+    drive = gallery_url_from_text(wa_text)
+    assert drive.startswith("https://drive.google.com/drive/folders/"), drive
+    assert drive_folder_id(drive) == "1Y7cYtCxDfvZvC06jwOzcjtYPVr7rbU5u", drive_folder_id(drive)
+    assert drive_folder_page_url(
+        "https://drive.google.com/drive/folders/1Y7cYtCxDfvZvC06jwOzcjtYPVr7rbU5u"
+        "?usp=sharing&resourcekey=0-abc"
+    ) == (
+        "https://drive.google.com/drive/folders/1Y7cYtCxDfvZvC06jwOzcjtYPVr7rbU5u"
+        "?resourcekey=0-abc"
+    )
+    assert http_urls("*https://drive.google.com/drive/folders/abc123XYZ0*") == [
+        "https://drive.google.com/drive/folders/abc123XYZ0"
+    ]
+    assert gallery_url_from_text("https://example.com/listing") == "https://example.com/listing"
+    mixed = page_urls_from_text(
+        "https://seller.example/unsubscribe\n"
+        "https://example.com/listing\n"
+        "https://drive.google.com/drive/folders/1Y7cYtCxDfvZvC06jwOzcjtYPVr7rbU5u?usp=sharing"
+    )
+    assert mixed[0].startswith("https://drive.google.com/drive/folders/"), mixed
+    assert "https://example.com/listing" in mixed
+    assert all("unsubscribe" not in u for u in mixed)
+
+    drive_html = (
+        '<div data-id="abc123XYZ0" aria-label="living.jpg"></div>'
+        '<div data-id="folder99999" aria-label="Shared folder"></div>'
+        '<div data-id="notes00000" aria-label="notes.pdf"></div>'
+    )
+    drive_imgs = drive_folder_image_urls(
+        "https://drive.google.com/drive/folders/1Y7cYtCxDfvZvC06jwOzcjtYPVr7rbU5u?usp=sharing",
+        html=drive_html,
+    )
+    assert drive_imgs == ["https://drive.google.com/uc?export=download&id=abc123XYZ0"], drive_imgs
+    assert gallery_image_urls(
+        "https://drive.google.com/drive/folders/1Y7cYtCxDfvZvC06jwOzcjtYPVr7rbU5u?usp=sharing",
+        html=drive_html,
+    ) == drive_imgs
     print("ok")
 
 

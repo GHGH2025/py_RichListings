@@ -118,6 +118,7 @@ TASK:
   - Short, sales-friendly lines/bullets.
 - Do NOT include any disallowed items from the rules (strip them if present in the source).
 - The only allowed URL is other_images_dropbox_link. If it is missing, omit the pictures line. Never use any other URL.
+- If complete_info has bedrooms (including 0), bathrooms, living_area_sqft, occupancy, or HOA fields, those facts must appear in the post.
 - Use US dollar formatting for price (commas, no cents).
 - Return ONLY JSON: {{"post_content": "..."}}
 """

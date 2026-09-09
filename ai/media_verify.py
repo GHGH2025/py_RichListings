@@ -7,6 +7,7 @@ from models import ParsedListing, FilteredListingEmail
 from mongoengine.queryset.visitor import Q
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime as _dt
+from media.scrape_images import gallery_image_urls_from_text, gallery_url_from_text
 
 # Reuse your env + client
 import os
@@ -160,36 +161,31 @@ def _image_mirror_updates(original, mirrored) -> dict:
     return updates
 
 
+def _usable_scraped_images(urls: list[str]) -> list[str]:
+    """Keep only gallery scrapes that remirrored to our S3.
+
+    Drive uc?export=download often returns an HTML interstitial. Saving those
+    URLs makes images look filled, so post-selection skips the Dropbox cover.
+    """
+    out = []
+    for url in _fix_forbidden_images(urls):
+        if _is_our_s3_url(url):
+            out.append(url)
+    return out
+
+
 # ---------- utils ----------
 def _now():
     return _dt.utcnow()
 
 _IMG_EXT_RE = re.compile(r"\.(?:png|jpe?g|gif|webp|bmp|tiff?)($|\?)", re.I)
-_HTTP_RE    = re.compile(r"https?://[^\s)>\]}\"']+", re.I)
 
 def _looks_like_image_url(u: str) -> bool:
     return bool(_IMG_EXT_RE.search(u))
 
 def _first_url_by_keywords(text: str) -> Optional[str]:
-    """
-    Fallback for 'more pictures' link when AI can't find it:
-    looks for common photo-hosting anchors.
-    """
-    candidates = _HTTP_RE.findall(text or "")
-    if not candidates:
-        return None
-    prefer = []
-    okay = []
-    for u in candidates:
-        low = u.lower()
-        if any(k in low for k in [
-            "drive.google", "dropbox.com", "photos.google", "sharepoint",
-            "imgur.com", "cloudinary", "file", "gallery", "images", "photos"
-        ]):
-            prefer.append(u)
-        elif any(k in low for k in ["view", "pictures", "photos", "album", "gallery"]):
-            okay.append(u)
-    return (prefer[0] if prefer else (okay[0] if okay else None))
+    """Fallback for a Drive/Dropbox/Photos gallery URL when AI misses it."""
+    return gallery_url_from_text(text) or None
 
 # def _clean_images(arr: Optional[List[str]]) -> List[str]:
 #     if not arr:
@@ -249,8 +245,7 @@ What to do:
 - Scan the listing and use the provided ADDRESS (street + city [+ state/zip may appear]) to locate the exact section for that listing.
 - From that section:
   • Collect direct image URLs(http/https) that depict the property, might present under image tag, extract exact urls.
-  • If there is a single "more pictures", "click here for more pictures" / "view photos" / "gallery" / shared drive link, return it as other_images_source VERBATIM (exact URL as it appears in the content). If multiple, pick the best main gallery.
-  • Do not restrict this to known domains: CDN URLs, Google Photos short links, MLS hosts, and unknown HTTP(S) hosts are valid candidates when the surrounding text identifies them as this property's photos. Preserve the URL exactly; the media worker follows redirects and renders HTML when needed. Do not return a generic listing/newsletter/property-page URL just because it is the only HTTP(S) link.
+  • Return other_images_source as any http(s) page/folder URL on this listing (Drive, Dropbox, Photos, MLS, seller site, or a generic listing page). Prefer Drive/Dropbox/Photos when present. Do not require the words photos/gallery in the URL. Skip only unsubscribe, mailto, view-in-browser, and social/tracking links. Image curation later drops logos.
 - Ignore unsubscribe, logos, social icons, QR-code tracking, signatures, or generic banners.
 - If nothing is found, return matched=false with empty images and other_images_source=null.
 Rules:
@@ -478,12 +473,29 @@ def verify_and_fill_missing_media_for_not_processed(
                 if not has_imgs:
                     ai_images = _clean_images(ai.get("images", []))
                 if not has_other:
-                    ai_other = ai.get("other_images_source")
+                    ai_other = ai.get("other_images_source") or _first_url_by_keywords(html_ai)
+
+            if not has_other and not ai_other:
+                ai_other = _first_url_by_keywords(html_ai)
+
+            # No attached photo: scrape every listing URL; curation filters later.
+            if (not has_imgs) and not ai_images:
+                ai_images = _clean_images(gallery_image_urls_from_text(html_ai))
+                if not ai_images:
+                    gallery = (
+                        ai_other
+                        or getattr(pl, "other_images_source", None)
+                        or ""
+                    ).strip()
+                    if gallery:
+                        from media.scrape_images import gallery_image_urls
+                        ai_images = _clean_images(gallery_image_urls(gallery))
 
             updates = {}
             if (not has_imgs) and ai_images:
-                safe_imgs = _fix_forbidden_images(ai_images)
-                updates.update(_image_mirror_updates([], safe_imgs))
+                safe_imgs = _usable_scraped_images(ai_images)
+                if safe_imgs:
+                    updates.update(_image_mirror_updates([], safe_imgs))
             if (not has_other) and ai_other:
                 updates["set__other_images_source"] = ai_other
 

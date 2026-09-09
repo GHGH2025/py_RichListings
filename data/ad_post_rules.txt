@@ -9,6 +9,14 @@ Must do:
 - If a "wholesaler hint" is provided, use it only to guide tone/style. DO NOT print the name.
 - Factual Property Details (STRICT REQUIREMENT: Include if, and ONLY if, explicit evidence is found in the source text):
   - You MUST identify and include ANY factual data, features, amenities, or conditions of the property clearly stated in the provided content (e.g., price $1M+, 55+ mentioned, wood/frame construction, water/flood damage, pool, garage, ocean access, full rehab needed, NO HOA, tear-down, mobile home, etc.).
+  - When present in complete_info or the source text, you MUST include these as their own short bullets (do not skip them to keep the post short):
+    - Beds / baths (0 bed or studio is a real fact — write it)
+    - Living area / sqft
+    - Occupancy (Vacant, Occupied, tenant, etc.)
+    - HOA amount and period (monthly/quarterly/annual) and what the HOA covers
+    - STR / short-term rental allowed or restricted
+    - Rehab / condition (light/cosmetic, full rehab, etc.)
+    - Special assessment notes, including when the seller is covering the assessment
   - Extract and include all important real facts about the property so that no factual data is left or missed in the final content from the provided content.
   - Comparables / Comps: If the source text explicitly includes comparables (e.g., "Comparables:", "Comps:", or a list of nearby sold/listed properties with addresses and prices), you MUST include them in the post. Format each comp as a bullet or short line showing the address, bed/bath, size, and sold/listed price. Do NOT invent or add comparables that are not explicitly stated in the source data.
   - ANTI-HALLUCINATION RULE: It is STRICTLY FORBIDDEN to include any feature, condition, or detail if it is not explicitly mentioned or clearly implied by the source data. Do not guess, assume, or randomly apply features. Check the content thoroughly first, then only apply matching facts.

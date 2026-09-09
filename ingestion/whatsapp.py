@@ -12,6 +12,7 @@ import emoji
 import requests
 
 from ingestion.email_extract import _strip_for_ai
+from media.scrape_images import http_urls
 from models import (
     Bodies,
     FilteredListingEmail,
@@ -29,7 +30,6 @@ ACCOUNT_LABEL = "whatsapp"
 # Image scrape / Dropbox happens later, and only if the listing is not a duplicate.
 JG_EQUITY_GROUP_NAME = "jg equity direct deals"
 
-_HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
 DEAL_HOST_NEEDLES = ("conta.cc", "constantcontact.com", "rs6.net", "ccsend.com")
 _FETCH_HEADERS = {
     "User-Agent": (
@@ -112,18 +112,6 @@ def _media_urls(msg: WhatsappTrackedMessage) -> List[str]:
 
 def is_jg_equity_group(name: str) -> bool:
     return JG_EQUITY_GROUP_NAME in (name or "").strip().lower()
-
-
-def http_urls(text: str) -> List[str]:
-    seen = set()
-    urls: List[str] = []
-    for match in _HTTP_URL_RE.finditer(text or ""):
-        url = match.group(0).rstrip(").,]>\"'")
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        urls.append(url)
-    return urls
 
 
 def first_http_url(text: str) -> str:
