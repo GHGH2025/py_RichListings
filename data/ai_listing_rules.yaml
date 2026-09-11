@@ -17,11 +17,11 @@ rules:
 
   - id: R2
     text: >
-      No 2-bed property over $150,000 in the rest of Florida unless they are on the water.
+      No 2-bed property over $179,000 in the rest of Florida unless they are on the water.
 
   - id: R3
     text: >
-      No condos over $250,000, unless they are on the Ocean, have Ocean Access, or are on the Intracoastal Waterway.
+      No condos over $279,000, unless they are on the Ocean, have Ocean Access, or are on the Intracoastal Waterway.
 
   - id: R4
     text: >
