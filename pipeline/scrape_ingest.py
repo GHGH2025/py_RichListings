@@ -300,7 +300,7 @@ def _enqueue_one(fl: FilteredListing) -> Optional[str]:
         "set__direct_wholeseller": "not_processed" if blob.get("agent_email") else "no_agent_email",
         "set__input_source": "web",
         "set__source_website": source,
-        "set__web_publish_enabled": False,
+        "set__web_publish_enabled": True,
         "set__updated_at": _now(),
         "set_on_insert__created_at": _now(),
     }
