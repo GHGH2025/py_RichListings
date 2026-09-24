@@ -17,7 +17,7 @@ rules:
 
   - id: R2
     text: >
-      No 2-bed property over $179,000 in the rest of Florida unless they are on the water.
+      No 2-bed property over $199,000 in the rest of Florida unless they are on the water.
 
   - id: R3
     text: >
