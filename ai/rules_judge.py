@@ -117,7 +117,7 @@
 #     print(">>",human_prompt)
 
 #     # === CALL LLM (model name can come from env; default matches your test) ===
-#     llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5.1"))
+#     llm = ChatOpenAI(model="gpt-6-luna")
 
 #     # resp = llm([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
 
@@ -269,7 +269,7 @@ Respond ONLY with the JSON object matching the schema. Do not include any text, 
 """.strip()
 
 
-    model_name = os.getenv("OPENAI_MODEL", "gpt-5")
+    model_name = "gpt-6-luna"
 
     from observability.openai_usage import tracked_chat_create
 

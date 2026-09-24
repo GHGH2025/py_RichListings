@@ -7,7 +7,7 @@ from models import ParsedListing
 from pipeline.address_utils import resolve_street_address
 import logging
 
-OPENAI_MODEL = "gpt-5.6-luna"
+OPENAI_MODEL = "gpt-6-luna"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def _response_format():

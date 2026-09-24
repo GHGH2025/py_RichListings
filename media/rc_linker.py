@@ -20,7 +20,7 @@ from integrations.ringcentral_auth import rc_request, RC_API_BASE
 
 # === ENV ===
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = "gpt-6-luna"
 
 WP_TOKEN = os.getenv("WP_API_TOKEN")
 WP_GET_URL  = "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1/getproperty"
@@ -199,7 +199,6 @@ def ai_extract(dialog: List[Dict[str, str]], model: Optional[str] = None) -> Dic
     user_payload = {"dialog": dialog}
     chat = oai.chat.completions.create(
         model=model,
-        temperature=0,
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": _EXTRACT_SYS},
@@ -226,11 +225,11 @@ If target is partial (number or number+street), be conservative but allow matche
 """
 
 def ai_verify_same(target: str, wp_address: str, model: Optional[str] = None) -> Dict[str, Any]:
-    model = model or "gpt-4o-mini"
+    model = model or OPENAI_MODEL
     u = f"TARGET:\n{target or ''}\n\nWP_ADDRESS:\n{wp_address or ''}\n\nReturn ONLY JSON."
     try:
         chat = oai.chat.completions.create(
-            model=model, temperature=0, response_format={"type": "json_object"},
+            model=model, response_format={"type": "json_object"},
             messages=[{"role": "system", "content": _VERIFY_SYS}, {"role": "user", "content": u}]
         )
         return json.loads(chat.choices[0].message.content)
@@ -367,7 +366,6 @@ def _ai_guard_media_url(dialog: List[Dict[str, str]], url: str, model: Optional[
         payload = {"url": url, "recent_dialog": dialog}
         chat = oai.chat.completions.create(
             model=model,
-            temperature=0,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": _URL_GUARD_SYS},
@@ -900,7 +898,7 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
 
 # # === ENV ===
 # OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-# OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# OPENAI_MODEL = "gpt-6-luna"
 
 # WP_TOKEN = os.getenv("WP_API_TOKEN")
 # WP_GET_URL  = "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1/getproperty"
@@ -1136,7 +1134,7 @@ async def rc_media_linker(request: Request) -> Dict[str, Any]:
 # """
 
 # def ai_verify_same(target: str, wp_address: str, model: Optional[str] = None) -> Dict[str, Any]:
-#     model = model or "gpt-4o-mini"
+#     model = model or OPENAI_MODEL
 #     u = f"TARGET:\n{target or ''}\n\nWP_ADDRESS:\n{wp_address or ''}\n\nReturn ONLY JSON."
 #     try:
 #         chat = oai.chat.completions.create(

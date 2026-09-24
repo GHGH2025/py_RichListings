@@ -10,7 +10,7 @@ import os
 from typing import Dict, Optional, Tuple
 
 # YYYY-MM-DD — bump when you edit MODEL_RATES
-RATES_AS_OF = "2026-07-31"
+RATES_AS_OF = "2026-09-24"
 
 # model -> (input_per_1m, output_per_1m, cached_input_per_1m)
 MODEL_RATES: Dict[str, Tuple[float, float, float]] = {
@@ -23,6 +23,7 @@ MODEL_RATES: Dict[str, Tuple[float, float, float]] = {
     "gpt-5.4-mini": (0.75, 4.50, 0.075),
     "gpt-5.4-nano": (0.20, 1.25, 0.02),
     "gpt-5.6-luna": (0.20, 1.20, 0.02),
+    "gpt-6-luna": (0.10, 0.50, 0.01),
     "gpt-5.6-terra": (2.00, 12.00, 0.20),
     "gpt-5.6-sol": (5.00, 30.00, 0.50),
 }

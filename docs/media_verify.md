@@ -73,7 +73,7 @@ If the email body is empty or AI finds nothing, the listing is still marked `ver
 
 ## OpenAI media extraction
 
-**Model:** `OPENAI_MODEL` env var (default `gpt-4.1`)
+**Model:** `gpt-6-luna`
 
 The model receives:
 

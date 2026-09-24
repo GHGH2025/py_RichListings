@@ -21,7 +21,7 @@ from services.special_avail_list_service import (
     get_wholesaler_podio_bucket,
 )
 
-MATCH_MODEL = os.getenv("OPENAI_MATCH_MODEL", "gpt-4.1-mini")
+MATCH_MODEL = "gpt-6-luna"
 MATCH_WEBHOOK_URL = os.getenv("SPECIAL_AVAIL_MATCH_WEBHOOK_URL", "").strip()
 
 client = OpenAI()
@@ -1026,13 +1026,14 @@ def ai_match_active_to_unique(
         ),
     }
 
-    # gpt-5* models often reject temperature; omit it for that family
+    # gpt-5* and gpt-6* reject temperature unless reasoning effort is none
     kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [system_msg, user_msg],
         "response_format": {"type": "json_object"},
     }
-    if not str(model or "").lower().startswith("gpt-5"):
+    _model_name = str(model or "").lower()
+    if not (_model_name.startswith("gpt-5") or _model_name.startswith("gpt-6")):
         kwargs["temperature"] = 0
 
     resp = client.chat.completions.create(**kwargs)
@@ -1255,7 +1256,7 @@ def process_one_special_avail_matching() -> Dict[str, Any]:
 
 MANNY_WEBHOOK_URL = os.getenv("MANNY_MATCH_WEBHOOK_URL", "").strip()  # or pass as arg
 # You will pass Manny's wholesaler Podio item IDs as a parameter.
-MANNY_MATCH_MODEL = "gpt-5.6-luna"
+MANNY_MATCH_MODEL = "gpt-6-luna"
 
 def _to_est_date(dt: datetime) -> date:
     """
@@ -1411,7 +1412,8 @@ def ai_match_address_in_sheet(
         "messages": [system_msg, user_msg],
         "response_format": {"type": "json_object"},
     }
-    if not str(model or "").lower().startswith("gpt-5"):
+    _model_name = str(model or "").lower()
+    if not (_model_name.startswith("gpt-5") or _model_name.startswith("gpt-6")):
         kwargs["temperature"] = 0
 
     resp = client.chat.completions.create(**kwargs)

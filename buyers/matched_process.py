@@ -23,7 +23,7 @@ BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL",
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-DEFAULT_BUYER_DESC_MODEL = "gpt-4.1"  # or reuse OPENAI_MODEL
+DEFAULT_BUYER_DESC_MODEL = "gpt-6-luna"
 
 BUYER_TEMPLATE_PATH = str(
     resolve_project_path(os.getenv("BUYER_TEMPLATE_PATH", "data/buyer_notification_templates.json"))
@@ -189,7 +189,6 @@ def ai_build_buyer_sms_description_for_listing(
             {"role": "system", "content": _SYSTEM_PROMPT_SMS},
             {"role": "user",   "content": msg},
         ],
-        temperature=0,
         response_format={"type": "json_object"},
     )
 
@@ -219,7 +218,6 @@ def ai_build_buyer_email_description_for_listing(
             {"role": "system", "content": _SYSTEM_PROMPT_EMAIL},
             {"role": "user",   "content": msg},
         ],
-        temperature=0,
         response_format={"type": "json_object"},
     )
 

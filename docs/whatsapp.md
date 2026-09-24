@@ -196,7 +196,7 @@ Both Python worker and Node gateway must be running for messages to go out.
 | `TEAM_WHATSAPP_NUMBERS` | Comma-separated phone numbers for DM mode |
 | `WHATSAPP_GROUP_JIDS` | JSON array or comma-separated group JIDs |
 | `POSTED_LISTING_WEBHOOK_URL` | Webhook fired when listing is posted |
-| `OPENAI_MODEL` | AI model for post generation |
+| Chat model | `gpt-6-luna` for post generation |
 | `STATUS_PORT` | FastAPI port (default: `8000`) |
 
 ### Node (`node_RichWhatsappListings/.env`)

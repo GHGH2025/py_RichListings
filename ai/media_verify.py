@@ -11,16 +11,17 @@ from media.scrape_images import gallery_image_urls_from_text, gallery_url_from_t
 
 # Reuse your env + client
 import os
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+OPENAI_MODEL = "gpt-6-luna"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 def _model_supports_temperature(model: Optional[str]) -> bool:
-    """gpt-5* models often reject temperature; omit it for that family."""
+    """gpt-5* and gpt-6* reject temperature unless reasoning effort is none."""
     if not model:
         return True
-    return not str(model).lower().startswith("gpt-5")
+    name = str(model).lower()
+    return not (name.startswith("gpt-5") or name.startswith("gpt-6"))
 import io, mimetypes, os, uuid, requests, boto3, tempfile
 from urllib.parse import urlparse
 
