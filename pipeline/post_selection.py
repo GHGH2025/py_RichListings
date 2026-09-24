@@ -596,6 +596,26 @@ def select_passed_listings_for_post(
             # Don’t block posting if Dropbox fails
             pass
 
+        # Gallery fix (A1, 2026-09-18): a listing whose source had a photo gallery must NOT go out
+        # without the Dropbox link. Defer for retry (post_selection runs ~every 10min); after MAX
+        # retries, HOLD it for manual review instead of ever posting linkless.
+        _had_gallery = is_gallery_url((pl.other_images_source or "").strip())
+        _got_dropbox = bool(db_updates.get("set__other_images_dropbox_link") or (pl.other_images_dropbox_link or "").strip())
+        if _had_gallery and not _got_dropbox:
+            _MAX_DROPBOX_RETRIES = 3
+            _tries = int(getattr(pl, "dropbox_retry_count", 0) or 0)
+            if _tries < _MAX_DROPBOX_RETRIES:
+                # keep status 'passed' so the next post_selection run retries the gallery upload
+                pl.update(set__dropbox_retry_count=_tries + 1, set__whatsapp_status="dropbox_error", set__updated_at=now)
+                # NOT added to kept_ids/skipped_ids (avoids skip-webhook/Podio-remove on a temporary defer)
+                print(f"dropbox_retry_deferred id={pl.id} attempt={_tries + 1}")
+                continue
+            else:
+                # exhausted retries: HOLD for manual review - never auto-post without the gallery
+                pl.update(set__status="held_no_gallery", set__whatsapp_status="dropbox_error", set__updated_at=now)
+                print(f"HELD_NO_GALLERY id={pl.id} - {_MAX_DROPBOX_RETRIES} gallery-upload attempts failed; needs manual review, NOT posting")
+                continue
+
         pl.update(**db_updates)
         kept_ids.append(str(pl.id))
         try:

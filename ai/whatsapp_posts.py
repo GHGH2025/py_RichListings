@@ -115,10 +115,12 @@ TASK:
 - Apply the RULES to this LISTING.
 - Produce a WhatsApp-friendly post:
   - Bold address and price using *asterisks* (WhatsApp style).
-  - Short, sales-friendly lines/bullets.
+  - Concise, sales-friendly lines/bullets - but never drop, shorten, round or combine the occupancy or description details required below.
 - Do NOT include any disallowed items from the rules (strip them if present in the source).
 - The only allowed URL is other_images_dropbox_link. If it is missing, omit the pictures line. Never use any other URL.
-- If complete_info has bedrooms (including 0), bathrooms, living_area_sqft, occupancy, or HOA fields, those facts must appear in the post.
+- If complete_info has bedrooms (including 0), bathrooms, living_area_sqft, or HOA fields, those facts must appear in the post.
+- OCCUPANCY: copy it VERBATIM from complete_info (the occupancy field, or the occupancy line inside the complete_info text). Keep the exact wording and EVERY amount and condition, e.g. "Tenant occupied must assume. Month to month. $1,200 + $900 ($2,100 total)". Never summarize it, never merge the separate amounts into one total, never drop conditions such as "must assume".
+- DESCRIPTION: include the listing's full description / condition / rehab wording from the complete_info verbatim text. Do not truncate, cut off, or paraphrase it; only strip disallowed items and non-Dropbox URLs.
 - Use US dollar formatting for price (commas, no cents).
 - Return ONLY JSON: {{"post_content": "..."}}
 """

@@ -134,6 +134,7 @@ class ParsedListing(Document):
     skipped_images    = DictField() 
     other_images_source = StringField()            # single URL
     other_images_dropbox_link  = StringField()
+    dropbox_retry_count        = IntField(default=0)   # gallery fix (A1): gallery-upload retries before HOLD
 
     complete_info     = DictField()  # full JSON blob returned for this listing
 
@@ -150,7 +151,7 @@ class ParsedListing(Document):
     )
 
     status            = StringField(
-        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","skipped_quota","ready_for_image_processing","image_curation_failed","ready_for_primary_image_check","primary_image_failed","bypassed"),
+        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","skipped_quota","ready_for_image_processing","image_curation_failed","ready_for_primary_image_check","primary_image_failed","bypassed","held_no_gallery"),
         default="not_processed"
     )
 

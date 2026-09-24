@@ -282,6 +282,134 @@ def _find_recent_prior_geo(pl, since: datetime) -> Optional[ParsedListing]:
 
     return None
 
+import re as _re
+
+def _house_number_token(addr):
+    if not isinstance(addr, str):
+        return None, "none"
+    m = _re.match(r"\s*([0-9Xx\*_\-]+)\b", addr.strip())
+    if not m:
+        return None, "none"
+    tok = m.group(1)
+    has_digit = any(c.isdigit() for c in tok)
+    has_wild = any(c in "Xx*_-" for c in tok)
+    if has_digit and has_wild:
+        return tok, "masked_digits"
+    if has_digit:
+        return tok, "digits"
+    return tok, "masked_all"
+
+def _digit_consistent(mask_tok, full_num):
+    if not mask_tok or not full_num:
+        return False
+    m = mask_tok.strip(); n = str(full_num).strip()
+    if len(m) != len(n):
+        return False
+    for cm, cn in zip(m, n):
+        if cm.isdigit() and cm != cn:
+            return False
+    return True
+
+def _bb_sqft_match(pl, cand):
+    a = pl.complete_info or {}; b = cand.complete_info or {}
+    def _i(v):
+        try: return int(v)
+        except Exception: return None
+    beds_a, beds_b = _i(a.get("bedrooms")), _i(b.get("bedrooms"))
+    def _bath(d):
+        if d.get("bathrooms_full") is None: return None
+        return (_i(d.get("bathrooms_full")) or 0) + (_i(d.get("bathrooms_half")) or 0)
+    bath_a, bath_b = _bath(a), _bath(b)
+    bb = (beds_a is not None and beds_a == beds_b) and (bath_a is not None and bath_a == bath_b)
+    sa, sb = _i(a.get("living_area_sqft")), _i(b.get("living_area_sqft"))
+    sq = (sa is not None and sb is not None and sa > 0 and abs(sa - sb) <= max(1, 0.02 * sa))
+    return bool(bb or sq)
+
+def _is_masked_num(sn):
+    return (not sn) or (str(sn).strip() == "0")
+
+def _find_recent_prior_cross_source(pl, since: datetime) -> Optional[ParsedListing]:
+    """
+    Cross-source duplicate on route + city + zip + price +/-1%, 30 days, prior status 'posted'.
+    OPT1: geocoder '0' street_number == masked. OPT2: zipless -> require city + bb/sqft, never route-only.
+    Forward (masked new): prior_masked | digit_consistent | bb_sqft | zipless_city_bbsqft.
+    Reverse (full new):   masked prior whose house number is digit-consistent with the new full number
+                          (Rich's 147th case: '1070' vs earlier '1**0'/'0 NW 147th').
+    """
+    geo = _ensure_geo(pl)
+    if not geo:
+        return None
+    x = _geo_extract(geo)
+    sn = x.get("street_number")
+    new_full = bool(sn) and str(sn).strip() != "0"      # OPT1: '0' == masked, else a real number
+    route = x.get("route")
+    if not route:
+        return None
+    postal = x.get("postal")
+    price = _price(pl)
+    if price is None or price <= 0:
+        return None
+    lo, hi = price * 0.99, price * 1.01
+    _, city, _ = _best_addr_city_zip(pl)
+    zipless = not postal
+    if zipless and not city:                            # OPT2: never route-only without city
+        return None
+    new_addr = (pl.complete_info or {}).get("address") or getattr(pl, "address", "") or ""
+    new_tok, new_kind = _house_number_token(new_addr)
+    q = (
+        Q(status__in=HISTORICAL_STATUSES)
+        & Q(skipped_or_posted_at__gte=since)
+        & Q(id__ne=pl.id)
+        & Q(gmail_message_id__not__startswith="test_")
+        & Q(geo_code_response__formatted_address__icontains=route)
+    )
+    if postal:
+        q &= Q(geo_code_response__formatted_address__icontains=postal)
+    if city:
+        q &= (
+            Q(city__iexact=city)
+            | Q(complete_info__city__iexact=city)
+            | Q(geo_code_response__formatted_address__icontains=city)
+        )
+    qs = (
+        ParsedListing.objects(q)
+        .only("price", "complete_info", "skipped_or_posted_at", "status", "geo_code_response", "address", "city")
+        .order_by("-skipped_or_posted_at")
+    )
+    for cand in qs.limit(50):
+        cp = _price(cand)
+        if cp is None or not (lo <= cp <= hi):
+            continue
+        cgeo = _ensure_geo(cand)
+        csn = _geo_extract(cgeo).get("street_number") if cgeo else None
+        if new_full:
+            # REVERSE: full new vs a MASKED prior, house number digit-consistent
+            if not _is_masked_num(csn):
+                continue
+            ptok, _pk = _house_number_token((cand.complete_info or {}).get("address") or getattr(cand, "address", "") or "")
+            if not _digit_consistent(ptok, sn):
+                continue
+            guard = "reverse_digit_consistent"
+        elif zipless:
+            if not _bb_sqft_match(pl, cand):
+                continue
+            guard = "zipless_city_bbsqft"
+        elif _is_masked_num(csn):
+            guard = "prior_masked"
+        elif new_kind == "masked_digits":
+            if not _digit_consistent(new_tok, csn):
+                continue
+            guard = "digit_consistent"
+        else:
+            if not _bb_sqft_match(pl, cand):
+                continue
+            guard = "bb_sqft"
+        print(f"[dedup] cross-source match new={pl.id} prior={cand.id} route={route!r} zip={postal} city={city!r} price={price}/{cp} guard={guard}")
+        return cand
+    return None
+
+
+
 def process_not_processed_with_duplicate_rule(
     limit: int = 500,
     gmail_message_id: Optional[str] = None,
@@ -345,15 +473,24 @@ def process_not_processed_with_duplicate_rule(
 
             # try both: (formatted first, then raw complete_info)
         prior = None
+        dedup_src = None
         for (addr, city, zip_) in cand_list:
             prior = _find_recent_prior(addr, city, zip_, since, pl.id)
             if prior:
+                dedup_src = "exact"
                 break
-
 
         # NEW: geo fallback if not found by address/city
         if not prior:
             prior = _find_recent_prior_geo(pl, since)
+            if prior:
+                dedup_src = "geo"
+
+        # NEW: cross-source dup (masked or full via reverse), guarded opt1+opt2
+        if not prior:
+            prior = _find_recent_prior_cross_source(pl, since)
+            if prior:
+                dedup_src = "cross_source"
 
 
         # prior = _find_recent_prior(addr, city, zip_, since, pl.id)
@@ -388,7 +525,7 @@ def process_not_processed_with_duplicate_rule(
             )
             try:
                 from observability.pipeline_metrics import record_listing_stage
-                record_listing_stage(str(pl.id), "dedup_skipped", listing_status="skipped", skip_reason="price comparison unavailable")
+                record_listing_stage(str(pl.id), "dedup_skipped", listing_status="skipped", skip_reason=f"price comparison unavailable [{dedup_src}]")
             except Exception:
                 pass
             skipped += 1
@@ -426,7 +563,7 @@ def process_not_processed_with_duplicate_rule(
             )
             try:
                 from observability.pipeline_metrics import record_listing_stage
-                record_listing_stage(str(pl.id), "dedup_skipped", listing_status="skipped", skip_reason="duplicate; price not low enough")
+                record_listing_stage(str(pl.id), "dedup_skipped", listing_status="skipped", skip_reason=f"duplicate; price not low enough [{dedup_src}]")
             except Exception:
                 pass
             skipped += 1

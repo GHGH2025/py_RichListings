@@ -124,6 +124,8 @@ app.include_router(scraping_list_router)
 app.include_router(special_avail_list_router)
 app.include_router(wordpress_proxy_router)
 app.include_router(openai_ping_router)
+from buyers.availability_email_gen import router as availability_email_router
+app.include_router(availability_email_router)
 # Buyer-SMS campaign (Twilio 800#). Mounted under /api so nginx /api/ proxy reaches it.
 if campaign_sms_router is not None:
     app.include_router(campaign_sms_router, prefix="/api")
