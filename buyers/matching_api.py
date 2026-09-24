@@ -62,8 +62,7 @@ _PODIO_ACCESS_TOKEN_EXPIRES_AT: float = 0.0
 # OpenAI config
 # -----------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MATCHER_MODEL = os.getenv("MATCHER_MODEL", "gpt-4o-mini")  # change if you want
-MATCHER_TEMPERATURE = float(os.getenv("MATCHER_TEMPERATURE", "0"))
+MATCHER_MODEL = "gpt-6-luna"
 AI_BATCH_SIZE = int(os.getenv("MATCHER_AI_BATCH_SIZE", "8"))
 MIN_CONFIDENCE = float(os.getenv("MATCHER_MIN_CONFIDENCE", "0.60"))
 
@@ -1209,7 +1208,6 @@ def call_ai_matcher(property_payload: Dict[str, Any], candidates: List[Dict[str,
                 {"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
             ],
-            temperature=MATCHER_TEMPERATURE,
             response_format={"type": "json_object"},
         )
 
@@ -1857,7 +1855,6 @@ def call_ai_type_matcher(property_payload: Dict[str, Any], candidates: List[Dict
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
         ],
-        temperature=MATCHER_TEMPERATURE,
     )
 
     return _extract_json_obj(resp.choices[0].message.content)

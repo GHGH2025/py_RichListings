@@ -20,7 +20,7 @@ from whatsapp.link_guard import (
 )
 
 load_dotenv()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = "gpt-6-luna"
 client = OpenAI()
 
 
@@ -176,7 +176,6 @@ def _compose_post(rules_text: str, listing_obj: Dict[str, Any], listing_id: Opti
         listing_id=listing_id,
         model=OPENAI_MODEL,
         messages=messages,
-        temperature=0.2,
         response_format={"type": "json_object"}
     )
     raw = resp.choices[0].message.content

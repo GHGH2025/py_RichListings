@@ -15,7 +15,7 @@ POST_URL = "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1/create"
 REQUEST_TIMEOUT = 25
 from openai import OpenAI
 import json
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
+OPENAI_MODEL = "gpt-6-luna"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def _trim(s: Optional[str]) -> str:
@@ -151,7 +151,7 @@ def ai_verify_same_listing(
     wp_title:   optional post title from WP result
     Returns: {"match": bool, "confidence": float, "reason": str}
     """
-    model = model or "gpt-4.1-mini"
+    model = model or OPENAI_MODEL
     user_msg = f"""TARGET_KEY:
 {target_key}
 
@@ -165,7 +165,6 @@ Return ONLY JSON: {{"match": true|false, "confidence": 0..1, "reason": "<short>"
     try:
         chat = client.chat.completions.create(
             model=model,
-            temperature=0.0,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": _AI_SYS_PROMPT},
