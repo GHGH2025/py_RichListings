@@ -264,7 +264,7 @@ Upstream job that starts the pipeline:
 | `WP_API_TOKEN` | **Required.** Auth token for all WP API calls |
 | `WP_API_BASE` | Base URL (default: `https://inventory.joinbuyerslist.com/wp-json/addproperty/v1`) |
 | `OPENAI_API_KEY` | Required for AI taxonomy and description steps |
-| `OPENAI_MODEL` | Model override (defaults vary by file) |
+| Chat model | `gpt-6-luna` for taxonomy and description steps |
 | `DROPBOX_APP_KEY` | For gallery link generation |
 | `DROPBOX_APP_SECRET` | For gallery link generation |
 | `DROPBOX_REFRESH_TOKEN` | For gallery link generation |
