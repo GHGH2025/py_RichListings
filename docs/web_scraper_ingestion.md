@@ -17,23 +17,22 @@ The scraper scheduler runs both supported sites headlessly:
    `raw`. It routes website data separately from email and WhatsApp
    parsing, then creates `FilteredListingEmail` and `ParsedListing` records.
 6. Existing rules, media/Dropbox, posting, WordPress, buyer matching, and
-   telemetry jobs process the resulting `ParsedListing` normally. External
-   publication is disabled for web records by default.
+   telemetry jobs process the resulting `ParsedListing` normally. New web
+   records are created with `web_publish_enabled=true`, so they follow the
+   same WordPress, Podio, and WhatsApp path as email and WhatsApp listings
+   after rules and media.
 
 ## Publication toggle
 
-Web records have `ParsedListing.web_publish_enabled`, which defaults to
-`false`. This blocks WordPress, Podio, and WhatsApp output while retaining the
-listing and its pipeline metrics for review. Email and WhatsApp records are
-not subject to this web-only gate.
-
-When web publication is approved, enable selected records in MongoDB, for
-example:
+Web records use `ParsedListing.web_publish_enabled`. New scrapes ingest with
+it on. Set it to `false` on a record to keep that listing in the pipeline
+for review without external publication. Email and WhatsApp records are not
+subject to this web-only gate.
 
 ```python
 from models import ParsedListing
 ParsedListing.objects(input_source="web", address="123 Main St").update(
-    set__web_publish_enabled=True
+    set__web_publish_enabled=False
 )
 ```
 
@@ -77,7 +76,8 @@ The scheduler runs headlessly on EC2 `rich-ai` as systemd
 and health-check commands: [docs/ec2-notes/scraper.md](../../docs/ec2-notes/scraper.md).
 
 The Python server runner already consumes pending filtered web listings once
-per minute through `process_pending_scraped_listings`.
+per minute through `process_pending_scraped_listings`. New web listings
+ingest with publication on.
 
 Never run the Podio direct-wholesaler worker against production credentials
 until the email-only Wholesalers app creation behavior has been approved.
