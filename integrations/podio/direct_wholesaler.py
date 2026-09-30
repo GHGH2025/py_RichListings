@@ -937,8 +937,32 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
             return True
 
         
-    # Case 2: No wholeseller or mismatched -> find the right one by email
-    target_wholeseller_item_id = find_or_create_wholeseller_item_by_email(token, agent_email)
+    # Case 2: No wholeseller or mismatched -> find the right one by email.
+    # Allan guard (2026-09-23): only DIRECT senders (present in the wholesaler map, keyed by the
+    # ORIGINAL sender email) may CREATE a Wholeseller. A non-direct sender links only to an
+    # EXISTING Wholeseller; if none exists, skip - never auto-create for a non-direct sender.
+    try:
+        from services.direct_wholesaler_service import get_wholesaler_map as _get_wmap, normalize_email as _norm_email
+        _se = getattr(listing, "source_email", None)
+        _fi = getattr(_se, "from_info", None) if _se else None
+        _sender = _norm_email(getattr(_fi, "email", None) if _fi else None)  # SAME normalizer get_wholesaler_map keys by
+        _is_direct = bool((_get_wmap() or {}).get(_sender))
+    except Exception:
+        _is_direct = False   # safe default: treat as non-direct (never auto-create)
+    if _is_direct:
+        target_wholeseller_item_id = find_or_create_wholeseller_item_by_email(token, agent_email)
+    else:
+        target_wholeseller_item_id = find_wholeseller_item_by_email(token, agent_email)
+        if not target_wholeseller_item_id:
+            logging.info(
+                "Listing %s: non-direct sender %r with no existing Wholeseller in Podio; "
+                "skipping (never auto-create a Wholeseller for a non-direct sender).",
+                listing.id, _sender,
+            )
+            ParsedListing.objects(id=listing.id).update_one(
+                set__direct_wholeseller="non_direct_no_wholeseller"
+            )
+            return False
    
     if not target_wholeseller_item_id:
         # We couldn't find a matching wholeseller record; leave as 'not_processed'

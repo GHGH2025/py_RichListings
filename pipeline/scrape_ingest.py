@@ -20,7 +20,7 @@ from pipeline.listing_details import (
     _compose_raw_for_google,
     _normalize_city_for_google,
 )
-from integrations.google_formatter import geocode_response, get_street_and_city
+from integrations.google_formatter import geocode_response, street_city_zip_from_geocode
 from pipeline.address_utils import is_bed_bath_descriptor_address
 
 logger = logging.getLogger(__name__)
@@ -232,12 +232,14 @@ def _geocode(addr: str, city: str, state: str, zip_: str) -> tuple[str, str, str
         norm_city = _normalize_city_for_google(city)
         raw_line = _compose_raw_for_google(addr, norm_city, state, zip_)
         if raw_line:
-            fa, fc, fz = get_street_and_city(raw_line)
+            # Google step 1 (Blagojche 2026-09-24): ONE Google call = Geocoding; derive
+            # street/city/zip from its components (paid Address Validation removed).
+            geo_js = geocode_response(raw_line)
+            fa, fc, fz = street_city_zip_from_geocode(geo_js)
             if fa and fc:
                 addr, city = fa, fc
             if fz and not zip_:
                 zip_ = fz
-            geo_js = geocode_response(raw_line)
     except Exception:
         logger.exception("scrape geo format failed addr=%s", addr)
     return addr, city, zip_, geo_js

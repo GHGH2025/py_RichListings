@@ -94,7 +94,8 @@ B) Exclude entirely (even if present in either source):
 C) Include ALL extracted property features, amenities, and special preferences (omit unknown/empty):
    - Beds, baths, living area, lot size (sq ft and/or acres), year built
    - Construction/material (CBS/concrete block/etc.), condition ONLY if explicitly stated (e.g., “needs updates”, “needs full rehab”)
-   - Occupancy (vacant/occupied) if explicitly stated
+   - Occupancy: include it VERBATIM as written, keeping EVERY rent amount and condition (e.g. "Tenant occupied must assume. Month to month. $1,200 + $900 ($2,100 total)"). Never summarize it, never merge the separate amounts into one total, never drop conditions such as "must assume". (Actual tenant rent is allowed; still exclude anything labeled "estimated".)
+   - Do not truncate, cut off, or shorten the property's condition / rehab / description wording; include it in full - subject to the exclusions in section B.
    - Unit mix if explicitly stated (e.g., duplex 2/1 + 2/1)
    - Rental income ONLY if explicitly stated as actual rent (do NOT include anything labeled “estimated”)
    - Comps ONLY if explicitly stated (never compute/infer comps)

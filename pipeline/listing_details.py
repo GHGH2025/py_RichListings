@@ -7,7 +7,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from models import ParsedListing, FilteredListingEmail
 from ai.address_keys import update_parsed_listing_address_keys
-from integrations.google_formatter import get_street_and_city, geocode_response
+from integrations.google_formatter import geocode_response, street_city_zip_from_geocode
 from services.direct_wholesaler_service import get_wholesaler_map
 from pipeline.address_utils import (
     is_bed_bath_descriptor_address,
@@ -30,7 +30,7 @@ import logging
 # Load environment variables
 load_dotenv()
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")  # supports structured outputs
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")  # supports structured outputs
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # client = OpenAI(api_key=OPENAI_API_KEY)
 client = OpenAI(
@@ -44,7 +44,7 @@ def _model_supports_temperature(model: Optional[str]) -> bool:
     """gpt-5* models often reject temperature; omit it for that family."""
     if not model:
         return True
-    return not str(model).lower().startswith("gpt-5")
+    return not str(model).lower().startswith(("gpt-5", "gpt-6"))
 
 
 ADDRESS_KEYS_POOL = ThreadPoolExecutor(max_workers=6)  # tune as you like
@@ -331,6 +331,27 @@ Extract ALL listings present. Return an object with:
 # -------------------------
 # MAIN HELPER
 # -------------------------
+def _guard_masked_house_number(addr, source_text):
+    """Never let the extractor fill a masked house number (** / xx) with a fabricated one.
+    Carlos 52402: source "22**/22** NW 56th Ave" -> the model invented "2222". If the raw extracted
+    leading number is a clean integer that is NOT present verbatim in the source, and the source
+    shows a masked number token, revert the leading number to that masked token so the address stays
+    masked (geocode then fails and the dup-gate flags it 'masked' = post+flag, not a fake address)."""
+    import re
+    a = (addr or "").strip()
+    st = source_text or ""
+    m = re.match(r"^(\d+)\b(.*)$", a)          # only a CLEAN leading integer can be fabricated
+    if not m or not st:
+        return addr
+    num, rest = m.group(1), m.group(2)
+    if re.search(r"(?<!\d)" + re.escape(num) + r"(?!\d)", st):
+        return addr                              # the number is verbatim in the source -> real
+    msrc = re.search(r"(\d*[*xX]{2,}[\d*xX/\-\u2013]*)", st)   # a masked number in the source
+    if not msrc:
+        return addr
+    return (msrc.group(1) + rest).strip()        # e.g. "22**/22**" + " NW 56th Ave"
+
+
 def extract_listings_from_email_html(email_html: str,
                                      model: Optional[str] = None,
                                      temperature: float = 0.0,
@@ -526,6 +547,8 @@ def upsert_parsed_listings_from_html(
             status_for_insert = "not_processed"
         try:
             addr  = (lst.get("address") or "").strip()
+            # Carlos 52402 guard (29.09): never post a fabricated house number for a masked source.
+            addr = _guard_masked_house_number(addr, (lst.get("complete_info") or "") or email_html)
             city  = (lst.get("city") or "").strip()
             state = (lst.get("state") or "").strip()
             zip_  = (lst.get("zip") or "").strip()
@@ -544,13 +567,14 @@ def upsert_parsed_listings_from_html(
                 norm_city = _normalize_city_for_google(city)
                 raw_line = _compose_raw_for_google(addr, norm_city, state, zip_)
                 if raw_line:
-                    fa, fc, fz = get_street_and_city(raw_line)  # returns (street, city) or (None, None)
+                    # Google step 1 (Blagojche 2026-09-25): ONE Google call = Geocoding; derive
+                    # street/city/zip from components (paid Address Validation removed).
+                    geo_js = geocode_response(raw_line)
+                    fa, fc, fz = street_city_zip_from_geocode(geo_js)
                     if fa and fc:
-                        addr, city = fa, fc   # overwrite with formatted values
+                        addr, city = fa, fc   # overwrite with geocoded components
                     if fz and not zip_:
                         zip_ = fz
-                    # geocode full result (non-blocking/fail-open)
-                    geo_js = geocode_response(raw_line)
             except Exception as e:
                 print(f"Exception in listing geo format: {e}")
                 # fail-open: keep original addr/city

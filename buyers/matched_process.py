@@ -6,6 +6,7 @@ import re
 import logging
 import requests
 from openai import OpenAI
+from observability.openai_usage import temp_kwargs
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from integrations.ringcentral_auth import rc_auth_header
@@ -23,7 +24,7 @@ BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL",
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-DEFAULT_BUYER_DESC_MODEL = "gpt-4.1"  # or reuse OPENAI_MODEL
+DEFAULT_BUYER_DESC_MODEL = os.getenv("BUYER_DESC_MODEL", "gpt-6-luna")  # was gpt-4.1
 
 BUYER_TEMPLATE_PATH = str(
     resolve_project_path(os.getenv("BUYER_TEMPLATE_PATH", "data/buyer_notification_templates.json"))
@@ -40,6 +41,20 @@ RC_SERVER_URL = os.getenv("RC_SERVER_URL", "https://platform.ringcentral.com")
 EASTERN = ZoneInfo("America/New_York")
 BUYER_SEND_WINDOW_START_HOUR = int(os.getenv("BUYER_SEND_WINDOW_START_HOUR", "7"))
 BUYER_SEND_WINDOW_END_HOUR = int(os.getenv("BUYER_SEND_WINDOW_END_HOUR", "19"))
+
+# Rolling-24h cap on deal emails to rich@wholesaledealfinder.ai (Rich 29-30.09: Gmail
+# "550-5.4.5 Daily user sending limit exceeded"; 28-29.09 spiked to ~2.7-3.2k/day vs normal
+# 0.9-1.6k). Counts actual send ATTEMPTS logged in buyer_deal_email_sends - Gmail counts
+# attempts, and our send_ok stays True even on a 550. Env-tunable; 0 disables the cap.
+DEAL_EMAIL_DAILY_CAP = int(os.getenv("DEAL_EMAIL_DAILY_CAP", "1500"))
+
+
+def _deal_emails_sent_last_24h() -> int:
+    """Deal-email send attempts logged in the last rolling 24h (mailbox-wide)."""
+    from datetime import timedelta
+    from models import BuyerDealEmailSend
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    return BuyerDealEmailSend.objects(sent_at__gte=cutoff).count()
 
 # Standard RingCentral SMS endpoint
 RC_SMS_URL = f"{RC_SERVER_URL}/restapi/v1.0/account/~/extension/~/sms"
@@ -71,7 +86,7 @@ B) Exclude entirely (even if present in either source):
 C) Include ONLY factual property features (omit unknown/empty):
    - Beds, baths, living area, lot size (sq ft and/or acres), year built
    - Construction/material (CBS/concrete block/etc.), condition ONLY if explicitly stated (e.g., “needs updates”, “needs full rehab”)
-   - Occupancy (vacant/occupied) if explicitly stated
+   - Occupancy: include it VERBATIM, keeping EVERY rent amount and condition (e.g. "Tenant occupied must assume. Month to month. $1,200 + $900 ($2,100 total)"). Never summarize it, never merge the separate amounts into one total, never drop conditions such as "must assume". Keep the rest of the description a short teaser.
    - Unit mix if explicitly stated (e.g., duplex 2/1 + 2/1)
    - Rental income ONLY if explicitly stated as actual rent (do NOT include anything labeled “estimated”)
    - Comps ONLY if explicitly stated (never compute/infer comps)
@@ -117,7 +132,7 @@ B) Exclude entirely (even if present in either source):
 C) Include ONLY factual property features (omit unknown/empty):
    - Beds, baths, living area, lot size (sq ft and/or acres), year built
    - Construction/material (CBS/concrete block/etc.), condition ONLY if explicitly stated (e.g., “needs updates”, “needs full rehab”)
-   - Occupancy (vacant/occupied) if explicitly stated
+   - Occupancy: include it VERBATIM, keeping EVERY rent amount and condition (e.g. "Tenant occupied must assume. Month to month. $1,200 + $900 ($2,100 total)"). Never summarize it, never merge the separate amounts into one total, never drop conditions such as "must assume". Keep the rest of the description a short teaser.
    - Unit mix if explicitly stated (e.g., duplex 2/1 + 2/1)
    - Rental income ONLY if explicitly stated as actual rent (do NOT include anything labeled “estimated”)
    - Comps ONLY if explicitly stated (never compute/infer comps)
@@ -189,7 +204,7 @@ def ai_build_buyer_sms_description_for_listing(
             {"role": "system", "content": _SYSTEM_PROMPT_SMS},
             {"role": "user",   "content": msg},
         ],
-        temperature=0,
+        **temp_kwargs((model or DEFAULT_BUYER_DESC_MODEL), 0),
         response_format={"type": "json_object"},
     )
 
@@ -219,7 +234,7 @@ def ai_build_buyer_email_description_for_listing(
             {"role": "system", "content": _SYSTEM_PROMPT_EMAIL},
             {"role": "user",   "content": msg},
         ],
-        temperature=0,
+        **temp_kwargs((model or DEFAULT_BUYER_DESC_MODEL), 0),
         response_format={"type": "json_object"},
     )
 
@@ -674,6 +689,24 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
             "failed": [],
         }
 
+    _cap = DEAL_EMAIL_DAILY_CAP
+    _sent_24h = _deal_emails_sent_last_24h() if _cap > 0 else 0
+    if _cap > 0 and _sent_24h >= _cap:
+        logging.warning(
+            "process_buyer_sends: deal-email daily cap reached (%s/%s in last 24h) - pausing sends",
+            _sent_24h, _cap,
+        )
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "deal_email_daily_cap",
+            "sent_last_24h": _sent_24h,
+            "cap": _cap,
+            "processed": 0,
+            "failed": [],
+        }
+    _sent_this_run = 0
+
     templates = _load_buyer_templates()
     email_subject = templates["email"].get("subject", "New deal for your review")
     email_template = templates["email"]["html"]
@@ -700,6 +733,12 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
     failures: List[str] = []
 
     for pl in listings:
+        if DEAL_EMAIL_DAILY_CAP > 0 and (_sent_24h + _sent_this_run) >= DEAL_EMAIL_DAILY_CAP:
+            logging.warning(
+                "process_buyer_sends: deal-email cap reached mid-run (%s+%s/%s) - remaining listings stay pending",
+                _sent_24h, _sent_this_run, DEAL_EMAIL_DAILY_CAP,
+            )
+            break
         try:
             # ---- property-level context ----
             addr = getattr(pl, "address", "") or ""
@@ -856,6 +895,7 @@ def process_buyer_sends(limit: int = 10) -> Dict[str, Any]:
                         html_body=html_body,
                     )
                     print("email_result",email_result)
+                    _sent_this_run += 1  # count every attempt toward the 24h deal-email cap
 
                     if email_result.get("invalid_email"):
                         mark_buyer_email_invalid(buyer.id, reason="immediate_send_response")

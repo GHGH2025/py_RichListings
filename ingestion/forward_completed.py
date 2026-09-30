@@ -390,7 +390,7 @@ from models import FilteredListingEmail, ParsedListing
 from ingestion.forward_inline import forward_inline_html  # wherever you put your function
 from services.direct_wholesaler_service import get_wholesaler_map
 
-ALLOWED_FINALS = {"posted", "skipped", "image_curation_failed", "primary_image_failed","bypassed","skipped_quota"}
+ALLOWED_FINALS = {"posted", "skipped", "image_curation_failed", "primary_image_failed","bypassed","skipped_quota","held_no_gallery","needs_photo"}
 
 def _get_sender_email(fe: FilteredListingEmail) -> Optional[str]:
     """
@@ -553,7 +553,7 @@ def forward_completed_source_emails(
             Q(forward_status__exists=False) |
             Q(forward_status="")
         ) & Q(status="processed")
-    ).order_by("+created_at").limit(limit)
+    ).order_by("-created_at").limit(30)
     print("fe_q========",fe_q)
     for fe in fe_q:
 

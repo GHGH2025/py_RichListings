@@ -27,6 +27,9 @@ STATE_FILE = os.getenv(
 )
 ALERT_EMAIL = os.getenv("NEEDS_REVIEW_ALERT_EMAIL", "").strip()
 ALERT_SMS = os.getenv("NEEDS_REVIEW_ALERT_SMS", "").strip()
+# Internal ops alerts go through server 02 /internalAlert (no cc to Rich), NOT /pofEmail.
+INTERNAL_ALERT_URL = os.getenv("INTERNAL_ALERT_URL", "http://ec2-3-90-20-111.compute-1.amazonaws.com:8000/internalAlert")
+INTERNAL_ALERT_TOKEN = os.getenv("INTERNAL_ALERT_TOKEN", "").strip()  # shared with server 02
 
 
 def collect() -> List[Dict[str, str]]:
@@ -43,6 +46,34 @@ def collect() -> List[Dict[str, str]]:
             "address": addr,
             "city": getattr(pl, "city", "") or "",
             "reason": getattr(pl, "address_review", "") or "",
+        })
+    # Price-drop guard (Rich 30.09): a duplicate whose new price implies a >50% drop is HELD here
+    # (never auto-updated - almost always an extractor misread) so it does not disappear silently.
+    for pl in ParsedListing.objects(status="price_drop_review").only(
+            "id", "address", "city", "price_drop_pct", "price_drop_prev_price", "price_drop_curr_price"):
+        addr = resolve_street_address(pl) or getattr(pl, "address", "") or ""
+        pct = getattr(pl, "price_drop_pct", None)
+        prev = getattr(pl, "price_drop_prev_price", None)
+        curr = getattr(pl, "price_drop_curr_price", None)
+        try:
+            reason = "price drop %.0f%% held (%s -> %s) - confirm the real price with the wholesaler" % (
+                (pct or 0) * 100, ("$%.0f" % prev) if prev else "?", ("$%.0f" % curr) if curr else "?")
+        except Exception:
+            reason = "price drop > 50%% held - confirm the real price with the wholesaler"
+        out.append({
+            "id": str(pl.id),
+            "address": addr,
+            "city": getattr(pl, "city", "") or "",
+            "reason": reason,
+        })
+    # Gallery fix (A1): listings HELD because the Dropbox gallery upload failed after retries.
+    for pl in ParsedListing.objects(status="held_no_gallery").only("id", "address", "city"):
+        addr = resolve_street_address(pl) or getattr(pl, "address", "") or ""
+        out.append({
+            "id": str(pl.id),
+            "address": addr,
+            "city": getattr(pl, "city", "") or "",
+            "reason": "gallery upload failed - add the Dropbox link manually, then set status=passed & dropbox_retry_count=0",
         })
     return out
 
@@ -101,13 +132,23 @@ def run_needs_review_alert() -> Dict[str, Any]:
 
     if ALERT_EMAIL:
         try:
-            from buyers.matched_process import send_email_to_buyer
-            r = send_email_to_buyer(
-                ALERT_EMAIL,
-                "Cloud A: %d address(es) need review" % len(items),
-                _html(items),
+            import requests
+            r = requests.post(
+                INTERNAL_ALERT_URL,
+                json={"to": ALERT_EMAIL,
+                      "subject": "Needs review: %d listing(s)" % len(items),
+                      "body": _html(items)},
+                headers={"X-Alert-Token": INTERNAL_ALERT_TOKEN},
+                timeout=20,
             )
-            result["email_sent"] = bool(r.get("ok"))
+            # /internalAlert returns 200 with a status string; success only on the exact success text
+            # (a send error yields a non-2xx or an error status, so we must not advance state on it).
+            ok = False
+            try:
+                ok = (r.status_code == 200 and (r.json() or {}).get("status") == "Email sent sucessfully")
+            except Exception:
+                ok = False
+            result["email_sent"] = ok
         except Exception as e:
             logging.warning("needs_review email failed: %s", e)
 
