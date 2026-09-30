@@ -12,12 +12,80 @@ from ai.media_verify import _image_mirror_updates, mirror_images_to_s3
 from integrations.wordpress.wp_lookup import search_keys, UNREACHABLE
 from integrations.wordpress.address_dedup import (
     classify as _dedup_classify, mongo_finder as _dedup_finder,
-    DUPLICATE as _DEDUP_DUP, NEEDS_REVIEW as _DEDUP_REVIEW,
+    DUPLICATE as _DEDUP_DUP, NEEDS_REVIEW as _DEDUP_REVIEW, NEW as _DEDUP_NEW,
+    canonical_key as _dedup_key,
     post_is_live as _post_is_live,
 )
 import logging
 
 WP_TOKEN = os.getenv("WP_API_TOKEN")  # <-- set in env
+
+
+# Ruben/ZCG (Rich 29.09): direct wholesalers who never include a house number. Exempt these
+# senders from the no-house-number review BLOCK - publish anyway, de-duped by street+city+PRICE.
+ADDRESS_REVIEW_EXEMPT_SENDERS = {
+    s.strip().lower() for s in os.getenv(
+        "ADDRESS_REVIEW_EXEMPT_SENDERS",
+        "investors@ecologicteam.com,info@zcginvestments.com").split(",") if s.strip()
+}
+
+import re as _re_sp
+_STREET_SUFFIX = _re_sp.compile(r"\b(st|street|ave|avenue|blvd|boulevard|ct|court|dr|drive|"
+    r"ln|lane|way|ter|terrace|rd|road|pl|place|cir|circle|trl|trail|hwy|highway|pkwy|parkway|"
+    r"loop|run|pt|point|sq|square|walk|row|path|cove|manor|oaks?|park|estates?|crossing|"
+    r"landing|ridge|hills?)\b", _re_sp.I)
+_STREET_CR = _re_sp.compile(r"\b(cr|county road|sr|state road|us|route)\b", _re_sp.I)
+_STREET_JUNK = {"next to", "high st", "w line st"}
+
+
+def _is_real_street(addr, city):
+    """Only auto-publish an exempt no-house-number listing when it looks like a REAL street
+    (Blagojche 30.09): needs a city, a street-type suffix (or County Road), a street NAME of
+    >=3 letters, and not a known junk fragment. Catches 'A Ln' (name<3), 'W Line St'/'High St'/
+    'Next To'. A real Ecologic address ('Jessamine Ave, Sanford') passes."""
+    a = (addr or "").strip(); c = (city or "").strip()
+    if not a or not c:
+        return False
+    if a.lower() in _STREET_JUNK:
+        return False
+    if _STREET_CR.search(a) and _re_sp.search(r"\d", a):
+        return True   # County/State Road + number (e.g. 'CR 422') is a valid address
+    if not _STREET_SUFFIX.search(a):
+        return False
+    name = _STREET_SUFFIX.split(a)[0]
+    if len(_re_sp.sub(r"[^A-Za-z]", "", name)) < 3:
+        return False
+    return True
+
+
+def _pl_sender_email(pl) -> str:
+    """Normalised sender email of a ParsedListing (from_info, else the source_email ref)."""
+    try:
+        e = (getattr(getattr(pl, "from_info", None), "email", "") or "").strip().lower()
+        if e:
+            return e
+    except Exception:
+        pass
+    try:
+        doc = getattr(pl, "source_email", None)
+        return (getattr(getattr(doc, "from_info", None), "email", "") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _streetcity_price_dup(pl, addr, city):
+    """An already-POSTED ParsedListing with the same canonical street+city AND the same price."""
+    price = getattr(pl, "price", None)
+    key = _dedup_key(addr, city)
+    if price is None or not key or len(key) < 6:
+        return None
+    first = key.split(" ", 1)[0]
+    for cand in ParsedListing.objects(post_id__ne=None, address__istartswith=first, id__ne=pl.id).only(
+            "id", "address", "city", "price", "post_id"):
+        if _dedup_key(getattr(cand, "address", None), getattr(cand, "city", None)) == key \
+                and getattr(cand, "price", None) == price:
+            return cand
+    return None
 WP_BASE  = os.getenv("WP_API_BASE", "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1")
 
 GET_URL  = f"{WP_BASE}/getproperty"
@@ -105,7 +173,9 @@ def _build_post_body(pl: ParsedListing) -> Dict[str, Any]:
       deal_type = ["MLS Deals"]
       newest_deals = ["Daily Deal Email"]
     """
-    body: Dict[str, Any] = {"token": WP_TOKEN,  "newest_deals": ["Todays Deal"]}
+    # B (28.09): do NOT hardcode the Today tag here - /create upserts by address, so an old
+    # post that matches gets re-tagged (1417 Walter). The tag is added only in the real create.
+    body: Dict[str, Any] = {"token": WP_TOKEN}
 
     # title/address lines
     full_addr_line = _compose_full_address(pl)
@@ -287,7 +357,8 @@ def sync_wp_for_descriptions(
     q = ParsedListing.objects(**filters).only(
         "address", "city", "state", "zip", "images", "price",
         "wp_property_description", "wp_parsed_data",
-        "other_images_dropbox_link", "address_search_keys"
+        "other_images_dropbox_link", "address_search_keys",
+        "price_drop_pass", "post_id"
     ).order_by("+_id")
 
     if limit is not None:
@@ -301,6 +372,17 @@ def sync_wp_for_descriptions(
 
     for pl in q:
         try:
+            # A1 (28.09, fixed 30.09 per Blagojche): the price-drop path owns this record and
+            # publishes/updates the EXISTING post itself, so the poster must not create a second
+            # page for it. The old guard used price_drop_activated+post_id, but activate never
+            # writes post_id -> always False. price_drop_pass (set by dedup on a real drop) is the
+            # real ownership signal.
+            if getattr(pl, "price_drop_pass", False):
+                pl.update(set__wp_status="already_found", set__updated_at=datetime.utcnow())
+                results.append({"id": str(pl.id), "ok": True, "status": "skip_price_drop_owned",
+                                "post_id": getattr(pl, "post_id", None)})
+                processed += 1; already += 1
+                continue
             desc = _trim(getattr(pl, "wp_property_description", None))
             if not desc:
                 logging.warning("Skipping listing (no description) | id=%s", pl.id)
@@ -375,6 +457,24 @@ def sync_wp_for_descriptions(
                     processed += 1
                     already += 1
                     continue
+                # Ruben/ZCG (Rich 29.09): exempt these direct-wholesaler senders from the
+                # no-house-number review BLOCK - publish, de-duped by street+city+price. Only for
+                # a REAL street (Blagojche 30.09 junk filter) - junk stays in review.
+                if (_dg_status == _DEDUP_REVIEW and _dg_detail == "no_house_number"
+                        and _pl_sender_email(pl) in ADDRESS_REVIEW_EXEMPT_SENDERS
+                        and _is_real_street(_dg_addr, _dg_city)):
+                    _xdup = _streetcity_price_dup(pl, _dg_addr, _dg_city)
+                    if _xdup is not None:
+                        _xpid = getattr(_xdup, "post_id", None)
+                        pl.update(set__wp_status="already_found", set__post_id=_xpid,
+                                  set__address_review="exempt_dup", set__updated_at=datetime.utcnow())
+                        results.append({"id": str(pl.id), "ok": True,
+                                        "status": "dedup_linked_exempt", "post_id": _xpid})
+                        processed += 1
+                        already += 1
+                        continue
+                    pl.update(set__address_review="exempt_no_house_number")
+                    _dg_status = _DEDUP_NEW   # bypass the review block; fall through to create
                 if _dg_status == _DEDUP_REVIEW and _dg_detail != "masked":
                     pl.update(set__wp_status="needs_address_review",
                               set__address_review=str(_dg_detail),
@@ -424,6 +524,8 @@ def sync_wp_for_descriptions(
                 # )
                 # processed += 1
                 # posted += 1
+                # B (28.09): tag Today only on a genuine new post (this is the not-found/create path)
+                body["newest_deals"] = ["Todays Deal"]
                 post_id = _wp_post_create(body)
                 if post_id:
                     pl.update(
