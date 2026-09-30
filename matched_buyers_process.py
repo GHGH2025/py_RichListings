@@ -6,6 +6,7 @@ import re
 import logging
 import requests
 from openai import OpenAI
+from observability.openai_usage import temp_kwargs
 from datetime import datetime
 from ringcentral_auth import rc_auth_header
 from models import ParsedListing, WebFormBuyerSubmission
@@ -16,7 +17,7 @@ BUYER_NON_TEXT_EMAIL_WEBHOOK_URL = os.getenv("BUYER_NON_TEXT_EMAIL_WEBHOOK_URL",
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-DEFAULT_BUYER_DESC_MODEL = "gpt-4.1"  # or reuse OPENAI_MODEL
+DEFAULT_BUYER_DESC_MODEL = os.getenv("BUYER_DESC_MODEL", "gpt-6-luna")  # was gpt-4.1
 
 BUYER_TEMPLATE_PATH = os.getenv("BUYER_TEMPLATE_PATH", "buyer_notification_templates.json")
 
@@ -176,7 +177,7 @@ def ai_build_buyer_sms_description_for_listing(
             {"role": "system", "content": _SYSTEM_PROMPT_SMS},
             {"role": "user",   "content": msg},
         ],
-        temperature=0,
+        **temp_kwargs((model or DEFAULT_BUYER_DESC_MODEL), 0),
         response_format={"type": "json_object"},
     )
 
@@ -206,7 +207,7 @@ def ai_build_buyer_email_description_for_listing(
             {"role": "system", "content": _SYSTEM_PROMPT_EMAIL},
             {"role": "user",   "content": msg},
         ],
-        temperature=0,
+        **temp_kwargs((model or DEFAULT_BUYER_DESC_MODEL), 0),
         response_format={"type": "json_object"},
     )
 
