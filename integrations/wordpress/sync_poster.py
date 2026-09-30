@@ -343,6 +343,17 @@ def sync_wp_for_descriptions(
                     record_listing_stage(str(pl.id), "wp_already_found", wp_status="already_found")
                 except Exception:
                     pass
+
+                # Cloud A (2026-09-24): listing came back via /listings/address-fixed -> tell Podio
+                    try:
+                        _fx = ParsedListing.objects(id=pl.id).only("address_review", "buyer_matching_podio_item_id").first()
+                        if _fx and getattr(_fx, "address_review", None) == "fixed" and getattr(_fx, "buyer_matching_podio_item_id", None):
+                            from buyers.matching_api import podio_set_address_review
+                            podio_set_address_review(_fx.buyer_matching_podio_item_id, 4,
+                                "Address fixed and published: WordPress post %s (%s)" % (found_id, "duplicate of an existing post"))
+                            pl.update(set__address_review="published")
+                    except Exception:
+                        logging.exception("address-fixed podio hook failed id=%s", pl.id)
                 results.append({"id": str(pl.id), "ok": True, "status": "already_found", "post_id": found_id})
                 processed += 1
                 already += 1
@@ -368,6 +379,16 @@ def sync_wp_for_descriptions(
                     pl.update(set__wp_status="needs_address_review",
                               set__address_review=str(_dg_detail),
                               set__updated_at=datetime.utcnow())
+                    # Cloud A (2026-09-24, Blagojche/Rich): mirror the flag to Podio so the
+                    # team sees it. Fires once (listing leaves the des_generated query). Best-effort.
+                    _pid = getattr(pl, "buyer_matching_podio_item_id", None)
+                    if _pid:
+                        try:
+                            from buyers.matching_api import podio_set_address_review_needs
+                            podio_set_address_review_needs(int(_pid),
+                                comment=f"Cloud A dup-gate flagged this address for review (reason: {_dg_detail}). Address Review set to 'Needs review'.")
+                        except Exception:
+                            logging.exception("podio address-review write failed listing=%s", pl.id)
                     results.append({"id": str(pl.id), "ok": False,
                                     "status": "needs_address_review", "reason": str(_dg_detail)})
                     processed += 1
@@ -415,6 +436,17 @@ def sync_wp_for_descriptions(
                         record_listing_stage(str(pl.id), "wp_synced", wp_status="posted")
                     except Exception:
                         pass
+
+                    # Cloud A (2026-09-24): listing came back via /listings/address-fixed -> tell Podio
+                    try:
+                        _fx = ParsedListing.objects(id=pl.id).only("address_review", "buyer_matching_podio_item_id").first()
+                        if _fx and getattr(_fx, "address_review", None) == "fixed" and getattr(_fx, "buyer_matching_podio_item_id", None):
+                            from buyers.matching_api import podio_set_address_review
+                            podio_set_address_review(_fx.buyer_matching_podio_item_id, 4,
+                                "Address fixed and published: WordPress post %s (%s)" % (post_id, "new post"))
+                            pl.update(set__address_review="published")
+                    except Exception:
+                        logging.exception("address-fixed podio hook failed id=%s", pl.id)
                     results.append({"id": str(pl.id), "ok": True, "status": "posted", "post_id": post_id})
                     processed += 1
                     posted += 1

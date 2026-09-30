@@ -6,6 +6,7 @@ from mongoengine import BooleanField, DateTimeField, Document, StringField
 class DirectWholesaler(Document):
     meta = {
         "collection": "direct_wholesalers",
+        "strict": False,
         "indexes": [
             {"fields": ["sender_email"], "unique": True, "name": "uniq_sender_email"},
             {"fields": ["email"], "name": "contact_email_idx"},

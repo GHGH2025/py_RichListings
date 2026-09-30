@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from observability.openai_usage import temp_kwargs
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set
 from zoneinfo import ZoneInfo
@@ -35,7 +36,7 @@ BUYER_EMAIL_BOUNCE_CHECK_USE_AI = os.getenv("BUYER_EMAIL_BOUNCE_CHECK_USE_AI", "
     "true",
     "yes",
 )
-BUYER_EMAIL_BOUNCE_CHECK_MODEL = os.getenv("BUYER_EMAIL_BOUNCE_CHECK_MODEL", "gpt-4.1-mini")
+BUYER_EMAIL_BOUNCE_CHECK_MODEL = os.getenv("BUYER_EMAIL_BOUNCE_CHECK_MODEL", "gpt-6-luna")
 BUYER_EMAIL_BOUNCE_CHECK_TIMEOUT = int(os.getenv("BUYER_EMAIL_BOUNCE_CHECK_TIMEOUT", "60"))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -189,7 +190,7 @@ def _ai_classify_bounced_emails(candidate_emails: List[str], bounce_report: str)
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
-            temperature=0,
+            **temp_kwargs(BUYER_EMAIL_BOUNCE_CHECK_MODEL, 0),
         )
         data = json.loads(chat.choices[0].message.content or "{}")
         raw = data.get("bounced_emails") or []

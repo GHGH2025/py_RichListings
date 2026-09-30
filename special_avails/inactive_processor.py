@@ -110,11 +110,12 @@ def _prop_created_within_lookback(
     return dt >= cutoff_utc
 
 
-def _fire_inactive_webhook(address: str) -> bool:
+def _fire_inactive_webhook(address: str, podio_item_id=None) -> bool:
     if not WEBHOOK_URL:
         logging.warning("special_avail_inactive: webhook URL not configured")
         return False
-    payload = {"add": address}
+    # deterministic: include the Podio item id so GlobiFlow acts by id, not fuzzy address match
+    payload = {"add": address, "podio_item_id": podio_item_id}
     try:
         resp = requests.post(
             WEBHOOK_URL,
@@ -459,7 +460,7 @@ def run_special_avail_inactive_check(
                     and tracker.webhook_fired_at is None
                     and tracker.status != "fired"
                 ):
-                    ok = (False if not APPLY_HIDE else _fire_inactive_webhook(addr))
+                    ok = (False if not APPLY_HIDE else _fire_inactive_webhook(addr, prop_id))
                     if not APPLY_HIDE:
                         # report-only: record intent, do NOT webhook or private
                         tracker.would_fire_at = datetime.utcnow()

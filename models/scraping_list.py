@@ -8,6 +8,7 @@ class ScrapingList(Document):
 
   meta = {
     "collection": "scraping_list",
+    "strict": False,
     "indexes": [
       {
         "fields": ["account_label", "sender_pattern", "list_type"],
