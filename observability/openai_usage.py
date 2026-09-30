@@ -188,6 +188,20 @@ def record_openai_usage(
         return None
 
 
+def model_supports_temperature(model: Any) -> bool:
+    """gpt-5*/gpt-6* families reject the `temperature` param; omit it for them
+    (same gate as pipeline/listing_details.py `_model_supports_temperature`)."""
+    if not model:
+        return True
+    return not str(model).lower().startswith(("gpt-5", "gpt-6"))
+
+
+def temp_kwargs(model: Any, value: Any) -> Dict[str, Any]:
+    """{'temperature': value} only when the model supports it, else {} — for direct
+    client.chat.completions.create callers (gpt-5/gpt-6 would 400 on temperature)."""
+    return {"temperature": value} if model_supports_temperature(model) else {}
+
+
 def tracked_chat_create(
     client: Any,
     *,
@@ -198,6 +212,8 @@ def tracked_chat_create(
     **create_kwargs: Any,
 ) -> Any:
     """Wrap client.chat.completions.create and record usage."""
+    if "temperature" in create_kwargs and not model_supports_temperature(create_kwargs.get("model")):
+        create_kwargs.pop("temperature", None)
     resp = client.chat.completions.create(**create_kwargs)
     try:
         record_openai_usage(
