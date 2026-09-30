@@ -579,6 +579,7 @@ class StageEvent(EmbeddedDocument):
 class ListingPipelineMetric(Document):
     meta = {
         "collection": "pipeline_metrics",
+        "strict": False,   # tolerate stray fields on legacy docs (wa_* etc.) - Blagojche 30.09
         "indexes": [
             # Names align with default mongoengine index names already in MongoDB.
             {"fields": ["listing_id"], "unique": True, "name": "listing_id_1"},
@@ -623,6 +624,12 @@ class ListingPipelineMetric(Document):
     posted_at = DateTimeField()
     podio_webhook_at = DateTimeField()
     whatsapp_sent_at = DateTimeField()
+    # WhatsApp tracking config (Blagojche 30.09: were causing FieldDoesNotExist on the metric write,
+    # 76 errors/day -> the tracker stage never updated so it looked stuck e.g. at "rules").
+    wa_config_name = DynamicField()
+    wa_tracked_message_id = DynamicField()
+    wa_group_name = DynamicField()
+    wa_config_email = DynamicField()
     podio_linked_at = DateTimeField()
     wp_keys_at = DateTimeField()
     wp_des_at = DateTimeField()
