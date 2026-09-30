@@ -30,7 +30,7 @@ import logging
 # Load environment variables
 load_dotenv()
 
-OPENAI_MODEL = "gpt-6-luna"  # supports structured outputs
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")  # supports structured outputs
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # client = OpenAI(api_key=OPENAI_API_KEY)
 client = OpenAI(
@@ -41,11 +41,10 @@ client = OpenAI(
 
 
 def _model_supports_temperature(model: Optional[str]) -> bool:
-    """gpt-5* and gpt-6* reject temperature unless reasoning effort is none."""
+    """gpt-5* models often reject temperature; omit it for that family."""
     if not model:
         return True
-    name = str(model).lower()
-    return not (name.startswith("gpt-5") or name.startswith("gpt-6"))
+    return not str(model).lower().startswith("gpt-5")
 
 
 ADDRESS_KEYS_POOL = ThreadPoolExecutor(max_workers=6)  # tune as you like

@@ -17,7 +17,7 @@ def openai_hi():
     Returns the OpenAI response body on success, or the OpenAI error body on failure.
     """
     api_key = os.getenv("OPENAI_API_KEY")
-    model = "gpt-6-luna"
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     client = OpenAI(api_key=api_key)
 
     try:

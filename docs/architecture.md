@@ -634,7 +634,7 @@ Grouped by concern. Full list lives in `.env`.
 | Group | Examples |
 |-------|----------|
 | **Database** | `MONGO_URI`, `MONGO_ALIAS`, `MONGO_TLS` |
-| **OpenAI** | `OPENAI_API_KEY` (chat model is `gpt-6-luna`) |
+| **OpenAI** | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_VISION_MODEL` |
 | **Gmail** | `FORWARD_EMAIL` |
 | **WhatsApp** | `WHATSAPP_SEND_MODE`, `WHATSAPP_GATEWAY_URL_DM`, `WHATSAPP_GATEWAY_URL_GROUP`, `WHATSAPP_GROUP_JIDS` |
 | **WordPress** | `WP_API_TOKEN`, `WP_API_BASE` |

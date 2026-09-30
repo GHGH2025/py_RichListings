@@ -161,7 +161,7 @@ Do-not-post cities:
             stage="post_selection",
             call_name="do_not_post_city",
             listing_id=listing_id,
-            model="gpt-6-luna",
+            model="gpt-5.6-luna",
             messages=[
                 {
                     "role": "system",
@@ -172,6 +172,8 @@ Do-not-post cities:
                     "content": user_content,
                 },
             ],
+            max_tokens=3,
+            temperature=0,  # deterministic
         )
         # answer = (resp.choices[0].message.content or "").strip().upper()
         # result = answer.startswith("YES")
