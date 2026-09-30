@@ -2420,3 +2420,52 @@ def match_buyers(payload: MatchBuyersPayload):
         "re_matched_buyers_count": len(re_matched_buyer_ids) if is_rematch else 0,
         "re_matched_buyer_mongo_ids": re_matched_buyer_ids if is_rematch else [],
     }
+
+
+# --- Cloud A (2026-09-24, Blagojche/Rich): mirror needs_address_review to Podio ---
+ADDRESS_REVIEW_FIELD_ID = int(os.getenv("PODIO_ADDRESS_REVIEW_FIELD_ID", "278194171"))
+ADDRESS_REVIEW_NEEDS_OPT = int(os.getenv("PODIO_ADDRESS_REVIEW_NEEDS_OPT", "1"))  # 1='Needs review'
+
+def podio_set_address_review_needs(item_id: int, comment: Optional[str] = None) -> bool:
+    """Set Properties 'Address Review' category -> 'Needs review' (+ optional comment).
+    Best-effort: logs and returns False on any failure, never raises."""
+    try:
+        tok = get_podio_access_token()
+        headers = {"Authorization": f"OAuth2 {tok}", "Content-Type": "application/json"}
+        r = requests.put(
+            f"{PODIO_BASE_URL}/item/{int(item_id)}/value/{ADDRESS_REVIEW_FIELD_ID}",
+            json=[{"value": ADDRESS_REVIEW_NEEDS_OPT}], headers=headers, timeout=20,
+        )
+        ok = r.status_code in (200, 204)
+        if not ok:
+            logger.warning("podio address-review set FAILED item=%s status=%s body=%s",
+                           item_id, r.status_code, (r.text or "")[:200])
+        if comment:
+            rc = requests.post(
+                f"{PODIO_BASE_URL}/comment/item/{int(item_id)}",
+                json={"value": comment}, headers=headers, timeout=20,
+            )
+            if rc.status_code not in (200, 201):
+                logger.warning("podio comment FAILED item=%s status=%s", item_id, rc.status_code)
+        return ok
+    except Exception:
+        logger.exception("podio_set_address_review_needs error item=%s", item_id)
+        return False
+
+def podio_set_address_review(item_id: int, option_id: int, comment: Optional[str] = None) -> bool:
+    """Generic: set Properties 'Address Review' category to option_id (1 Needs review, 2 Fixed, 3 Not fixable,
+    4 Published) + optional comment. Best-effort, never raises."""
+    try:
+        tok = get_podio_access_token()
+        headers = {"Authorization": f"OAuth2 {tok}", "Content-Type": "application/json"}
+        r = requests.put(f"{PODIO_BASE_URL}/item/{int(item_id)}/value/{ADDRESS_REVIEW_FIELD_ID}",
+                         json=[{"value": int(option_id)}], headers=headers, timeout=20)
+        ok = r.status_code in (200, 204)
+        if not ok:
+            logger.warning("podio address-review set(%s) FAILED item=%s status=%s", option_id, item_id, r.status_code)
+        if comment:
+            requests.post(f"{PODIO_BASE_URL}/comment/item/{int(item_id)}", json={"value": comment}, headers=headers, timeout=20)
+        return ok
+    except Exception:
+        logger.exception("podio_set_address_review error item=%s", item_id)
+        return False

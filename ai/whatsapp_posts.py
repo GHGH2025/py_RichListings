@@ -20,7 +20,7 @@ from whatsapp.link_guard import (
 )
 
 load_dotenv()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.getenv("WHATSAPP_POST_MODEL", "gpt-6-luna")
 client = OpenAI()
 
 

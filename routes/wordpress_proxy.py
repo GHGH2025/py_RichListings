@@ -9,6 +9,7 @@ from typing import Any, Optional
 from urllib.parse import unquote_plus
 
 from fastapi import APIRouter, HTTPException, Request
+import os
 from fastapi.responses import JSONResponse
 
 from integrations.wordpress.post_status import set_wp_post_status
@@ -17,6 +18,10 @@ from models.wp_proxy_request_log import WpProxyRequestLog
 router = APIRouter(tags=["wordpress-proxy"])
 
 REQUIRED_FIELDS = ("token", "posttitle", "post_status")
+
+# Tokens the proxy ACCEPTS from callers (GlobiFlow flows carry the pre-23.09 token in their bodies). The call to
+# WordPress itself always uses the server-side WP_API_TOKEN. Empty = legacy behaviour (forward the caller's token).
+PROXY_ACCEPTED_TOKENS = {t.strip() for t in os.getenv("WP_PROXY_ACCEPTED_TOKENS", "").split(",") if t.strip()}
 
 
 def _parse_encoded_body(raw: str) -> dict:
@@ -130,10 +135,27 @@ async def public_wp_create(request: Request):
     posttitle = str(data["posttitle"]).strip()
     post_status = str(data["post_status"]).strip()
 
+    caller_token = str(data["token"]).strip()
+    if PROXY_ACCEPTED_TOKENS:
+        if caller_token not in PROXY_ACCEPTED_TOKENS:
+            _save_request_log(
+                request=request,
+                request_body=data,
+                posttitle=posttitle,
+                post_status=post_status,
+                error="proxy token not accepted",
+                wp_ok=False,
+                wp_status_code=401,
+            )
+            raise HTTPException(status_code=401, detail="Invalid or missing token.")
+        forward_token = None  # -> set_wp_post_status uses the server-side WP_API_TOKEN
+    else:
+        forward_token = caller_token  # legacy behaviour until WP_PROXY_ACCEPTED_TOKENS is set
+
     _ok, status_code, payload = set_wp_post_status(
         posttitle,
         post_status,
-        token=str(data["token"]).strip(),
+        token=forward_token,
     )
 
     if status_code == 0:

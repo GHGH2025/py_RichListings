@@ -47,6 +47,25 @@ def collect() -> List[Dict[str, str]]:
             "city": getattr(pl, "city", "") or "",
             "reason": getattr(pl, "address_review", "") or "",
         })
+    # Price-drop guard (Rich 30.09): a duplicate whose new price implies a >50% drop is HELD here
+    # (never auto-updated - almost always an extractor misread) so it does not disappear silently.
+    for pl in ParsedListing.objects(status="price_drop_review").only(
+            "id", "address", "city", "price_drop_pct", "price_drop_prev_price", "price_drop_curr_price"):
+        addr = resolve_street_address(pl) or getattr(pl, "address", "") or ""
+        pct = getattr(pl, "price_drop_pct", None)
+        prev = getattr(pl, "price_drop_prev_price", None)
+        curr = getattr(pl, "price_drop_curr_price", None)
+        try:
+            reason = "price drop %.0f%% held (%s -> %s) - confirm the real price with the wholesaler" % (
+                (pct or 0) * 100, ("$%.0f" % prev) if prev else "?", ("$%.0f" % curr) if curr else "?")
+        except Exception:
+            reason = "price drop > 50%% held - confirm the real price with the wholesaler"
+        out.append({
+            "id": str(pl.id),
+            "address": addr,
+            "city": getattr(pl, "city", "") or "",
+            "reason": reason,
+        })
     # Gallery fix (A1): listings HELD because the Dropbox gallery upload failed after retries.
     for pl in ParsedListing.objects(status="held_no_gallery").only("id", "address", "city"):
         addr = resolve_street_address(pl) or getattr(pl, "address", "") or ""

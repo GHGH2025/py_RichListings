@@ -5,6 +5,7 @@ from mongoengine.queryset.visitor import Q
 
 # from db.mongo_engine_conn import init_db
 from models import ParsedListing
+import os
 import re
 
 NEXT_STATUS_ON_PASS = "processed"                 # what to set on pass
@@ -12,6 +13,7 @@ NEXT_STATUS_ON_PASS = "processed"                 # what to set on pass
 # extend the window (otherwise every dup-skip stamps skipped_or_posted_at=now).
 HISTORICAL_STATUSES = ("posted",)
 PRICE_DROP_THRESHOLD = 0.06                       # 6%
+PRICE_DROP_MAX_AUTO = float(os.getenv("PRICE_DROP_MAX_AUTO", "0.50"))  # Rich 30.09: >50% drop = likely misread -> hold for review, never auto-update
 
 
 def _now() -> datetime:
@@ -532,7 +534,33 @@ def process_not_processed_with_duplicate_rule(
             continue
 
         drop = (prev_price - curr_price) / prev_price
-        if drop >= PRICE_DROP_THRESHOLD:
+        if drop > PRICE_DROP_MAX_AUTO:
+            # Rich 30.09: >50% drop is almost always an extractor misread (52270 "$410,00"
+            # -> 41000 = 89.7%). Never auto-update: hold for review (price_drop_pass stays
+            # False so process_price_drop_activations skips it). Findable via this reason /
+            # the "price_drop_review_held" metric stage / price_drop_pct>0.5 & pass=False.
+            pl.update(
+                set__status="price_drop_review",
+                set__price_drop_pass=False,
+                set__price_drop_pct=float(drop),
+                set__price_drop_prev_id=str(prior.id),
+                set__price_drop_prev_price=float(prev_price),
+                set__price_drop_curr_price=float(curr_price),
+                set__price_drop_activated=False,
+                set__rules_ai_reason=_reason(
+                    "price drop > 50% held for review (likely extractor misread)",
+                    f"prev_id={prior.id} drop={drop:.1%} prev={prev_price:.0f} -> curr={curr_price:.0f}"
+                ),
+                set__skipped_or_posted_at=_now(),
+                set__updated_at=_now(),
+            )
+            try:
+                from observability.pipeline_metrics import record_listing_stage
+                record_listing_stage(str(pl.id), "price_drop_review_held", listing_status="price_drop_review", skip_reason="price_drop_gt_50pct")
+            except Exception:
+                pass
+            skipped += 1
+        elif drop > 0:
             pl.update(
                 set__status=NEXT_STATUS_ON_PASS,
                 set__rules_ai_reason=None,
@@ -555,8 +583,8 @@ def process_not_processed_with_duplicate_rule(
             pl.update(
                 set__status="skipped",
                 set__rules_ai_reason=_reason(
-                    "duplicate found; price not low enough",
-                    f"prev_id={prior.id} drop={drop:.1%} (< 6%) prev={prev_price:.0f} -> curr={curr_price:.0f}"
+                    "duplicate found; no price reduction",
+                    f"prev_id={prior.id} drop={drop:.1%} (<= 0) prev={prev_price:.0f} -> curr={curr_price:.0f}"
                 ),
                 set__skipped_or_posted_at=_now(),
                 set__updated_at=_now(),

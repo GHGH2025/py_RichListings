@@ -89,3 +89,26 @@ def geocode_response(raw_address: str) -> Optional[Dict[str, Any]]:
 # formatted = get_street_and_city(addr)
 
 # print(formatted)
+
+
+def street_city_zip_from_geocode(geo):
+    """Google step 1 (Blagojche 2026-09-24): derive (street, city, zip) from a Geocoding
+    result (geocode_response output) address_components - replaces the paid Address
+    Validation call. Returns (None, None, None) pieces when missing (caller keeps raw)."""
+    if not geo or not isinstance(geo, dict):
+        return None, None, None
+    comps = geo.get("address_components") or []
+    def _get(*types):
+        for c in comps:
+            ct = c.get("types") or []
+            if any(t in ct for t in types):
+                return (c.get("long_name") or "").strip()
+        return ""
+    num = _get("street_number")
+    route = _get("route")
+    # require a real street name to overwrite; include house number when present
+    street = (f"{num} {route}".strip() if route else "") or None
+    city = (_get("locality") or _get("postal_town")
+            or _get("sublocality") or _get("sublocality_level_1")) or None
+    zip_ = _get("postal_code") or None
+    return street, city, zip_

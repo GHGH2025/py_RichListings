@@ -18,6 +18,11 @@ TLS_ALLOW_INVALID_HOSTNAMES   = _as_bool(os.getenv("MONGO_TLS_ALLOW_INVALID_HOST
 
 def init_db(alias: str = ALIAS):
     kwargs = {"alias": alias}
+    # Burst guard (Rich 29.09, RDS/Mongo connections alarm 27/30): the Mongo box is shared with
+    # external clients (Compass), so cap THIS box's pool and release idle sockets fast, so a burst
+    # of concurrent pipeline work can't monopolise the shared ~30-connection budget. Tunable via env.
+    kwargs["maxPoolSize"] = int(os.getenv("MONGO_MAX_POOL_SIZE", "20"))
+    kwargs["maxIdleTimeMS"] = int(os.getenv("MONGO_MAX_IDLE_MS", "60000"))
     if TLS:
         kwargs.update({
             "tls": True,

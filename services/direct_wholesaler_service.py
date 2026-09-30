@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import re
 from typing import Any, Dict, Optional
 
 from bson import ObjectId
@@ -19,7 +20,25 @@ _cache_at: float = 0.0
 
 
 def normalize_email(value: str) -> str:
-    return (value or "").strip().lower()
+    a = (value or "").strip().lower()
+    at = a.rfind("@")
+    if at < 1:
+        return a
+    local, host = a[:at], a[at + 1:]
+    if not host.endswith(".ccsend.com"):
+        return a
+    # Constant Contact relay -> real address (Blagojche/Rich 2026-09-25):
+    #   (a) user@domain.ccsend.com -> user@domain.com
+    #   (b) user-domain.tld@sharedN.ccsend.com -> user@domain.tld
+    if re.match(r"^shared\d*\.ccsend\.com$", host):
+        dash = local.rfind("-")
+        if dash > 0:
+            user, dom = local[:dash], local[dash + 1:]
+            if user and "." in dom:
+                return user + "@" + dom
+        return a
+    base = host[:-len(".ccsend.com")]
+    return (local + "@" + base + ".com") if base else a
 
 
 def parse_update_flag(value: Any) -> bool:
