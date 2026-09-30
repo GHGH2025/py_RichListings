@@ -27,7 +27,7 @@ This ensures WhatsApp and WordPress receive clean, property-relevant photos.
 
 Both jobs are scheduled from `server_runner.py` every **2 minutes**, processing up to **5** listings each.
 
-**Vision model:** `gpt-6-luna` for curation and the primary check. The scheduler passes `gpt-6-luna` explicitly.
+**Vision model:** `OPENAI_VISION_MODEL` env var (default `gpt-5.6-luna`) for curation and the primary check. The scheduler passes `gpt-5.6-luna` explicitly.
 
 ---
 
@@ -110,7 +110,7 @@ ready_for_primary_image_check
     ├─ no images?
     │     → ready_to_post (edge case — same as empty curation path)
     │
-    └─ classify images[0] once (gpt-6-luna)
+    └─ classify images[0] once (OPENAI_VISION_MODEL / scheduler model)
           │
           ├─ keep=true  → ready_to_post
           └─ keep=false → primary_image_failed
@@ -127,7 +127,7 @@ Full results are stored in `primary_image_check`:
   "url": "https://...",
   "keep": true,
   "reason": "property exterior",
-  "model": "gpt-6-luna"
+  "model": "gpt-5.6-luna"
 }
 ```
 

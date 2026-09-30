@@ -67,7 +67,7 @@ Listings skipped in step 1 are **excluded** from region and quota calculations.
 
 1. Fast exact match (case-insensitive) against the JSON list
 2. Normalization for `St.` vs `Saint`, dots, spacing
-3. **AI fallback** (`gpt-6-luna`) for fuzzy match — abbreviations, minor typos, extra neighborhood text
+3. **AI fallback** (`gpt-4o-mini`) for fuzzy match — abbreviations, minor typos, extra neighborhood text
 
 AI results are cached per city string. If AI fails, the listing is **not** blocked (fail-open).
 

@@ -12,7 +12,7 @@ from models import ParsedListing
 from media.check_direct_link import blocked_image_filename_reason
 
 load_dotenv()
-OPENAI_MODEL_VISION = "gpt-6-luna"
+OPENAI_MODEL_VISION = os.getenv("OPENAI_VISION_MODEL", "gpt-5.6-luna")
 client = OpenAI()
 
 MIDDLEWARE_STATUS_PRIMARY = "ready_for_primary_image_check"
@@ -21,11 +21,10 @@ PRIMARY_PASS_STATUS = "ready_to_post"
 
 
 def _model_supports_temperature(model: Optional[str]) -> bool:
-    """gpt-5* and gpt-6* reject temperature unless reasoning effort is none."""
+    """gpt-5* models often reject temperature; omit it for that family."""
     if not model:
         return True
-    name = str(model).lower()
-    return not (name.startswith("gpt-5") or name.startswith("gpt-6"))
+    return not str(model).lower().startswith("gpt-5")
 
 # CURATOR_SYSTEM_PROMPT = """You are an expert real-estate photo curator.
 # Given a set of image URLs for one property listing, return ONLY JSON describing:
@@ -177,7 +176,7 @@ def classify_primary_image(url: str, model: Optional[str] = None, listing_id: Op
     """
     from observability.openai_usage import tracked_chat_create
 
-    model = (model or OPENAI_MODEL_VISION or "").strip() or "gpt-6-luna"
+    model = (model or OPENAI_MODEL_VISION or "").strip() or "gpt-5.6-luna"
 
     content = [
         {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
@@ -292,7 +291,7 @@ def classify_image_bytes(
 
     encoded = base64.b64encode(image_bytes or b"").decode("ascii")
     data_url = f"data:{media_type};base64,{encoded}"
-    model = (OPENAI_MODEL_VISION or "").strip() or "gpt-6-luna"
+    model = (OPENAI_MODEL_VISION or "").strip() or "gpt-5.6-luna"
     content = [
         {"type": "text", "text": CURATOR_CLASSIFIER_PROMPT},
         {"type": "text", "text": f"IMAGE_SOURCE_NAME: {filename}"},
@@ -449,7 +448,7 @@ def process_primary_image_verification(
     errors: List[str] = []
 
     # Live cron passes model explicitly; dry-run/catchup may omit it.
-    check_model = (model or OPENAI_MODEL_VISION or "").strip() or "gpt-6-luna"
+    check_model = (model or OPENAI_MODEL_VISION or "").strip() or "gpt-5.6-luna"
 
     for pl in qs:
         total += 1

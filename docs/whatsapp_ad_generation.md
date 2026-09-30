@@ -33,7 +33,7 @@ Once a listing passes image curation and reaches `ready_to_post`, this stage:
 | **Scheduler** | `server_runner.py` → `run_make_whatsapp_posts_from_ready_to_post` |
 | **Interval** | Every **2 minutes** |
 | **Batch size** | Up to **5** listings per run |
-| **AI model** | `gpt-6-luna` |
+| **AI model** | `OPENAI_MODEL` env var (default `gpt-4o-mini`) |
 
 ---
 
@@ -194,7 +194,7 @@ See also:
 | Variable | Purpose |
 |----------|---------|
 | `OPENAI_API_KEY` | Required |
-| Chat model | `gpt-6-luna` (hardcoded) |
+| `OPENAI_MODEL` | Chat model for ad copy |
 | `POSTED_LISTING_WEBHOOK_URL` | Optional Podio/automation webhook |
 | `TEAM_WHATSAPP_NUMBERS` | Used by send queue, not this job |
 

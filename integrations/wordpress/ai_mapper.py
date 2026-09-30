@@ -6,7 +6,7 @@ from openai import OpenAI
 from bson import ObjectId
 from models import ParsedListing
 
-OPENAI_MODEL = "gpt-6-luna"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -483,6 +483,7 @@ def ai_build_wp_payload_catalog_first(
         model=(model or OPENAI_MODEL),
         messages=[{"role": "system", "content": _SYSTEM_PROMPT},
                   {"role": "user", "content": msg}],
+        temperature=0.1,
         response_format=_response_format()
     )
 
