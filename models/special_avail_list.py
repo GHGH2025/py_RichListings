@@ -21,5 +21,9 @@ class SpecialAvailList(Document):
   created_at = DateTimeField(default=datetime.utcnow)
   updated_at = DateTimeField(default=datetime.utcnow)
 
+  # Shared records can include Mongoose's version key. Map it explicitly so
+  # MongoEngine can read them without relaxing validation of other fields.
+  mongoose_version = IntField(db_field="__v")
+
   def touch(self):
     self.updated_at = datetime.utcnow()
