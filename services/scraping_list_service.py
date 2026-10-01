@@ -14,7 +14,7 @@ DEFAULT_SEED_PATH = str(data_path("scraping_list_seed.json"))
 
 _CACHE_TTL_SECONDS = 60
 _cache: Dict[str, Tuple[List[str], List[str]]] = {}
-_cache_at: float = 0.0
+_cache_at: Dict[str, float] = {}
 
 
 def normalize_pattern(value: str) -> str:
@@ -24,30 +24,37 @@ def normalize_pattern(value: str) -> str:
 def invalidate_cache() -> None:
   global _cache, _cache_at
   _cache = {}
-  _cache_at = 0.0
+  _cache_at = {}
 
 
 def get_patterns_for_account(
   account_label: str,
   *,
   force_refresh: bool = False,
+  include_both: bool = True,
 ) -> Tuple[List[str], List[str]]:
   label = (account_label or "").strip()
   if not label:
     return [], []
 
+  # A sender added under the "both" pseudo-account applies to every real account.
+  labels = [label]
+  if include_both and label != "both":
+    labels.append("both")
+
   global _cache, _cache_at
+  cache_key = "+".join(labels)
   now = time.time()
   if (
     not force_refresh
-    and label in _cache
-    and (now - _cache_at) < _CACHE_TTL_SECONDS
+    and cache_key in _cache
+    and (now - _cache_at.get(cache_key, 0.0)) < _CACHE_TTL_SECONDS
   ):
-    return _cache[label]
+    return _cache[cache_key]
 
   allow: List[str] = []
   skip: List[str] = []
-  for doc in ScrapingList.objects(account_label=label, active=True).only(
+  for doc in ScrapingList.objects(account_label__in=labels, active=True).only(
     "sender_pattern", "list_type"
   ):
     pattern = normalize_pattern(doc.sender_pattern)
@@ -58,8 +65,12 @@ def get_patterns_for_account(
     else:
       allow.append(pattern)
 
-  _cache[label] = (allow, skip)
-  _cache_at = now
+  # de-dup (a pattern may exist under both an account row and a "both" row during migration)
+  allow = list(dict.fromkeys(allow))
+  skip = list(dict.fromkeys(skip))
+
+  _cache[cache_key] = (allow, skip)
+  _cache_at[cache_key] = now
   return allow, skip
 
 
@@ -91,6 +102,11 @@ def create_entry(
   active: bool = True,
 ) -> ScrapingList:
   label = (account_label or "").strip()
+  # TRACKER_FORCE_BOTH (env-gated, reversible): fold acct1/acct2 selections from the old
+  # (Piyush/Vercel) dropdown into "both", so a sender added today applies to every inbox
+  # without a UI change. Turn off once the UI offers a real "both" option.
+  if os.getenv("TRACKER_FORCE_BOTH", "").strip().lower() == "true" and label in ("acct1", "acct2"):
+    label = "both"
   pattern = normalize_pattern(sender_pattern)
   if not label or not pattern:
     raise ValueError("account_label and sender_pattern are required")
@@ -99,15 +115,38 @@ def create_entry(
   if list_type not in ("allow", "skip"):
     raise ValueError("list_type must be 'allow' or 'skip'")
 
-  existing = ScrapingList.objects(
-    account_label=label,
-    sender_pattern=pattern,
-    list_type=list_type,
-  ).only("id").first()
-  if existing:
-    raise ValueError(
-      f"entry already exists for account={label}, pattern={pattern}, list_type={list_type}"
-    )
+  # Cross-account de-dup: a pattern lives under EITHER a specific account OR "both".
+  if label == "both":
+    if (
+      ScrapingList.objects(
+        account_label="both", sender_pattern=pattern, list_type=list_type
+      ).only("id").first()
+    ):
+      raise ValueError(
+        f"entry already exists for account=both, pattern={pattern}, list_type={list_type}"
+      )
+    # consolidation: absorb any per-account rows for the same pattern+type
+    for _cov in ScrapingList.objects(
+      account_label__ne="both", sender_pattern=pattern, list_type=list_type
+    ).only("id"):
+      _cov.delete()
+  else:
+    if (
+      ScrapingList.objects(
+        account_label="both", sender_pattern=pattern, list_type=list_type
+      ).only("id").first()
+    ):
+      raise ValueError(
+        f"pattern {pattern} ({list_type}) is already covered by a 'both' entry"
+      )
+    if (
+      ScrapingList.objects(
+        account_label=label, sender_pattern=pattern, list_type=list_type
+      ).only("id").first()
+    ):
+      raise ValueError(
+        f"entry already exists for account={label}, pattern={pattern}, list_type={list_type}"
+      )
 
   doc = ScrapingList(
     account_label=label,

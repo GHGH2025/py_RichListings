@@ -14,10 +14,12 @@ rules:
   - id: R1
     text: >
       No 2-bed property over $250,000 in South Florida Tri-County unless they are on the water.
+      This rule applies to single-family homes only; never apply it to a duplex, multi-family, condo, townhouse, or any property with more than one unit.
 
   - id: R2
     text: >
-      No 2-bed property over $179,000 in the rest of Florida unless they are on the water.
+      No 2-bed property over $199,000 in the rest of Florida unless they are on the water.
+      This rule applies to single-family homes only; never apply it to a duplex, multi-family, condo, townhouse, or any property with more than one unit.
 
   - id: R3
     text: >

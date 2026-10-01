@@ -22,6 +22,46 @@ WEBHOOK_URL = os.getenv(
 ).strip()
 WEBHOOK_TIMEOUT = int(os.getenv("PRICE_DROP_PODIO_ACTIVE_WEBHOOK_TIMEOUT", "20"))
 
+# Blagojche 01.10 (empty-post bug): price-drop must UPDATE an existing WP post, NEVER create one.
+# /create matches by EXACT posttitle; we were passing Google short-form ("Ave"/"NW") which never
+# matched the long-form published post -> a new EMPTY post. Fix: look up the REAL post via the PL's
+# STORED (long) address, require it to be the prev listing's post_id, reuse its EXACT title; else skip.
+WP_GET_URL = f"{os.getenv('WP_API_BASE', 'https://inventory.joinbuyerslist.com/wp-json/addproperty/v1').rstrip('/')}/getproperty"
+WP_API_TOKEN = os.getenv("WP_API_TOKEN")
+
+
+def _stored_full_address(x) -> Optional[str]:
+    """The PL's STORED address (long form, as the post was published) -> 'addr, city, ST ZIP, USA'."""
+    if not x:
+        return None
+    parts = [str(getattr(x, "address", "") or "").strip(), str(getattr(x, "city", "") or "").strip()]
+    tail = " ".join([t for t in [str(getattr(x, "state", "") or "").strip(),
+                                  str(getattr(x, "zip", "") or "").strip()] if t])
+    if tail:
+        parts.append(tail)
+    parts.append("USA")
+    full = ", ".join([p for p in parts if p])
+    return full or None
+
+
+def _find_existing_wp_post(addr: str):
+    """getproperty by address -> (post_id, exact_posttitle) when a post exists, else (None, None)."""
+    if not addr:
+        return None, None
+    try:
+        # NOTE (Blagojche 01.10): the addproperty getproperty endpoint takes the token as a QUERY
+        # param (same as the existing _try_search_in_wp in sync_poster); it does not read a header/
+        # body token, so the token appears in the inventory access log - accepted/known limitation.
+        r = requests.get(WP_GET_URL, params={"address": addr, "token": WP_API_TOKEN}, timeout=25)
+        if r.status_code != 200:
+            return None, None
+        data = (r.json() or {}).get("data") or []
+        if data and isinstance(data[0], dict) and isinstance(data[0].get("post_id"), int):
+            return data[0]["post_id"], (data[0].get("posttitle") or None)
+    except Exception:
+        logging.exception("price_drop: getproperty lookup failed addr=%r", addr)
+    return None, None
+
 REDUCED_TITLE_PREFIX = "<strong><span style='color: #ff6600;'>REDUCED!!</span> </strong>"
 
 
@@ -160,21 +200,94 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
             failed += 1
             continue
 
+        # A2 (28.09, title-fixed 30.09 per Blagojche): use the PREV post's address so /create's
+        # fuzzy match hits the existing post (the record's address is often WhatsApp-mangled -> a
+        # duplicate 52408), AND use the PREV street for the REDUCED!! title so it doesn't show a
+        # broken address.
+        _prev_id = getattr(pl, "price_drop_prev_id", None)
+        _prev_street = None
+        if _prev_id:
+            _prev = ParsedListing.objects(id=_prev_id).only(
+                "address", "city", "state", "zip", "geo_code_response", "post_id").first()
+            if _prev:
+                _prev_addr = build_activation_address(_prev)
+                if _prev_addr:
+                    address = _prev_addr
+                _ps, _, _, _ = _best_address_parts(_prev)
+                if _ps:
+                    _prev_street = _ps
         street, _, _, _ = _best_address_parts(pl)
+        if _prev_street:
+            street = _prev_street
         title_address = street or address
         asking_price = _format_asking_price(price)
         custom_title = f"{REDUCED_TITLE_PREFIX} {title_address}"
 
+        # Blagojche 01.10: find the REAL post via the STORED long address + prev listing post_id;
+        # reuse its EXACT title so /create UPDATES it. Never create (empty-post bug).
+        _expected_pid = (getattr(_prev, "post_id", None) if _prev else None) or getattr(pl, "post_id", None)
+        _match_pid = _match_title = None
+        _found_any = None   # a post exists for the address, even if its id != expected (mismatch)
+        for _cand in (_stored_full_address(pl), (_stored_full_address(_prev) if _prev else None)):
+            if not _cand:
+                continue
+            _gp_pid, _gp_title = _find_existing_wp_post(_cand)
+            if _gp_pid:
+                _found_any = (_gp_pid, _gp_title)
+                if _gp_title and _expected_pid and int(_gp_pid) == int(_expected_pid):
+                    _match_pid, _match_title = _gp_pid, _gp_title
+                    break
+        if not _match_title:
+            # Blagojche 01.10 follow-up: never create, AND never retry forever.
+            if _found_any:
+                # a DIFFERENT post occupies this address -> genuine mismatch. Stop (one error log,
+                # drop price-drop ownership so it is not re-picked every 2 min). Do NOT requeue - the
+                # address already has a post, so the poster must not create another.
+                logging.error("price_drop MISMATCH: address post %s != expected %s id=%s -> stop retry",
+                              _found_any[0], _expected_pid, pl.id)
+                pl.update(set__price_drop_pass=False,
+                          set__price_drop_activate_error="address matched a different post (%s != %s); stopped" % (_found_any[0], _expected_pid),
+                          set__updated_at=_now())
+            else:
+                # expected post is gone (404) / no post for the address -> hand back to the poster as a
+                # NEW listing (A3): drop price-drop ownership + requeue des_generated so sync_poster
+                # re-posts it (with its own masked/no-house + dup gates). Stops the 2-min retry loop.
+                logging.warning("price_drop: expected post %s missing (404) id=%s -> requeue to poster (des_generated)",
+                                _expected_pid, pl.id)
+                pl.update(set__price_drop_pass=False, set__wp_status="des_generated",
+                          set__price_drop_activate_error="expected post missing (404); requeued to poster",
+                          set__updated_at=_now())
+            failed += 1
+            continue
+
         wp_success, wp_status, wp_payload = set_wp_post_status(
-            address,
+            _match_title,
             "publish",
             asking_price=asking_price,
             custom_title=custom_title,
-            address=address,
+            address=_match_title,
             newest_deals=["Todays Deal"],
         )
+        if wp_success and isinstance(wp_payload, dict):
+            _ret_pid = wp_payload.get("post_id")
+            if _ret_pid is not None and int(_ret_pid) != int(_match_pid):
+                logging.error("price_drop ALARM: /create returned post_id=%s != real %s id=%s addr=%r "
+                              "(should never happen - title matched)", _ret_pid, _match_pid, pl.id, address)
         if not wp_success:
             err = f"wp_publish_failed status={wp_status} detail={str(wp_payload)[:200]}"
+            if str(wp_status) == "404":
+                # A1v2 follow-up (30.09 per Blagojche): the existing post is gone (404). A1 already
+                # marked the record already_found so the poster won't create it, and the price-drop
+                # path can't update a missing post -> the deal would be lost. Hand it back to the
+                # poster as a NEW listing: drop price-drop ownership + requeue for /create. 404 only.
+                pl.update(
+                    set__price_drop_pass=False,
+                    set__wp_status="des_generated",
+                    set__price_drop_activate_error=err,
+                    set__updated_at=_now(),
+                )
+                failed += 1
+                continue
             pl.update(
                 set__price_drop_activate_error=err,
                 set__updated_at=_now(),

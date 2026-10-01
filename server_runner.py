@@ -155,6 +155,9 @@ def run_process_dup30days():
 @repeat(every(2).minutes)
 @safe_scheduled_job
 def run_price_drop_activate():
+    if os.getenv("PRICE_DROP_ACTIVATE_ENABLED", "0").strip().lower() in ("0", "false", "no", ""):
+        logging.warning("price_drop_activate: DISABLED via PRICE_DROP_ACTIVATE_ENABLED (empty-post bug 01.10)")
+        return
     logging.info("price_drop_activate: start")
     result = process_price_drop_activations(limit=50)
     logging.info("price_drop_activate: result=%s", result)
@@ -184,7 +187,7 @@ def run_process_listings_ready_for_image_processing():
 @safe_scheduled_job
 def run_process_primary_image_verification():
     logging.info("process_primary_image_verification")
-    process_primary_image_verification(limit=5, model="gpt-5.6-luna")
+    process_primary_image_verification(limit=5, model="gpt-6-luna")
 
 
 @repeat(every(2).minutes)

@@ -7,8 +7,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from models import ParsedListing, FilteredListingEmail
 from ai.address_keys import update_parsed_listing_address_keys
-from integrations.google_formatter import get_street_and_city, geocode_response
-from services.direct_wholesaler_service import get_wholesaler_map
+from integrations.google_formatter import geocode_response, street_city_zip_from_geocode
+from services.direct_wholesaler_service import get_wholesaler_map, normalize_email
 from pipeline.address_utils import (
     is_bed_bath_descriptor_address,
     resolve_street_address_from_fields,
@@ -30,7 +30,7 @@ import logging
 # Load environment variables
 load_dotenv()
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")  # supports structured outputs
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")  # supports structured outputs
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # client = OpenAI(api_key=OPENAI_API_KEY)
 client = OpenAI(
@@ -44,7 +44,7 @@ def _model_supports_temperature(model: Optional[str]) -> bool:
     """gpt-5* models often reject temperature; omit it for that family."""
     if not model:
         return True
-    return not str(model).lower().startswith("gpt-5")
+    return not str(model).lower().startswith(("gpt-5", "gpt-6"))
 
 
 ADDRESS_KEYS_POOL = ThreadPoolExecutor(max_workers=6)  # tune as you like
@@ -89,6 +89,24 @@ def _listing_schema() -> Dict[str, Any]:
         "hoa_assessment_monthly_usd": {"type": ["number", "null"]},
         "hoa_total_monthly_usd": {"type": ["number", "null"]},
         "taxes_annual_usd": {"type": ["number", "null"]},
+        # B.3 (Blagojche 01.10): a seller-STATED After Repair Value + the ad's comparable sales
+        # (OTHER sold properties). Captured so the WP description can show them; NEVER used as the
+        # deal's own address/price (see the COMPS rule in the prompt).
+        "arv_usd": {"type": ["number", "null"]},
+        "comparable_sales": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "address": {"type": ["string", "null"]},
+                    "sold_price_usd": {"type": ["number", "null"]},
+                    "sold_date": {"type": ["string", "null"]},
+                    "note": {"type": ["string", "null"]},
+                },
+                "required": ["address", "sold_price_usd", "sold_date", "note"],
+            },
+        },
 
         # 4) Property Type & Basics
         "property_type": {
@@ -248,7 +266,7 @@ OUTPUT CONTRACT (must follow exactly):
 - For "list_price_usd", NEVER use ARV / "after repair value" / "estimated value" numbers. Only use the actual asking / purchase / contract price the property is being offered at.
 
 Rules:
-- For `address`, include the full street line as written in the email, INCLUDING the house/building number when present (e.g. "1234 India Street", "137XX Royal Palm Blvd", "2*** SW Natura Ave"). Preserve masked/partial numbers exactly as written. Do not strip the house number.
+- For `address`, include the full street line as written in the email, INCLUDING the house/building number when present (e.g. "1234 India Street", "137XX Royal Palm Blvd", "2*** SW Natura Ave", "2**0 NW 91st St", "2XX0 NW 91st St"). Preserve masked/partial numbers EXACTLY as written - keep every real digit and every mask character in place. NEVER replace a masked position with a guessed digit, and NEVER collapse a masked number to a single digit or to "0" (e.g. "2**0" must stay "2**0", never "0" and never "2220"). If the house number is entirely masked/unknown, keep the masked token rather than inventing one. Do not strip the house number.
 - SKIP non-street "address" lines that are only bed/bath/size summaries with a city. These are NOT addresses.
   Examples to SKIP (do not emit a listing, or set address=null and exclude):
     • "3 Beds / 2 Baths, Miami, FL 33143"
@@ -313,6 +331,12 @@ Rules:
 - If none of the above are explicitly indicated, return property_type=null (do NOT guess).
 - These keywords may appear in subject, title blocks, body text, bullets, image captions, or buttons.
 
+COMPS / COMPARABLES (critical - Rich 29.09):
+- NEVER take a listing address from under a "Comps", "Comparables", "Comparable Sales", "Sold Comps" or "Recent Sales" heading, or from any line that says "sold for". Those are comparable/sold OTHER properties, not the deal.
+- The deal address is almost always at the TOP of the ad; use it. (A few senders, e.g. Diplomat/Alex, put it at the bottom - still use the DEAL address, never a comp.)
+- DO capture the comps THEMSELVES into `comparable_sales`: for each comp/sold line under such a heading, record its address (if given), sold_price_usd, and sold_date when present, and any leftover text in `note`. These are OTHER sold properties - never use them as the deal address or list_price_usd.
+- Capture a seller-STATED After Repair Value into `arv_usd` (e.g. "ARV: $600,000", "After Repair Value $600k"). Only a value explicitly written in the ad; never estimate, compute, or guess one.
+
 {image_block}
 Output MUST strictly match the provided JSON schema.
 """.strip()
@@ -331,6 +355,47 @@ Extract ALL listings present. Return an object with:
 # -------------------------
 # MAIN HELPER
 # -------------------------
+def _guard_masked_house_number(addr, source_text):
+    """Never let the extractor fill a masked house number (** / xx) with a fabricated one.
+    Carlos 52402: source "22**/22** NW 56th Ave" -> the model invented "2222". If the raw extracted
+    leading number is a clean integer that is NOT present verbatim in the source, and the source
+    shows a masked number token, revert the leading number to that masked token so the address stays
+    masked (geocode then fails and the dup-gate flags it 'masked' = post+flag, not a fake address)."""
+    import re
+    a = (addr or "").strip()
+    st = source_text or ""
+    m = re.match(r"^(\d+)\b(.*)$", a)          # only a CLEAN leading integer can be fabricated
+    if not m or not st:
+        return addr
+    num, rest = m.group(1), m.group(2)
+    # B.1 (Blagojche 01.10): a digit that sits INSIDE a masked token is not a real verbatim
+    # number. "2**0" -> the extractor emitted "0", and "0" does appear in the source, but only as
+    # the trailing digit of the mask "2**0". Exclude adjacency to mask chars (* x X _ #) from the
+    # "verbatim" test so such a collapsed digit is reverted to the masked token below.
+    if re.search(r"(?<![\d*xX_#•])" + re.escape(num) + r"(?![\d*xX_#•])", st):
+        return addr                              # the number is verbatim in the source -> real
+    msrc = re.search(r"(\d*[*xX]{2,}[\d*xX/\-\u2013]*)", st)   # a masked number in the source
+    if not msrc:
+        return addr
+    return (msrc.group(1) + rest).strip()        # e.g. "22**/22**" + " NW 56th Ave"
+
+
+def _strip_comps_sections(html: str) -> str:
+    """Conservative pre-strip so the extractor never reads a comparable/sold line as the deal
+    (Rich 29.09). Drops a line ONLY when it explicitly says "sold for" AND is short (<=200 chars):
+    a short standalone comp line. A long/minified line (Constant Contact tables can put the deal
+    and a comp on one line) is kept so we never delete the real deal. The "under a Comps heading"
+    rule is handled in the prompt, which understands document structure. Low-risk / reversible."""
+    if not html:
+        return html
+    kept = []
+    for line in html.split("\n"):
+        if len(line) <= 200 and re.search(r"(?i)\bsold\s+for\b", line):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def extract_listings_from_email_html(email_html: str,
                                      model: Optional[str] = None,
                                      temperature: float = 0.0,
@@ -349,6 +414,9 @@ def extract_listings_from_email_html(email_html: str,
 
     # Optional: tiny cleanup to reduce obvious noise that sometimes slips through.
     compact_html = re.sub(r"\s+\n", "\n", email_html).strip()
+    # B.3 option B (Blagojche 01.10): pre-strip DISABLED - the prompt now captures comps into
+    # comparable_sales and never takes a comp as the deal address, so we keep the comp lines.
+    # compact_html = _strip_comps_sections(compact_html)  # Rich 29.09: drop "sold for" comp lines
 
     system_prompt = build_system_prompt(use_nearest_image_rules=use_nearest_image_rules)
 
@@ -526,6 +594,8 @@ def upsert_parsed_listings_from_html(
             status_for_insert = "not_processed"
         try:
             addr  = (lst.get("address") or "").strip()
+            # Carlos 52402 guard (29.09): never post a fabricated house number for a masked source.
+            addr = _guard_masked_house_number(addr, (lst.get("complete_info") or "") or email_html)
             city  = (lst.get("city") or "").strip()
             state = (lst.get("state") or "").strip()
             zip_  = (lst.get("zip") or "").strip()
@@ -544,13 +614,14 @@ def upsert_parsed_listings_from_html(
                 norm_city = _normalize_city_for_google(city)
                 raw_line = _compose_raw_for_google(addr, norm_city, state, zip_)
                 if raw_line:
-                    fa, fc, fz = get_street_and_city(raw_line)  # returns (street, city) or (None, None)
+                    # Google step 1 (Blagojche 2026-09-25): ONE Google call = Geocoding; derive
+                    # street/city/zip from components (paid Address Validation removed).
+                    geo_js = geocode_response(raw_line)
+                    fa, fc, fz = street_city_zip_from_geocode(geo_js)
                     if fa and fc:
-                        addr, city = fa, fc   # overwrite with formatted values
+                        addr, city = fa, fc   # overwrite with geocoded components
                     if fz and not zip_:
                         zip_ = fz
-                    # geocode full result (non-blocking/fail-open)
-                    geo_js = geocode_response(raw_line)
             except Exception as e:
                 print(f"Exception in listing geo format: {e}")
                 # fail-open: keep original addr/city
@@ -590,8 +661,11 @@ def upsert_parsed_listings_from_html(
             direct_wholeseller_flag = "not_found"
             dw_info = None
             if sender:
-                # sender is already lowercased by _sender_email_safe
-                dw_info = wholesaler_map.get(sender)
+                # sender is lowercased by _sender_email_safe; also normalize Constant Contact relay
+                # addresses (user@x.ccsend.com -> user@x.com) so the wholesaler_map - which is keyed
+                # by normalize_email(sender_email) - matches Todd/Francesco. Fix 30.09 (Blagojche):
+                # reuse the EXISTING normalizer, do not add a new one.
+                dw_info = wholesaler_map.get(normalize_email(sender))
 
             if dw_info and isinstance(dw_info, dict):
                 # Mark as not_processed for further handling elsewhere

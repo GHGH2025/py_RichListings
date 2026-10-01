@@ -23,6 +23,7 @@ MODEL_RATES: Dict[str, Tuple[float, float, float]] = {
     "gpt-5.4-mini": (0.75, 4.50, 0.075),
     "gpt-5.4-nano": (0.20, 1.25, 0.02),
     "gpt-5.6-luna": (0.20, 1.20, 0.02),
+    "gpt-6-luna": (0.10, 0.50, 0.01),  # real price (from their dev/main commit 4e09dc87)
     "gpt-5.6-terra": (2.00, 12.00, 0.20),
     "gpt-5.6-sol": (5.00, 30.00, 0.50),
 }

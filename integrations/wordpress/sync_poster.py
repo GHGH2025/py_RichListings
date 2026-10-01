@@ -12,12 +12,80 @@ from ai.media_verify import _image_mirror_updates, mirror_images_to_s3
 from integrations.wordpress.wp_lookup import search_keys, UNREACHABLE
 from integrations.wordpress.address_dedup import (
     classify as _dedup_classify, mongo_finder as _dedup_finder,
-    DUPLICATE as _DEDUP_DUP, NEEDS_REVIEW as _DEDUP_REVIEW,
+    DUPLICATE as _DEDUP_DUP, NEEDS_REVIEW as _DEDUP_REVIEW, NEW as _DEDUP_NEW,
+    canonical_key as _dedup_key,
     post_is_live as _post_is_live,
 )
 import logging
 
 WP_TOKEN = os.getenv("WP_API_TOKEN")  # <-- set in env
+
+
+# Ruben/ZCG (Rich 29.09): direct wholesalers who never include a house number. Exempt these
+# senders from the no-house-number review BLOCK - publish anyway, de-duped by street+city+PRICE.
+ADDRESS_REVIEW_EXEMPT_SENDERS = {
+    s.strip().lower() for s in os.getenv(
+        "ADDRESS_REVIEW_EXEMPT_SENDERS",
+        "investors@ecologicteam.com,info@zcginvestments.com").split(",") if s.strip()
+}
+
+import re as _re_sp
+_STREET_SUFFIX = _re_sp.compile(r"\b(st|street|ave|avenue|blvd|boulevard|ct|court|dr|drive|"
+    r"ln|lane|way|ter|terrace|rd|road|pl|place|cir|circle|trl|trail|hwy|highway|pkwy|parkway|"
+    r"loop|run|pt|point|sq|square|walk|row|path|cove|manor|oaks?|park|estates?|crossing|"
+    r"landing|ridge|hills?)\b", _re_sp.I)
+_STREET_CR = _re_sp.compile(r"\b(cr|county road|sr|state road|us|route)\b", _re_sp.I)
+_STREET_JUNK = {"next to", "high st", "w line st"}
+
+
+def _is_real_street(addr, city):
+    """Only auto-publish an exempt no-house-number listing when it looks like a REAL street
+    (Blagojche 30.09): needs a city, a street-type suffix (or County Road), a street NAME of
+    >=3 letters, and not a known junk fragment. Catches 'A Ln' (name<3), 'W Line St'/'High St'/
+    'Next To'. A real Ecologic address ('Jessamine Ave, Sanford') passes."""
+    a = (addr or "").strip(); c = (city or "").strip()
+    if not a or not c:
+        return False
+    if a.lower() in _STREET_JUNK:
+        return False
+    if _STREET_CR.search(a) and _re_sp.search(r"\d", a):
+        return True   # County/State Road + number (e.g. 'CR 422') is a valid address
+    if not _STREET_SUFFIX.search(a):
+        return False
+    name = _STREET_SUFFIX.split(a)[0]
+    if len(_re_sp.sub(r"[^A-Za-z]", "", name)) < 3:
+        return False
+    return True
+
+
+def _pl_sender_email(pl) -> str:
+    """Normalised sender email of a ParsedListing (from_info, else the source_email ref)."""
+    try:
+        e = (getattr(getattr(pl, "from_info", None), "email", "") or "").strip().lower()
+        if e:
+            return e
+    except Exception:
+        pass
+    try:
+        doc = getattr(pl, "source_email", None)
+        return (getattr(getattr(doc, "from_info", None), "email", "") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _streetcity_price_dup(pl, addr, city):
+    """An already-POSTED ParsedListing with the same canonical street+city AND the same price."""
+    price = getattr(pl, "price", None)
+    key = _dedup_key(addr, city)
+    if price is None or not key or len(key) < 6:
+        return None
+    first = key.split(" ", 1)[0]
+    for cand in ParsedListing.objects(post_id__ne=None, address__istartswith=first, id__ne=pl.id).only(
+            "id", "address", "city", "price", "post_id"):
+        if _dedup_key(getattr(cand, "address", None), getattr(cand, "city", None)) == key \
+                and getattr(cand, "price", None) == price:
+            return cand
+    return None
 WP_BASE  = os.getenv("WP_API_BASE", "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1")
 
 GET_URL  = f"{WP_BASE}/getproperty"
@@ -105,7 +173,9 @@ def _build_post_body(pl: ParsedListing) -> Dict[str, Any]:
       deal_type = ["MLS Deals"]
       newest_deals = ["Daily Deal Email"]
     """
-    body: Dict[str, Any] = {"token": WP_TOKEN,  "newest_deals": ["Todays Deal"]}
+    # B (28.09): do NOT hardcode the Today tag here - /create upserts by address, so an old
+    # post that matches gets re-tagged (1417 Walter). The tag is added only in the real create.
+    body: Dict[str, Any] = {"token": WP_TOKEN}
 
     # title/address lines
     full_addr_line = _compose_full_address(pl)
@@ -237,6 +307,56 @@ def _extract_first_post_id(get_json: Dict[str, Any]) -> Optional[int]:
     except Exception:
         return None
 
+# --- B.2 price guard (Blagojche/Rich 01.10); env-gated OFF by default ---
+# A no-house-number / masked address can only be matched by street+city, so an
+# exact-address guarantee is absent: 2**0 NW 91st St ($399,900) wrongly linked to
+# 2493 NW 91st St = post 51290 ($685,000). When the found post's price is far from
+# this listing's price, route to review instead of linking. Only for weak (no-number)
+# addresses: a full-address match still links even on a legit price change.
+PRICE_MATCH_GUARD = os.getenv("PRICE_MATCH_GUARD", "0").strip().lower() not in ("0", "false", "no", "")
+try:
+    PRICE_MATCH_TOL = float(os.getenv("PRICE_MATCH_TOL", "0.10"))
+except Exception:
+    PRICE_MATCH_TOL = 0.10
+
+
+def _to_price(v):
+    """Parse "$685,000" / 685000 / "685000.0" -> float, else None."""
+    if v is None:
+        return None
+    try:
+        if isinstance(v, (int, float)):
+            return float(v)
+        import re as _re
+        t = _re.sub(r"[^0-9.]", "", str(v))
+        return float(t) if t else None
+    except Exception:
+        return None
+
+
+def _addr_has_no_house_number(pl) -> bool:
+    """True when this listing's street address is numberless / masked (the only case
+    the price guard applies to). Fail-safe: on any error return False (do not block)."""
+    try:
+        from integrations.wordpress.address_dedup import review_reason
+        return review_reason(resolve_street_address(pl)) in ("no_house_number", "masked")
+    except Exception:
+        return False
+
+
+def _price_mismatch(pl, found_post):
+    """None => do not block (within tolerance, or a price is unknown on either side =>
+    FAIL-OPEN, keep the current link behaviour). Otherwise (pct_str, found_price)."""
+    lp = _to_price(getattr(pl, "price", None))
+    fp = _to_price((found_post or {}).get("asking_price"))
+    if not lp or not fp or lp <= 0 or fp <= 0:
+        return None
+    diff = abs(lp - fp) / max(lp, fp)
+    if diff > PRICE_MATCH_TOL:
+        return ("%.0f%%" % (diff * 100.0), fp)
+    return None
+
+
 def _try_search_in_wp(pl: ParsedListing):
     """
     Try main "<address>, <city>" first, then each address_search_keys variant.
@@ -255,7 +375,7 @@ def _try_search_in_wp(pl: ParsedListing):
         if key:
             keys.append(key)
     state, pid, _item, detail = search_keys(GET_URL, WP_TOKEN, keys, REQUEST_TIMEOUT)
-    return pid, state, detail
+    return pid, state, detail, _item  # B.2: expose found post (asking_price) to caller
 
 def sync_wp_for_descriptions(
     *,
@@ -287,7 +407,8 @@ def sync_wp_for_descriptions(
     q = ParsedListing.objects(**filters).only(
         "address", "city", "state", "zip", "images", "price",
         "wp_property_description", "wp_parsed_data",
-        "other_images_dropbox_link", "address_search_keys"
+        "other_images_dropbox_link", "address_search_keys",
+        "price_drop_pass", "post_id"
     ).order_by("+_id")
 
     if limit is not None:
@@ -301,6 +422,17 @@ def sync_wp_for_descriptions(
 
     for pl in q:
         try:
+            # A1 (28.09, fixed 30.09 per Blagojche): the price-drop path owns this record and
+            # publishes/updates the EXISTING post itself, so the poster must not create a second
+            # page for it. The old guard used price_drop_activated+post_id, but activate never
+            # writes post_id -> always False. price_drop_pass (set by dedup on a real drop) is the
+            # real ownership signal.
+            if getattr(pl, "price_drop_pass", False):
+                pl.update(set__wp_status="already_found", set__updated_at=datetime.utcnow())
+                results.append({"id": str(pl.id), "ok": True, "status": "skip_price_drop_owned",
+                                "post_id": getattr(pl, "post_id", None)})
+                processed += 1; already += 1
+                continue
             desc = _trim(getattr(pl, "wp_property_description", None))
             if not desc:
                 logging.warning("Skipping listing (no description) | id=%s", pl.id)
@@ -309,7 +441,7 @@ def sync_wp_for_descriptions(
                 continue
 
             # search
-            found_id, _state, _detail = _try_search_in_wp(pl)
+            found_id, _state, _detail, _found_post = _try_search_in_wp(pl)
 
             if _state == UNREACHABLE:
                 # Never create on a failed check. wp_status stays des_generated,
@@ -332,6 +464,33 @@ def sync_wp_for_descriptions(
                                 found_id, pl.id)
                 found_id = None
 
+            # B.2 (Blagojche/Rich 01.10): guard a weak (no-number) match against linking to
+            # a DIFFERENT property on the same street. If the found post's price is far from
+            # this listing's price, route to review instead of linking. Env-gated; FAIL-OPEN
+            # when a price is unknown; only for numberless/masked addresses.
+            if found_id and PRICE_MATCH_GUARD and _addr_has_no_house_number(pl):
+                _pm = _price_mismatch(pl, _found_post)
+                if _pm is not None:
+                    logging.warning(
+                        "B.2 price-mismatch: id=%s price=%s vs post %s asking=%s (%s) -> review",
+                        pl.id, getattr(pl, "price", None), found_id, _pm[1], _pm[0])
+                    pl.update(set__wp_status="needs_address_review",
+                              set__address_review="price_mismatch",
+                              set__updated_at=datetime.utcnow())
+                    _pid = getattr(pl, "buyer_matching_podio_item_id", None)
+                    if _pid:
+                        try:
+                            from buyers.matching_api import podio_set_address_review_needs
+                            podio_set_address_review_needs(int(_pid),
+                                comment=f"Cloud A B.2: a numberless address matched a post with a very "
+                                        f"different price ({_pm[0]} apart). Routed to review instead of linking.")
+                        except Exception:
+                            logging.exception("podio price-mismatch write failed listing=%s", pl.id)
+                    results.append({"id": str(pl.id), "ok": False,
+                                    "status": "needs_address_review", "reason": "price_mismatch"})
+                    processed += 1
+                    continue
+
             if found_id:
                 pl.update(
                     set__wp_status="already_found",
@@ -343,6 +502,17 @@ def sync_wp_for_descriptions(
                     record_listing_stage(str(pl.id), "wp_already_found", wp_status="already_found")
                 except Exception:
                     pass
+
+                # Cloud A (2026-09-24): listing came back via /listings/address-fixed -> tell Podio
+                    try:
+                        _fx = ParsedListing.objects(id=pl.id).only("address_review", "buyer_matching_podio_item_id").first()
+                        if _fx and getattr(_fx, "address_review", None) == "fixed" and getattr(_fx, "buyer_matching_podio_item_id", None):
+                            from buyers.matching_api import podio_set_address_review
+                            podio_set_address_review(_fx.buyer_matching_podio_item_id, 4,
+                                "Address fixed and published: WordPress post %s (%s)" % (found_id, "duplicate of an existing post"))
+                            pl.update(set__address_review="published")
+                    except Exception:
+                        logging.exception("address-fixed podio hook failed id=%s", pl.id)
                 results.append({"id": str(pl.id), "ok": True, "status": "already_found", "post_id": found_id})
                 processed += 1
                 already += 1
@@ -364,10 +534,38 @@ def sync_wp_for_descriptions(
                     processed += 1
                     already += 1
                     continue
+                # Ruben/ZCG (Rich 29.09): exempt these direct-wholesaler senders from the
+                # no-house-number review BLOCK - publish, de-duped by street+city+price. Only for
+                # a REAL street (Blagojche 30.09 junk filter) - junk stays in review.
+                if (_dg_status == _DEDUP_REVIEW and _dg_detail == "no_house_number"
+                        and _pl_sender_email(pl) in ADDRESS_REVIEW_EXEMPT_SENDERS
+                        and _is_real_street(_dg_addr, _dg_city)):
+                    _xdup = _streetcity_price_dup(pl, _dg_addr, _dg_city)
+                    if _xdup is not None:
+                        _xpid = getattr(_xdup, "post_id", None)
+                        pl.update(set__wp_status="already_found", set__post_id=_xpid,
+                                  set__address_review="exempt_dup", set__updated_at=datetime.utcnow())
+                        results.append({"id": str(pl.id), "ok": True,
+                                        "status": "dedup_linked_exempt", "post_id": _xpid})
+                        processed += 1
+                        already += 1
+                        continue
+                    pl.update(set__address_review="exempt_no_house_number")
+                    _dg_status = _DEDUP_NEW   # bypass the review block; fall through to create
                 if _dg_status == _DEDUP_REVIEW and _dg_detail != "masked":
                     pl.update(set__wp_status="needs_address_review",
                               set__address_review=str(_dg_detail),
                               set__updated_at=datetime.utcnow())
+                    # Cloud A (2026-09-24, Blagojche/Rich): mirror the flag to Podio so the
+                    # team sees it. Fires once (listing leaves the des_generated query). Best-effort.
+                    _pid = getattr(pl, "buyer_matching_podio_item_id", None)
+                    if _pid:
+                        try:
+                            from buyers.matching_api import podio_set_address_review_needs
+                            podio_set_address_review_needs(int(_pid),
+                                comment=f"Cloud A dup-gate flagged this address for review (reason: {_dg_detail}). Address Review set to 'Needs review'.")
+                        except Exception:
+                            logging.exception("podio address-review write failed listing=%s", pl.id)
                     results.append({"id": str(pl.id), "ok": False,
                                     "status": "needs_address_review", "reason": str(_dg_detail)})
                     processed += 1
@@ -403,6 +601,8 @@ def sync_wp_for_descriptions(
                 # )
                 # processed += 1
                 # posted += 1
+                # B (28.09): tag Today only on a genuine new post (this is the not-found/create path)
+                body["newest_deals"] = ["Todays Deal"]
                 post_id = _wp_post_create(body)
                 if post_id:
                     pl.update(
@@ -415,6 +615,17 @@ def sync_wp_for_descriptions(
                         record_listing_stage(str(pl.id), "wp_synced", wp_status="posted")
                     except Exception:
                         pass
+
+                    # Cloud A (2026-09-24): listing came back via /listings/address-fixed -> tell Podio
+                    try:
+                        _fx = ParsedListing.objects(id=pl.id).only("address_review", "buyer_matching_podio_item_id").first()
+                        if _fx and getattr(_fx, "address_review", None) == "fixed" and getattr(_fx, "buyer_matching_podio_item_id", None):
+                            from buyers.matching_api import podio_set_address_review
+                            podio_set_address_review(_fx.buyer_matching_podio_item_id, 4,
+                                "Address fixed and published: WordPress post %s (%s)" % (post_id, "new post"))
+                            pl.update(set__address_review="published")
+                    except Exception:
+                        logging.exception("address-fixed podio hook failed id=%s", pl.id)
                     results.append({"id": str(pl.id), "ok": True, "status": "posted", "post_id": post_id})
                     processed += 1
                     posted += 1

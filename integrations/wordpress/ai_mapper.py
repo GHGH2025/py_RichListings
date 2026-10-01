@@ -6,7 +6,7 @@ from openai import OpenAI
 from bson import ObjectId
 from models import ParsedListing
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+OPENAI_MODEL = os.getenv("WP_MAPPER_MODEL", "gpt-6-luna")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
