@@ -9,7 +9,7 @@ access / offers" pair, with per-wholesaler avoidance via used_questions (server 
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from typing import List, Tuple
-import os, re, json, logging, itertools, threading
+import os, re, json, logging, itertools, threading, random
 
 router = APIRouter(tags=["availability-email"])
 STREET_SUFFIX = r"(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ct|Court|Ln|Lane|Blvd|Way|Ter|Terrace|Cir|Circle|Pl|Place|Loop|Hwy|Pkwy)"
@@ -25,6 +25,7 @@ class GenReq(BaseModel):
     used_openers: List[str] = []
     used_questions: List[str] = []      # question keys already sent to this wholesaler (server 02 memo)
     name_in_subject_ok: bool = True
+    is_land: bool = False   # Rich 30.09: land/lot -> never ask about repairs/condition
 
 
 def _check_token(request: Request):
@@ -41,6 +42,38 @@ def _sanitize(s: str) -> str:
     return s
 
 
+def _delist(body: str) -> str:
+    """Rich 30.09: addresses as plain <p> lines, never <ul>/<li> and never a leading bullet/'-'."""
+    if not body:
+        return body
+    b = re.sub(r"(?is)</?ul[^>]*>", "", body)
+    b = re.sub(r"(?is)<li[^>]*>\s*", "<p>", b)
+    b = re.sub(r"(?is)\s*</li>", "</p>", b)
+    b = re.sub(r"(?im)(<p[^>]*>)\s*[-\u2022*]\s+", r"\1", b)
+    return b
+
+
+def _singularize(text: str) -> str:
+    """Deterministic plural->single fix for a one-property email (Rich 30.09: these->this),
+    used only as a last-attempt fallback so we never drop to the old GlobiFlow template."""
+    if not text:
+        return text
+    # Blagojche 30.09: PHRASE-level only, so the English stays correct (never "Are this").
+    # No digits, no bare these->this, no both change. Anything still plural is left for
+    # _violations -> 422 -> server 02 ai_pending retry (+30 min).
+    def _cap(rep, m):  # Blagojche 30.09: keep sentence-start capital ("Are these"->"Is this")
+        return (rep[0].upper() + rep[1:]) if m.group(0)[:1].isupper() else rep
+    text = re.sub(r"\bare\s+these\b", lambda m: _cap("is this", m), text, flags=re.I)
+    text = re.sub(r"\bare\s+those\b", lambda m: _cap("is this", m), text, flags=re.I)
+    text = re.sub(r"\bare\s+they\b", lambda m: _cap("is it", m), text, flags=re.I)
+    _sn = {"properties": "property", "property": "property", "homes": "home", "home": "home",
+           "houses": "house", "house": "house", "deals": "deal", "deal": "deal",
+           "listings": "listing", "listing": "listing", "ones": "one", "one": "one"}
+    text = re.sub(r"\b(?:these|those)\s+(properties|property|homes|home|houses|house|deals|deal|listings|listing|ones|one)\b",
+                  lambda m: _cap("this ", m) + _sn.get(m.group(1).lower(), m.group(1)), text, flags=re.I)
+    return text
+
+
 def _clean_addresses(addresses: List[str]) -> List[str]:
     """Drop empties and anything that is only a phone number (22.09: Rich's own number was
     listed as a property in all 35 emails because the extractor picked it up)."""
@@ -50,7 +83,18 @@ def _clean_addresses(addresses: List[str]) -> List[str]:
         if not a or PHONE_RE.match(a):
             continue
         out.append(a)
-    return out
+    # Rich 30.09: same property listed twice (e.g. "Southeast Placita Court" and
+    # "9 Southeast Placita Court"). Drop a number-less address that is a suffix of a numbered one
+    # in the same list, keeping the numbered (more specific) one.
+    numbered = [x for x in out if re.match(r"^\s*\d", x)]
+    deduped = []
+    for a in out:
+        al = a.strip().lower()
+        if not re.match(r"^\s*\d", a) and any(
+                n.strip().lower().endswith(al) and n.strip().lower() != al for n in numbered):
+            continue
+        deduped.append(a)
+    return deduped
 
 
 def _count_questions(body: str) -> int:
@@ -137,7 +181,7 @@ real-estate investor) personally typed it - never like a template or marketing b
 - Vary the wording; do NOT reuse any subject/opener listed in avoid_subjects / avoid_openers.
 - Use straight quotes only. Do NOT use em dashes or en dashes; use a comma or a hyphen.
 - Sign off simply as Rich. No company signature, no links, no phone numbers.
-- body must be simple HTML: <p> per line; if multiple properties list them in <ul><li>...</li></ul>. No <html>/<head>/<body>.
+- body must be simple HTML: one <p> per line and one <p> per property (NEVER <ul>/<li> lists, and no leading "-" or bullet characters). No <html>/<head>/<body>.
 Return ONLY JSON: {"subject": "...", "body": "<html fragment>"}."""
 
 # Question angles Rich would use (22.09: "asking the same question to all" + "limit to 2 questions").
@@ -208,8 +252,13 @@ def generate(req: GenReq, request: Request):
         raise HTTPException(status_code=422, detail={"error": "no_addresses"})
     req.property_count = len(addrs)   # count what we actually list, not what the extractor counted
     pair = _pick_pair(req.used_questions)
+    q_keys = list(pair)
+    if req.is_land:   # Rich 30.09: never ask about repairs/condition for land/lot
+        q_keys = [k for k in q_keys if k != "condition"] or ["news"]
+    if len(q_keys) > 1 and random.choice((True, False)):   # Rich 30.09: vary 1 or 2 questions
+        q_keys = q_keys[:1]
     # >5 properties: Rich's rule is one line "which of these are still available" - that is the only question
-    questions = [QUESTIONS[k] for k in pair] if req.property_count <= 5 else ["which of the listed ones are still available"]
+    questions = [QUESTIONS[k] for k in q_keys] if req.property_count <= 5 else ["which of the listed ones are still available"]
     user = {
         "wholesaler_first_name": (req.name or "").strip(),
         "property_count": req.property_count,
@@ -222,13 +271,20 @@ def generate(req: GenReq, request: Request):
         "subject_ideas_many": SUBJECT_IDEAS_MANY,
     }
     last = None
+    subject, body = "", ""
     for attempt in range(3):  # regenerate-or-fail
         subject, body = _call_model(user)
         if not subject or not body:
             last = ["empty"]; continue
         v = _violations(subject, body, req)
         if not v:
-            return {"subject": subject, "body": body, "questions": list(pair), "addresses": addrs}
+            return {"subject": subject, "body": _delist(body), "questions": q_keys, "addresses": addrs}
         last = v
         logging.warning("availability gen attempt %d violations=%s", attempt + 1, v)
+    # Rich 30.09 (Blagojche): if the ONLY remaining problem is plural-for-single, fix it
+    # deterministically (these->this) and return - never drop to the old GlobiFlow template.
+    if last == ["plural_for_single_property"] and subject and body:
+        subject, body = _singularize(subject), _singularize(body)
+        if not _violations(subject, body, req):
+            return {"subject": subject, "body": _delist(body), "questions": q_keys, "addresses": addrs}
     raise HTTPException(status_code=422, detail={"error": "validation_failed", "violations": last})

@@ -160,7 +160,25 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
             failed += 1
             continue
 
+        # A2 (28.09, title-fixed 30.09 per Blagojche): use the PREV post's address so /create's
+        # fuzzy match hits the existing post (the record's address is often WhatsApp-mangled -> a
+        # duplicate 52408), AND use the PREV street for the REDUCED!! title so it doesn't show a
+        # broken address.
+        _prev_id = getattr(pl, "price_drop_prev_id", None)
+        _prev_street = None
+        if _prev_id:
+            _prev = ParsedListing.objects(id=_prev_id).only(
+                "address", "city", "state", "zip", "geo_code_response").first()
+            if _prev:
+                _prev_addr = build_activation_address(_prev)
+                if _prev_addr:
+                    address = _prev_addr
+                _ps, _, _, _ = _best_address_parts(_prev)
+                if _ps:
+                    _prev_street = _ps
         street, _, _, _ = _best_address_parts(pl)
+        if _prev_street:
+            street = _prev_street
         title_address = street or address
         asking_price = _format_asking_price(price)
         custom_title = f"{REDUCED_TITLE_PREFIX} {title_address}"
@@ -175,6 +193,19 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
         )
         if not wp_success:
             err = f"wp_publish_failed status={wp_status} detail={str(wp_payload)[:200]}"
+            if str(wp_status) == "404":
+                # A1v2 follow-up (30.09 per Blagojche): the existing post is gone (404). A1 already
+                # marked the record already_found so the poster won't create it, and the price-drop
+                # path can't update a missing post -> the deal would be lost. Hand it back to the
+                # poster as a NEW listing: drop price-drop ownership + requeue for /create. 404 only.
+                pl.update(
+                    set__price_drop_pass=False,
+                    set__wp_status="des_generated",
+                    set__price_drop_activate_error=err,
+                    set__updated_at=_now(),
+                )
+                failed += 1
+                continue
             pl.update(
                 set__price_drop_activate_error=err,
                 set__updated_at=_now(),

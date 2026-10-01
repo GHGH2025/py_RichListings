@@ -89,3 +89,18 @@ Scope: 35 changed files (+678 / -83 lines) and 7 new modules. Secrets are not in
 - Addresses taken from a "Comps" section of an email: the extractor fix is being built.
 - The 2-bed rule R1 should apply to single family only.
 - Masked vs full dedup missed at least one case ("13XX SE 1st Way" vs "1328 SE 1st Way", Deerfield): both went live. Under review.
+
+## 12. Afternoon 30.09 (deployed / done, PM)
+
+- **item 3 "live-only" dedup reappear** (`pipeline/dedup.py`): a prior counts as a live duplicate only
+  when its WP post is still live; a hidden original (special-avails / GlobiFlow-privated) is re-published
+  on a genuine re-send, unless Podio says Sold/Under Contract. Includes a masked / no-house-number guard
+  (via `review_reason`) so an intentionally-hidden masked dup (e.g. "13XX SE 1st Way", hidden because
+  "1328 SE 1st Way" is live) stays in review. Env kill-switch `DEDUP_REAPPEAR_PUBLISH`. Deployed ~14:11 UTC.
+- **Dedup cleanup (read-only analysis + targeted republish)**: 3 originals + 9 more re-appeared (their
+  hidden originals were re-sent); 5 stale live prices corrected; "919 CR 482D" (post 50233) republished
+  after a false-dup with "CR 422". Prices verified against the source emails before publishing.
+- Resolves several 30.09 open items in section 11: the `wa_*` metrics `FieldDoesNotExist`, the Comps-address
+  extractor guard, the R1 single-family rule, and the masked-vs-full dedup case.
+
+_Push-only backup branch; no secrets._

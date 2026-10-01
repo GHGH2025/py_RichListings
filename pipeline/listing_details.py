@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from models import ParsedListing, FilteredListingEmail
 from ai.address_keys import update_parsed_listing_address_keys
 from integrations.google_formatter import geocode_response, street_city_zip_from_geocode
-from services.direct_wholesaler_service import get_wholesaler_map
+from services.direct_wholesaler_service import get_wholesaler_map, normalize_email
 from pipeline.address_utils import (
     is_bed_bath_descriptor_address,
     resolve_street_address_from_fields,
@@ -313,6 +313,10 @@ Rules:
 - If none of the above are explicitly indicated, return property_type=null (do NOT guess).
 - These keywords may appear in subject, title blocks, body text, bullets, image captions, or buttons.
 
+COMPS / COMPARABLES (critical - Rich 29.09):
+- NEVER take a listing address from under a "Comps", "Comparables", "Comparable Sales", "Sold Comps" or "Recent Sales" heading, or from any line that says "sold for". Those are comparable/sold OTHER properties, not the deal.
+- The deal address is almost always at the TOP of the ad; use it. (A few senders, e.g. Diplomat/Alex, put it at the bottom - still use the DEAL address, never a comp.)
+
 {image_block}
 Output MUST strictly match the provided JSON schema.
 """.strip()
@@ -352,6 +356,22 @@ def _guard_masked_house_number(addr, source_text):
     return (msrc.group(1) + rest).strip()        # e.g. "22**/22**" + " NW 56th Ave"
 
 
+def _strip_comps_sections(html: str) -> str:
+    """Conservative pre-strip so the extractor never reads a comparable/sold line as the deal
+    (Rich 29.09). Drops a line ONLY when it explicitly says "sold for" AND is short (<=200 chars):
+    a short standalone comp line. A long/minified line (Constant Contact tables can put the deal
+    and a comp on one line) is kept so we never delete the real deal. The "under a Comps heading"
+    rule is handled in the prompt, which understands document structure. Low-risk / reversible."""
+    if not html:
+        return html
+    kept = []
+    for line in html.split("\n"):
+        if len(line) <= 200 and re.search(r"(?i)\bsold\s+for\b", line):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def extract_listings_from_email_html(email_html: str,
                                      model: Optional[str] = None,
                                      temperature: float = 0.0,
@@ -370,6 +390,7 @@ def extract_listings_from_email_html(email_html: str,
 
     # Optional: tiny cleanup to reduce obvious noise that sometimes slips through.
     compact_html = re.sub(r"\s+\n", "\n", email_html).strip()
+    compact_html = _strip_comps_sections(compact_html)  # Rich 29.09: drop "sold for" comp lines
 
     system_prompt = build_system_prompt(use_nearest_image_rules=use_nearest_image_rules)
 
@@ -614,8 +635,11 @@ def upsert_parsed_listings_from_html(
             direct_wholeseller_flag = "not_found"
             dw_info = None
             if sender:
-                # sender is already lowercased by _sender_email_safe
-                dw_info = wholesaler_map.get(sender)
+                # sender is lowercased by _sender_email_safe; also normalize Constant Contact relay
+                # addresses (user@x.ccsend.com -> user@x.com) so the wholesaler_map - which is keyed
+                # by normalize_email(sender_email) - matches Todd/Francesco. Fix 30.09 (Blagojche):
+                # reuse the EXISTING normalizer, do not add a new one.
+                dw_info = wholesaler_map.get(normalize_email(sender))
 
             if dw_info and isinstance(dw_info, dict):
                 # Mark as not_processed for further handling elsewhere
