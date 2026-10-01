@@ -364,6 +364,10 @@ def _guard_masked_house_number(addr, source_text):
     import re
     a = (addr or "").strip()
     st = source_text or ""
+    # B.1 (Blagojche 01.10): ignore URLs in the "verbatim" test - a link such as
+    # dropbox...&dl=0 contains a standalone "0" that would wrongly make a collapsed house
+    # number look real. Strip http(s) URLs before testing.
+    st = re.sub(r"https?://\S+", " ", st)
     m = re.match(r"^(\d+)\b(.*)$", a)          # only a CLEAN leading integer can be fabricated
     if not m or not st:
         return addr
@@ -618,10 +622,22 @@ def upsert_parsed_listings_from_html(
                     # street/city/zip from components (paid Address Validation removed).
                     geo_js = geocode_response(raw_line)
                     fa, fc, fz = street_city_zip_from_geocode(geo_js)
-                    if fa and fc:
-                        addr, city = fa, fc   # overwrite with geocoded components
-                    if fz and not zip_:
-                        zip_ = fz
+                    # B.1 (Blagojche 01.10): NEVER let the geocode overwrite a MASKED house
+                    # number. Google collapses "2**0 NW 91st St" to street_number "0" ->
+                    # "0 Northwest 91st Street". If the post-guard addr is masked, or the
+                    # geocoded street itself collapsed to a leading "0", keep the source
+                    # addr/city/zip (geo_js is still stored for debugging). Masked address
+                    # then stays as-is and propagates to WhatsApp/email (which read address).
+                    _lead = (addr or "").split(" ", 1)[0]
+                    _addr_masked = bool(re.search(r"\d", _lead)) and bool(re.search(r"[*xX#_\u2022]", _lead))
+                    _fa_collapsed = bool(fa) and re.match(r"^0\b", fa.strip()) is not None
+                    if _addr_masked or _fa_collapsed:
+                        logging.info("B.1 masked-guard: kept source addr %r (geocode gave %r / %r)", addr, fa, fc)
+                    else:
+                        if fa and fc:
+                            addr, city = fa, fc   # overwrite with geocoded components
+                        if fz and not zip_:
+                            zip_ = fz
             except Exception as e:
                 print(f"Exception in listing geo format: {e}")
                 # fail-open: keep original addr/city
