@@ -267,6 +267,7 @@ OUTPUT CONTRACT (must follow exactly):
 
 Rules:
 - For `address`, include the full street line as written in the email, INCLUDING the house/building number when present (e.g. "1234 India Street", "137XX Royal Palm Blvd", "2*** SW Natura Ave", "2**0 NW 91st St", "2XX0 NW 91st St"). Preserve masked/partial numbers EXACTLY as written - keep every real digit and every mask character in place. NEVER replace a masked position with a guessed digit, and NEVER collapse a masked number to a single digit or to "0" (e.g. "2**0" must stay "2**0", never "0" and never "2220"). If the house number is entirely masked/unknown, keep the masked token rather than inventing one. Do not strip the house number.
+- `address` is the SUBJECT / deal property ONLY. NEVER use an address from a "Comps" / "Comparable" / "Comparable Sales" section, or any line containing "SOLD" / "sold for" - those are comparables, not the deal. If the deal's own street line has no house number, keep it WITHOUT a number (do not borrow a number from a comp). Put comparable/sold addresses in `comparable_sales`, never in `address`.
 - SKIP non-street "address" lines that are only bed/bath/size summaries with a city. These are NOT addresses.
   Examples to SKIP (do not emit a listing, or set address=null and exclude):
     • "3 Beds / 2 Baths, Miami, FL 33143"
@@ -382,6 +383,52 @@ def _guard_masked_house_number(addr, source_text):
     if not msrc:
         return addr
     return (msrc.group(1) + rest).strip()        # e.g. "22**/22**" + " NW 56th Ave"
+
+
+def _comp_street_key(a):
+    """Street-level key for comparing addresses (ignore city/state/zip)."""
+    a = (a or "").split(",")[0].strip().lower()
+    return re.sub(r"\s+", " ", a)
+
+
+_COMPS_HEADING_RE_LD = re.compile(
+    r"(?im)^\s*(comps?|comparable sales|comparables?|recently\s+sold|recent\s+sold|sold\s+comps|sold)\b.*$"
+)
+
+
+def _guard_comp_as_deal_address(addr, lst, source_text):
+    """Rich 01-02.10: when the deal address has NO house number, the extractor sometimes takes
+    a COMP/SOLD address as the deal (deal "SW 158th Pl" -> comp "7743 SW 157th Pl"). If the
+    extracted address equals a comparable_sales[] address, recover the real deal street from
+    the source ABOVE the first Comps/Comparable/Sold heading (number-less -> needs_address_review).
+    SOURCE must be the ad's own complete_info (never the whole email_html: a "first street above
+    Comps" from another ad would be wrong)."""
+    a = (addr or "").strip()
+    if not a:
+        return addr
+    comps = lst.get("comparable_sales") or []
+    comp_keys = {_comp_street_key(c.get("address")) for c in comps
+                 if isinstance(c, dict) and c.get("address")}
+    if not comp_keys or _comp_street_key(a) not in comp_keys:
+        return addr                              # deal address is not a comp -> leave as-is
+    st = source_text or ""
+    if not st:
+        logging.warning("comp-guard: addr %r matched a comp but no ad complete_info to recover from; kept", a)
+        return addr
+    m = _COMPS_HEADING_RE_LD.search(st)
+    head = st[:m.start()] if m else st
+    _SUF = r"(?i)\b(st|street|ave|avenue|blvd|boulevard|rd|road|dr|drive|ln|lane|ct|court|pl|place|ter|terrace|way|cir|circle|hwy|pkwy|trl|trail)\b"
+    _SKIP = r"(?i)\$|\bbeds?\b|\bbaths?\b|\bsq ?ft\b|\bSF\b|\bbuilt\b|\bHOA\b|asking|\bsold\b"
+    for line in head.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.search(_SUF, line) and not re.search(_SKIP, line):
+            deal_street = line.split(",")[0].strip()
+            logging.info("comp-guard: addr %r matched a comp; recovered deal street %r", a, deal_street)
+            return deal_street
+    logging.warning("comp-guard: addr %r matched a comp but no deal street above Comps; kept", a)
+    return addr
 
 
 def _strip_comps_sections(html: str) -> str:
@@ -600,6 +647,9 @@ def upsert_parsed_listings_from_html(
             addr  = (lst.get("address") or "").strip()
             # Carlos 52402 guard (29.09): never post a fabricated house number for a masked source.
             addr = _guard_masked_house_number(addr, (lst.get("complete_info") or "") or email_html)
+            # Rich 01-02.10: never let a comp/SOLD address become the deal address. Use the ad's
+            # own complete_info ONLY (not email_html) so recovery can't grab another ad's street.
+            addr = _guard_comp_as_deal_address(addr, lst, lst.get("complete_info") or "")
             city  = (lst.get("city") or "").strip()
             state = (lst.get("state") or "").strip()
             zip_  = (lst.get("zip") or "").strip()

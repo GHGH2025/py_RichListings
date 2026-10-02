@@ -172,7 +172,7 @@ Do-not-post cities:
                     "content": user_content,
                 },
             ],
-            max_tokens=3,
+            max_completion_tokens=3,  # gpt-6-luna rejects max_tokens (temperature is stripped by tracked_chat_create)
             temperature=0,  # deterministic
         )
         # answer = (resp.choices[0].message.content or "").strip().upper()
