@@ -206,6 +206,7 @@ class ParsedListing(Document):
         default="none"
     )
     buyer_matching_podio_item_id = IntField()  # podio properties item id passed by globiflow
+    listing_posted_fired_at = DateTimeField(null=True)  # #2 idempotency: when listing_posted was fired (defer mode)
     buyer_matching_attempts = IntField(default=0)
     buyer_matching_consecutive_errors = IntField(default=0)
     buyer_matching_last_error_sig = StringField()

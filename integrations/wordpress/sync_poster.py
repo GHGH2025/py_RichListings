@@ -58,6 +58,54 @@ def _is_real_street(addr, city):
     return True
 
 
+# --- #2 defer listing_posted (Blagojche 01.10); env-gated OFF by default ---
+DEFER_LISTING_POSTED = os.getenv("DEFER_LISTING_POSTED", "0").strip().lower() not in ("0", "false", "no", "")
+
+
+def _defer_fire_listing_posted(pl):
+    """Fire listing_posted here (after the WP decision) for genuinely-new/review listings, only when
+    DEFER_LISTING_POSTED is on. Idempotent (Blagojche 01.10): fire at most once per listing and only
+    when it has no Podio item yet - so a listing re-seen on a later pass (e.g. while still in
+    needs_address_review) never creates a second Podio item."""
+    if not DEFER_LISTING_POSTED:
+        return
+    if getattr(pl, "buyer_matching_podio_item_id", None):
+        return   # already has a Podio item -> never fire again
+    if getattr(pl, "listing_posted_fired_at", None):
+        return   # already fired on an earlier pass
+    try:
+        from ai.whatsapp_posts import _post_listing_to_webhook
+        _ok = _post_listing_to_webhook(pl.id)
+        if _ok:
+            pl.update(set__listing_posted_fired_at=datetime.utcnow())
+        else:
+            # Blagojche 02.10: webhook NOT confirmed -> do NOT record fired_at, so the next
+            # pass can re-fire (no permanent item-less listing on a transient webhook failure).
+            logging.warning("defer: listing_posted webhook unconfirmed, fired_at NOT set id=%s", getattr(pl, "id", None))
+    except Exception:
+        logging.exception("defer listing_posted fire failed id=%s", getattr(pl, "id", None))
+
+
+def _defer_link_existing_podio(pl, post_id):
+    """For a dup (already_found/dedup_linked): reuse the existing post's Podio item instead of
+    creating a new one. Copies buyer_matching_podio_item_id from the ParsedListing that owns this
+    post_id. Only when DEFER_LISTING_POSTED is on. If no sibling with an item is found (e.g. the
+    post was created manually / by the importer - Ekta case), log it so we can see how often; the
+    copy then stays without a Podio item and without a webhook (Blagojche 01.10)."""
+    if not DEFER_LISTING_POSTED or not post_id:
+        return
+    try:
+        sib = (ParsedListing.objects(post_id=post_id, buyer_matching_podio_item_id__ne=None,
+                                     id__ne=pl.id)
+               .only("buyer_matching_podio_item_id").order_by("-updated_at").first())
+        if sib and getattr(sib, "buyer_matching_podio_item_id", None):
+            pl.update(set__buyer_matching_podio_item_id=int(sib.buyer_matching_podio_item_id))
+        else:
+            logging.info("defer: no sibling item post=%s id=%s", post_id, getattr(pl, "id", None))
+    except Exception:
+        logging.exception("defer link existing podio failed id=%s post=%s", getattr(pl, "id", None), post_id)
+
+
 def _pl_sender_email(pl) -> str:
     """Normalised sender email of a ParsedListing (from_info, else the source_email ref)."""
     try:
@@ -497,6 +545,7 @@ def sync_wp_for_descriptions(
                     set__post_id=found_id,
                     set__updated_at=datetime.utcnow(),
                 )
+                _defer_link_existing_podio(pl, found_id)  # #2: reuse existing Podio item
                 try:
                     from observability.pipeline_metrics import record_listing_stage
                     record_listing_stage(str(pl.id), "wp_already_found", wp_status="already_found")
@@ -529,6 +578,7 @@ def sync_wp_for_descriptions(
                     _dg_pid = getattr(_dg_detail, "post_id", None)
                     pl.update(set__wp_status="already_found", set__post_id=_dg_pid,
                               set__updated_at=datetime.utcnow())
+                    _defer_link_existing_podio(pl, _dg_pid)  # #2: reuse existing Podio item
                     results.append({"id": str(pl.id), "ok": True, "status": "dedup_linked",
                                     "post_id": _dg_pid})
                     processed += 1
@@ -545,6 +595,7 @@ def sync_wp_for_descriptions(
                         _xpid = getattr(_xdup, "post_id", None)
                         pl.update(set__wp_status="already_found", set__post_id=_xpid,
                                   set__address_review="exempt_dup", set__updated_at=datetime.utcnow())
+                        _defer_link_existing_podio(pl, _xpid)  # #2: reuse existing Podio item
                         results.append({"id": str(pl.id), "ok": True,
                                         "status": "dedup_linked_exempt", "post_id": _xpid})
                         processed += 1
@@ -566,6 +617,7 @@ def sync_wp_for_descriptions(
                                 comment=f"Cloud A dup-gate flagged this address for review (reason: {_dg_detail}). Address Review set to 'Needs review'.")
                         except Exception:
                             logging.exception("podio address-review write failed listing=%s", pl.id)
+                    _defer_fire_listing_posted(pl)  # #2: review listing still gets a Podio item
                     results.append({"id": str(pl.id), "ok": False,
                                     "status": "needs_address_review", "reason": str(_dg_detail)})
                     processed += 1
@@ -610,6 +662,7 @@ def sync_wp_for_descriptions(
                         set__post_id=post_id,
                         set__updated_at=datetime.utcnow(),
                     )
+                    _defer_fire_listing_posted(pl)  # #2: new listing -> Podio item here
                     try:
                         from observability.pipeline_metrics import record_listing_stage
                         record_listing_stage(str(pl.id), "wp_synced", wp_status="posted")
