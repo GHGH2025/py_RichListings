@@ -329,6 +329,33 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
         pl.update(**update_fields)
         activated += 1
 
+        # --- #26b (Blagojche 02.10): these price-drop PLs are OWNED here (A1 guard in
+        # sync_poster skips them with `continue` BEFORE _defer_link_existing_podio), so the
+        # item-reuse + buyer rematch must happen HERE. Record the real post_id, reuse the
+        # sibling post's Podio item, then (gated by DEFER_PRICE_DROP_REMATCH + >= MIN_PCT,
+        # once-per-drop) set pending+rematch so buyers get the NEW price (match_buyers reads
+        # price from this PL). Zero new Podio items.
+        try:
+            _mpid = int(_match_pid)
+            _sib = (ParsedListing.objects(post_id=_mpid, buyer_matching_podio_item_id__ne=None,
+                                          id__ne=pl.id)
+                    .only("buyer_matching_podio_item_id").order_by("-updated_at").first())
+            _set = {"set__post_id": _mpid, "set__updated_at": _now()}
+            if _sib and getattr(_sib, "buyer_matching_podio_item_id", None):
+                _set["set__buyer_matching_podio_item_id"] = int(_sib.buyer_matching_podio_item_id)
+            pl.update(**_set)
+            pl.reload()
+            # Blagojche 02.10: rematch ONLY if a sibling item was actually reused. Without an
+            # item, run_buyer_matching_cron does left_pending+continue forever -> pending piles
+            # up and never matches. No item -> log and stop (no pending, no email).
+            if "set__buyer_matching_podio_item_id" in _set:
+                from integrations.wordpress.sync_poster import _defer_maybe_rematch_price_drop
+                _defer_maybe_rematch_price_drop(pl, _mpid)
+            else:
+                logging.info("price_drop 26b: no sibling item post=%s id=%s - rematch skipped", _mpid, getattr(pl, "id", None))
+        except Exception:
+            logging.exception("price_drop #26b rematch hookup failed id=%s", getattr(pl, "id", None))
+
     return {
         "checked": checked,
         "activated": activated,
