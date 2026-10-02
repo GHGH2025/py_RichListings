@@ -60,6 +60,15 @@ def _is_real_street(addr, city):
 
 # --- #2 defer listing_posted (Blagojche 01.10); env-gated OFF by default ---
 DEFER_LISTING_POSTED = os.getenv("DEFER_LISTING_POSTED", "0").strip().lower() not in ("0", "false", "no", "")
+# --- #26 (Blagojche 02.10, option B): re-email buyers on a real price drop WITHOUT a dup
+# Podio item. SEPARATE flag, default OFF; only active when DEFER_LISTING_POSTED is also on.
+DEFER_PRICE_DROP_REMATCH = os.getenv("DEFER_PRICE_DROP_REMATCH", "0").strip().lower() not in ("0", "false", "no", "")
+try:
+    # dedup sets price_drop_pass on ANY drop>0 (<=50%); require >= this to rematch so tiny
+    # drops (e.g. 1201 $325k->$320k = 1.5%) do NOT spam buyers. 0.06 == Today's Deals threshold.
+    DEFER_PRICE_DROP_MIN_PCT = float(os.getenv("DEFER_PRICE_DROP_MIN_PCT", "0.06"))
+except Exception:
+    DEFER_PRICE_DROP_MIN_PCT = 0.06
 
 
 def _defer_fire_listing_posted(pl):
@@ -86,6 +95,40 @@ def _defer_fire_listing_posted(pl):
         logging.exception("defer listing_posted fire failed id=%s", getattr(pl, "id", None))
 
 
+def _defer_maybe_rematch_price_drop(pl, post_id):
+    """(B) gated by DEFER_PRICE_DROP_REMATCH (default OFF): on a real price drop, re-email
+    buyers the NEW price with NO duplicate Podio item. The existing item is already copied
+    onto this (already_found) drop-copy PL; set it pending+rematch so run_buyer_matching_cron
+    re-runs match_buyers, which reads the new price from the PL (matching_api ~1892:
+    list_price_usd/price). Threshold: price_drop_pass (dedup, any drop>0<=50%) AND
+    price_drop_pct >= DEFER_PRICE_DROP_MIN_PCT (default 0.06). Once-per-drop: skip if a sibling
+    PL with the SAME post_id AND SAME price is already pending/processing/matched (acct1+acct2
+    2-min race). NOTE: the Podio ITEM price is refreshed by the existing price-drop Active
+    webhook (process_price_drop_activations); confirm GlobiFlow's buyer email shows the new price."""
+    if not (DEFER_LISTING_POSTED and DEFER_PRICE_DROP_REMATCH):
+        return
+    if not getattr(pl, "price_drop_pass", False):
+        return
+    try:
+        drop = float(getattr(pl, "price_drop_pct", 0) or 0)
+    except Exception:
+        drop = 0.0
+    if drop < DEFER_PRICE_DROP_MIN_PCT:
+        logging.info("defer price-drop: skip rematch (drop %.3f < %.3f) id=%s", drop, DEFER_PRICE_DROP_MIN_PCT, getattr(pl, "id", None))
+        return
+    try:
+        dup = ParsedListing.objects(post_id=post_id, price=pl.price, id__ne=pl.id,
+                                    buyer_matching_status__in=["pending", "processing", "matched"]).first()
+        if dup:
+            logging.info("defer price-drop: sibling already rematched post=%s price=%s id=%s", post_id, pl.price, getattr(pl, "id", None))
+            return
+        pl.update(set__buyer_matching_status="pending", set__rematch=True,
+                  set__re_matched_buyer_ids=[], set__updated_at=datetime.utcnow())
+        logging.info("defer price-drop: rematch queued (drop %.3f) post=%s price=%s id=%s", drop, post_id, pl.price, getattr(pl, "id", None))
+    except Exception:
+        logging.exception("defer price-drop rematch failed id=%s post=%s", getattr(pl, "id", None), post_id)
+
+
 def _defer_link_existing_podio(pl, post_id):
     """For a dup (already_found/dedup_linked): reuse the existing post's Podio item instead of
     creating a new one. Copies buyer_matching_podio_item_id from the ParsedListing that owns this
@@ -100,6 +143,7 @@ def _defer_link_existing_podio(pl, post_id):
                .only("buyer_matching_podio_item_id").order_by("-updated_at").first())
         if sib and getattr(sib, "buyer_matching_podio_item_id", None):
             pl.update(set__buyer_matching_podio_item_id=int(sib.buyer_matching_podio_item_id))
+            _defer_maybe_rematch_price_drop(pl, post_id)  # #26 (option B): re-email on a real drop, same item
         else:
             logging.info("defer: no sibling item post=%s id=%s", post_id, getattr(pl, "id", None))
     except Exception:
