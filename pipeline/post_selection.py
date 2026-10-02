@@ -172,7 +172,11 @@ Do-not-post cities:
                     "content": user_content,
                 },
             ],
-            max_completion_tokens=3,  # gpt-6-luna rejects max_tokens (temperature is stripped by tracked_chat_create)
+            # gpt-6-luna is a reasoning model: a tiny budget is spent entirely on reasoning_tokens
+            # (finish_reason='length', empty content) so the fuzzy do-not-post answer came back
+            # blank. 256 leaves headroom for reasoning + the 1-token YES/NO. (max_tokens is
+            # rejected by this model; temperature is stripped by tracked_chat_create.)
+            max_completion_tokens=256,
             temperature=0,  # deterministic
         )
         # answer = (resp.choices[0].message.content or "").strip().upper()
