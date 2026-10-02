@@ -260,6 +260,12 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
             failed += 1
             continue
 
+        # #35 (Rich 02.10): the REDUCED!! title must carry the FULL address (street, city, state
+        # zip) - since the 30.09 title change it showed the street alone. Use the real post's own
+        # exact title (the same text every non-reduced deal shows).
+        if _match_title and str(_match_title).strip():
+            custom_title = f"{REDUCED_TITLE_PREFIX} {str(_match_title).strip()}"
+
         wp_success, wp_status, wp_payload = set_wp_post_status(
             _match_title,
             "publish",
