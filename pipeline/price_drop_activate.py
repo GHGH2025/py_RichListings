@@ -63,6 +63,9 @@ def _find_existing_wp_post(addr: str):
     return None, None
 
 REDUCED_TITLE_PREFIX = "<strong><span style='color: #ff6600;'>REDUCED!!</span> </strong>"
+# #36 (Rich 01.10, rule A): the Today's Deals tag only for a drop of 6% or more. The WP price
+# (rule B) and the reduction date _deal_date (rule C) are still updated on every drop by the plugin.
+TODAYS_DEAL_MIN_DROP = float(os.getenv("TODAYS_DEAL_MIN_DROP", "0.06"))
 
 
 def _now() -> datetime:
@@ -266,13 +269,18 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
         if _match_title and str(_match_title).strip():
             custom_title = f"{REDUCED_TITLE_PREFIX} {str(_match_title).strip()}"
 
+        # #36: tag Today's Deals only when the drop is >= TODAYS_DEAL_MIN_DROP (6%).
+        try:
+            _tdq = float(getattr(pl, "price_drop_pct", 0) or 0) >= TODAYS_DEAL_MIN_DROP
+        except Exception:
+            _tdq = False
         wp_success, wp_status, wp_payload = set_wp_post_status(
             _match_title,
             "publish",
             asking_price=asking_price,
             custom_title=custom_title,
             address=_match_title,
-            newest_deals=["Todays Deal"],
+            newest_deals=(["Todays Deal"] if _tdq else None),
         )
         if wp_success and isinstance(wp_payload, dict):
             _ret_pid = wp_payload.get("post_id")
