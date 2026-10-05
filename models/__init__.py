@@ -158,6 +158,7 @@ class ParsedListing(Document):
     post_content = StringField()
 
     wp_property_description = StringField()
+    desc_refreshed_at = DateTimeField()  # 38: last description refresh pushed to the live post
 
     wp_parsed_data = DictField()
 

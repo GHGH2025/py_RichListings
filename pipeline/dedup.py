@@ -91,6 +91,94 @@ def _now() -> datetime:
 
 
 
+# #38 (Blagojche 05.10) - Carlos: a re-send with a better description never reached the website,
+# because a duplicate of a live post stops here in dedup. When the re-send is clearly richer, write
+# its description onto the live post. v2 of staged patch 24, with three changes:
+#   1. cheap pre-filter on the raw text BEFORE any AI call (about 400 duplicates a day, ~5 richer);
+#   2. the post is updated by its ID through /update-desc (description only), never through /create;
+#   3. at most one refresh per post per DESC_REFRESH_COOLDOWN_DAYS.
+# DESC_REFRESH_IN_DEDUP: 0 = off (default), report = log candidates only (no AI call, no write), 1 = on.
+DESC_REFRESH_IN_DEDUP = os.getenv("DESC_REFRESH_IN_DEDUP", "0").strip().lower()
+
+
+def _carlos_raw_len(x) -> int:
+    ci = getattr(x, "complete_info", None) or {}
+    if isinstance(ci.get("complete_info"), dict):
+        ci = ci["complete_info"]
+    return len(str(ci.get("raw_description_excerpt") or "").strip())
+
+
+def _carlos_refresh_desc_on_live_dup(pl, prior) -> None:
+    mode = DESC_REFRESH_IN_DEDUP
+    if mode not in ("1", "true", "yes", "on", "report"):
+        return
+    import logging as _lg
+    import re as _re2
+    try:
+        if prior is None:
+            return
+        # 1. cheap pre-filter, no network, no AI
+        min_gain = int(os.getenv("DESC_REFRESH_MIN_GAIN_CHARS", "250"))
+        min_ratio = float(os.getenv("DESC_REFRESH_MIN_RATIO", "1.25"))
+        new_raw = _carlos_raw_len(pl)
+        if new_raw < min_gain:
+            return
+        # the caller may have loaded `prior` with .only(...): read the fields we need fresh
+        from models import ParsedListing as _PL
+        prior = _PL.objects(id=prior.id).only(
+            "post_id", "address", "complete_info", "wp_property_description", "desc_refreshed_at").first()
+        if not prior or not getattr(prior, "post_id", None):
+            return
+        prior_pid = prior.post_id
+        old_raw = _carlos_raw_len(prior)
+        if not (new_raw >= old_raw + min_gain and new_raw >= old_raw * min_ratio):
+            return
+        # 3. cooldown per live post
+        last = getattr(prior, "desc_refreshed_at", None)
+        cooldown = int(os.getenv("DESC_REFRESH_COOLDOWN_DAYS", "7"))
+        if last and (_now() - last).days < cooldown:
+            return
+        house_no = (_re2.match(r"\s*(\d+[A-Za-z]?)\b", str(getattr(prior, "address", "") or "")) or [None, ""])[1]
+        if not house_no:
+            return  # no real house number -> cannot double-check the post, skip
+        from integrations.wordpress.address_dedup import post_is_live as _pil
+        if _pil(prior_pid) is not True:
+            return
+        if mode == "report":
+            _lg.info("carlos refresh REPORT: would refresh post=%s id=%s raw new=%d old=%d", prior_pid, pl.id, new_raw, old_raw)
+            return
+        from integrations.wordpress.ai_property_description import ai_build_wp_property_description_by_id
+        ai_build_wp_property_description_by_id(str(pl.id))
+        pl.reload("wp_property_description")
+        new_desc = (getattr(pl, "wp_property_description", None) or "").strip()
+        old_desc = (getattr(prior, "wp_property_description", None) or "").strip()
+
+        def _tlen(h):
+            return len(_re2.sub(r"<[^>]+>", " ", h or "").strip())
+        nl, ol = _tlen(new_desc), _tlen(old_desc)
+        if not new_desc or not (nl >= ol + min_gain and nl >= ol * min_ratio):
+            _lg.info("carlos refresh: generated desc not richer post=%s id=%s new=%d old=%d", prior_pid, pl.id, nl, ol)
+            return
+        import requests as _rq
+        base = os.getenv("WP_API_BASE", "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1")
+        # 2. by post ID, description only; token in a header, never in the URL
+        resp = _rq.post(base + "/update-desc", timeout=30,
+                        headers={"X-Api-Token": os.getenv("WP_API_TOKEN") or ""},
+                        json={"post_id": int(prior_pid), "postdesc": new_desc, "expect_house_no": house_no})
+        ok = False
+        try:
+            ok = resp.status_code == 200 and bool(resp.json().get("success"))
+        except Exception:
+            ok = False
+        if ok:
+            _PL.objects(id=prior.id).update(set__wp_property_description=new_desc, set__desc_refreshed_at=_now())
+            _lg.info("carlos refresh: post=%s id=%s desc %d -> %d chars", prior_pid, pl.id, ol, nl)
+        else:
+            _lg.warning("carlos refresh: post=%s id=%s -> %s %s", prior_pid, pl.id, resp.status_code, (resp.text or "")[:200])
+    except Exception:
+        _lg.exception("carlos refresh failed id=%s", getattr(pl, "id", None))
+
+
 _MASK_RUN_RE = re.compile(r"^(\s*\d+)\s*((?:[^\w\s]|_){2,})\s*")  # legacy: used by the re-geocode gate
 _MASK_CHARS_RE = re.compile(r"[*xX_#•]")                     # B.1: mask characters in a house number
 
@@ -701,6 +789,7 @@ def process_not_processed_with_duplicate_rule(
                 pass
             processed += 1
         else:
+            _carlos_refresh_desc_on_live_dup(pl, prior)  # 38, env-gated (default off)
             pl.update(
                 set__status="skipped",
                 set__rules_ai_reason=_reason(
