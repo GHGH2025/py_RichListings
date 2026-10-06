@@ -491,6 +491,11 @@ def sync_wp_for_descriptions(
         raise RuntimeError("WP_API_TOKEN is not set in environment")
 
     filters: Dict[str, Any] = {"wp_status": "des_generated"}
+    # #39 (05.10 outage): the docstring contract is "description exists and is non-empty", but it
+    # was only checked inside the loop. With limit=5 and oldest-first order, five des_generated
+    # listings WITHOUT a description filled every batch and nothing was posted from Fri 02.10
+    # 18:21 UTC to Mon 05.10 16:31 UTC (99 deals waiting). Enforce the contract in the query.
+    filters["wp_property_description__nin"] = [None, ""]
     if gmail_message_id:
         filters["gmail_message_id"] = gmail_message_id
     else:
