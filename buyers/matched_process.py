@@ -435,6 +435,14 @@ def send_email_to_buyer(to_email: str, subject: str, html_body: str, timeout: in
     to_email = (to_email or "").strip()
     subject = (subject or "").strip()
     html_body = html_body or ""
+    # #40 (06.10.2026): DEAL_EMAIL_VIA=ses sends through Amazon SES from server 01 (buyers/deal_email_ses.py)
+    # instead of server 02 -> Rich's Google mailbox. Same result dict, so the cap and the send log are unchanged.
+    try:
+        from buyers.deal_email_ses import ses_enabled, send_via_ses
+        if ses_enabled():
+            return send_via_ses(to_email, subject, html_body)
+    except Exception:
+        logging.exception("send_email_to_buyer: SES path failed to load, falling back to the API route")
 
     if not to_email:
         return {
