@@ -411,7 +411,7 @@ def verify_and_fill_missing_media_for_not_processed(
     if gmail_message_id:
         qs = qs.filter(gmail_message_id=gmail_message_id)
     else:
-        qs = qs.filter(gmail_message_id__not__startswith="test_")
+        qs = qs.filter(gmail_message_id__not__startswith="test_", input_source__ne="new_email")
     qs = qs.only("id", "address", "city", "state", "zip", "images", "other_images_source", "source_email") \
         .limit(limit)
 

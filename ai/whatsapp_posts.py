@@ -212,7 +212,7 @@ def make_whatsapp_posts_from_ready_to_post(
     if gmail_message_id:
         q = q.filter(gmail_message_id=gmail_message_id)
     else:
-        q = q.filter(gmail_message_id__not__startswith="test_")
+        q = q.filter(gmail_message_id__not__startswith="test_", input_source__ne="new_email")
     for pl in q.limit(limit):
         total += 1
         try:

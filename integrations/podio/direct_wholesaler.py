@@ -1017,6 +1017,7 @@ def process_direct_wholeseller_batch(batch_limit: int = 3) -> None:
         apply_publication_gate(ParsedListing.objects(
             direct_wholeseller="not_processed",
             gmail_message_id__not__startswith="test_",
+            input_source__ne="new_email",
         ))[:limit]
     )
     print("listings==========", listings)  # kept as-is

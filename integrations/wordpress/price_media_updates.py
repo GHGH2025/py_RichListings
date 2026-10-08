@@ -7,6 +7,7 @@ from mongoengine.queryset.visitor import Q
 from models import ParsedListing  # mongoengine document
 from pipeline.address_utils import resolve_street_address
 from pipeline.publication_gate import apply_publication_gate
+from new_emails.isolation import scope_queue
 from media.slugify import slugify_for_folder
 from media.dropbox_upload import handle_Link
 from media.scrape_images import is_gallery_url
@@ -185,7 +186,7 @@ Return ONLY JSON: {{"match": true|false, "confidence": 0..1, "reason": "<short>"
         # Conservative: reject if AI failed
         return {"match": False, "confidence": 0.0, "reason": f"ai_error: {type(e).__name__}"}
 
-def process_wp_price_and_media_updates(limit: int = 200) -> Dict[str, Any]:
+def process_wp_price_and_media_updates(limit: int = 200, gmail_message_id: str | None = None) -> Dict[str, Any]:
     """
     For ParsedListing with wp_check='pending':
       1) Search in WP (main "<address>, <city>" then all 'address_search_keys').
@@ -209,7 +210,7 @@ def process_wp_price_and_media_updates(limit: int = 200) -> Dict[str, Any]:
              - Finally set wp_check='processed'.
     """
     # Pull minimal fields required
-    qs = apply_publication_gate(ParsedListing.objects(wp_check="pending")) \
+    qs = scope_queue(apply_publication_gate(ParsedListing.objects(wp_check="pending")), gmail_message_id) \
         .only("id", "address", "city", "state", "zip", "price",
               "address_search_keys", "wp_check", "wp_check_post_id",
               "other_images_dropbox_link","other_images_source",

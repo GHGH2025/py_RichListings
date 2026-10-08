@@ -15,6 +15,7 @@ import requests
 from models import ParsedListing
 from integrations.wordpress.post_status import set_wp_post_status
 from pipeline.publication_gate import apply_publication_gate
+from new_emails.isolation import scope_queue
 
 WEBHOOK_URL = os.getenv(
     "PRICE_DROP_PODIO_ACTIVE_WEBHOOK_URL",
@@ -120,7 +121,7 @@ def _fire_podio_active_webhook(address: str) -> bool:
         return False
 
 
-def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
+def process_price_drop_activations(limit: int = 50, gmail_message_id: Optional[str] = None) -> Dict[str, Any]:
     """
     For each listing with price_drop_pass and not yet activated:
       - set WP post_status to publish, update asking_price, set REDUCED!! custom_title
@@ -130,10 +131,10 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
     checked = activated = wp_ok = podio_ok = failed = skipped_no_addr = skipped_no_price = 0
 
     candidates = (
-        apply_publication_gate(ParsedListing.objects(
+        scope_queue(apply_publication_gate(ParsedListing.objects(
             price_drop_pass=True,
             price_drop_activated__ne=True,
-        ))
+        )), gmail_message_id)
         .order_by("updated_at")
         .limit(limit)
     )

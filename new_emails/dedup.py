@@ -432,7 +432,7 @@ def process_not_processed_with_duplicate_rule(
     if gmail_message_id:
         q = q.filter(gmail_message_id=gmail_message_id)
     else:
-        q = q.filter(gmail_message_id__not__startswith="test_", input_source__ne="new_email")
+        q = q.filter(gmail_message_id__not__startswith="test_")
     candidates = (
         q.only("address", "city", "zip", "state", "price", "complete_info", "geo_code_response", "skipped_or_posted_at", "status")
         .limit(limit)
@@ -560,7 +560,7 @@ def process_not_processed_with_duplicate_rule(
             except Exception:
                 pass
             skipped += 1
-        elif drop > 0:
+        elif drop >= PRICE_DROP_THRESHOLD:
             pl.update(
                 set__status=NEXT_STATUS_ON_PASS,
                 set__rules_ai_reason=None,
@@ -583,8 +583,8 @@ def process_not_processed_with_duplicate_rule(
             pl.update(
                 set__status="skipped",
                 set__rules_ai_reason=_reason(
-                    "duplicate found; no price reduction",
-                    f"prev_id={prior.id} drop={drop:.1%} (<= 0) prev={prev_price:.0f} -> curr={curr_price:.0f}"
+                    "duplicate found; price reduction below 6%",
+                    f"prev_id={prior.id} drop={drop:.1%} (< 6%) prev={prev_price:.0f} -> curr={curr_price:.0f}"
                 ),
                 set__skipped_or_posted_at=_now(),
                 set__updated_at=_now(),

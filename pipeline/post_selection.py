@@ -399,7 +399,7 @@ def select_passed_listings_for_post(
     if gmail_message_id:
         q = q.filter(gmail_message_id=gmail_message_id)
     else:
-        q = q.filter(gmail_message_id__not__startswith="test_")
+        q = q.filter(gmail_message_id__not__startswith="test_", input_source__ne="new_email")
 
     # Optional sort (oldest first is typical for fairness)
     if sort_by in {"created_at", "updated_at", "price"}:

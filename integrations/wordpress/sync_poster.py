@@ -283,6 +283,7 @@ def sync_wp_for_descriptions(
         filters["gmail_message_id"] = gmail_message_id
     else:
         filters["gmail_message_id__not__startswith"] = "test_"
+        filters["input_source__ne"] = "new_email"
 
     q = ParsedListing.objects(**filters).only(
         "address", "city", "state", "zip", "images", "price",

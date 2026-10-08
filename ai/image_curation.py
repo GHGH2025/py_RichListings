@@ -441,7 +441,7 @@ def process_primary_image_verification(
     if gmail_message_id:
         qs = qs.filter(gmail_message_id=gmail_message_id)
     else:
-        qs = qs.filter(gmail_message_id__not__startswith="test_")
+        qs = qs.filter(gmail_message_id__not__startswith="test_", input_source__ne="new_email")
     qs = qs.only("id", "images", "primary_image_check").limit(limit)
 
     total = checked = passed = failed = no_image = 0
@@ -618,7 +618,7 @@ def process_listings_ready_for_image_processing(
     if gmail_message_id:
         q = q.filter(gmail_message_id=gmail_message_id)
     else:
-        q = q.filter(gmail_message_id__not__startswith="test_")
+        q = q.filter(gmail_message_id__not__startswith="test_", input_source__ne="new_email")
     q = q.order_by("+created_at").limit(limit)
     for pl in q:
         total += 1

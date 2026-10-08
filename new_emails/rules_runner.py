@@ -79,7 +79,7 @@ def apply_ai_english_rules(
     if gmail_message_id:
         q = q.filter(gmail_message_id=gmail_message_id)
     else:
-        q = q.filter(gmail_message_id__not__startswith="test_", input_source__ne="new_email")
+        q = q.filter(gmail_message_id__not__startswith="test_")
     q = q.limit(limit)
 
     for pl in q:

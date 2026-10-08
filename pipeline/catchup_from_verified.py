@@ -108,6 +108,7 @@ def find_verified_since(since: str, limit: int = 100) -> Dict[str, Any]:
             status="verified",
             updated_at__gte=since_dt,
             gmail_message_id__not__startswith="test_",
+            input_source__ne="new_email",
         ))
         .order_by("+updated_at")
         .limit(limit)

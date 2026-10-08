@@ -64,6 +64,7 @@ from buyers.matching_api import router as buyer_matching_router
 from routes.direct_wholesaler import router as direct_wholesaler_router
 from routes.podio_wholeseller import router as podio_wholeseller_router
 from routes.scraping_list import router as scraping_list_router
+from routes.new_emails_list import router as new_emails_list_router
 from routes.special_avail_list import router as special_avail_list_router
 from routes.address_fixed import router as address_fixed_router
 from routes.wordpress_proxy import router as wordpress_proxy_router
@@ -122,6 +123,7 @@ app.include_router(buyer_matching_router)
 app.include_router(direct_wholesaler_router)
 app.include_router(podio_wholeseller_router)
 app.include_router(scraping_list_router)
+app.include_router(new_emails_list_router)
 app.include_router(special_avail_list_router)
 app.include_router(address_fixed_router)
 app.include_router(wordpress_proxy_router)

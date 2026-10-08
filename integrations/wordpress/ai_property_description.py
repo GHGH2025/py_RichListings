@@ -235,7 +235,7 @@ def ai_build_wp_property_description_for_posted(
     if gmail_message_id:
         q = q.filter(gmail_message_id=gmail_message_id)
     else:
-        q = q.filter(gmail_message_id__not__startswith="test_")
+        q = q.filter(gmail_message_id__not__startswith="test_", input_source__ne="new_email")
     q = q.order_by("+created_at")
     # if only_missing:
     #     q = q.filter(wp_property_description__exists=False)
