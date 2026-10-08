@@ -15,6 +15,75 @@ HISTORICAL_STATUSES = ("posted",)
 PRICE_DROP_THRESHOLD = 0.06                       # 6%
 PRICE_DROP_MAX_AUTO = float(os.getenv("PRICE_DROP_MAX_AUTO", "0.50"))  # Rich 30.09: >50% drop = likely misread -> hold for review, never auto-update
 
+# Item 3 "live-only" reappear (Blagojche 30.09). A prior only counts as a live duplicate when its
+# WP post is still LIVE. If the original was hidden (special-avails aged out, or GlobiFlow/Podio
+# privated) a fresh re-send must be allowed back up - UNLESS Podio says the deal is Sold / Under
+# Contract (then it stays hidden). Env kill-switch so it can be turned off without a redeploy.
+DEDUP_REAPPEAR_PUBLISH = os.getenv("DEDUP_REAPPEAR_PUBLISH", "1").strip().lower() not in ("0", "false", "no", "")
+_PODIO_HOLD_STATUSES = {
+    x.strip().lower() for x in os.getenv(
+        "DEDUP_PODIO_HOLD_STATUSES", "sold,under contract,pending").split(",") if x.strip()
+}
+
+
+def _podio_status_for(prior) -> Optional[str]:
+    """Best-effort Podio 'Status' text (e.g. 'Sold', 'Under Contract', 'Active') for the listing's
+    Podio Properties item (buyer_matching_podio_item_id). Returns None when it cannot be determined.
+    Never raises - a lookup failure must not block the pipeline."""
+    try:
+        item_id = getattr(prior, "buyer_matching_podio_item_id", None)
+        if not item_id:
+            return None
+        from integrations.podio.direct_wholesaler import (
+            get_podio_access_token as _pd_tok, _get_item as _pd_item,
+            _get_property_status as _pd_status)
+        token = _pd_tok()
+        if not token:
+            return None
+        item = _pd_item(token, int(item_id))
+        if not item:
+            return None
+        return _pd_status(item)
+    except Exception:
+        import logging as _lg
+        _lg.exception("dedup reappear: podio status lookup failed prior=%s", getattr(prior, "id", None))
+        return None
+
+
+def _prior_post_is_live(prior):
+    """True/False if we could resolve the prior's WP post liveness, else None (unknown)."""
+    pid = getattr(prior, "post_id", None)
+    if not pid:
+        return None
+    try:
+        from integrations.wordpress.address_dedup import post_is_live as _pil
+        return _pil(pid)
+    except Exception:
+        import logging as _lg
+        _lg.exception("dedup reappear: post_is_live failed post=%s", pid)
+        return None
+
+
+def _addr_untrusted(addr) -> bool:
+    """True when an address is masked / has no clean house number / empty - not safe to auto-
+    reappear. Uses the same review_reason() the poster uses, so behaviour stays consistent."""
+    try:
+        from integrations.wordpress.address_dedup import review_reason as _rr
+        return _rr(addr) in ("masked", "no_house_number", "empty")
+    except Exception:
+        return False
+
+
+def _reappear_addr_untrusted(pl, prior, cand_list) -> bool:
+    """Block reappear (Blagojche 30.09) when the NEW record OR the PRIOR has a masked / no-house-
+    number address. Otherwise an intentionally-hidden masked dup (e.g. 52595 "13XX SE 1st Way",
+    hidden because 1328 SE 1st Way is live) would come back on the next re-send, since the masked
+    key never finds the live full-address post. Masked -> stays in review, as now."""
+    addrs = [c[0] for c in (cand_list or [])]
+    addrs.append(getattr(pl, "address", None))
+    addrs.append(getattr(prior, "address", None))
+    return any(_addr_untrusted(a) for a in addrs)
+
 
 def _now() -> datetime:
     return datetime.utcnow()
@@ -22,21 +91,135 @@ def _now() -> datetime:
 
 
 
-_MASK_RUN_RE = re.compile(r"^(\s*\d+)\s*((?:[^\w\s]|_){2,})\s*")
+# #38 (Blagojche 05.10) - Carlos: a re-send with a better description never reached the website,
+# because a duplicate of a live post stops here in dedup. When the re-send is clearly richer, write
+# its description onto the live post. v2 of staged patch 24, with three changes:
+#   1. cheap pre-filter on the raw text BEFORE any AI call (about 400 duplicates a day, ~5 richer);
+#   2. the post is updated by its ID through /update-desc (description only), never through /create;
+#   3. at most one refresh per post per DESC_REFRESH_COOLDOWN_DAYS.
+# DESC_REFRESH_IN_DEDUP: 0 = off (default), report = log candidates only (no AI call, no write), 1 = on.
+DESC_REFRESH_IN_DEDUP = os.getenv("DESC_REFRESH_IN_DEDUP", "0").strip().lower()
+
+
+def _carlos_raw_len(x) -> int:
+    ci = getattr(x, "complete_info", None) or {}
+    if isinstance(ci.get("complete_info"), dict):
+        ci = ci["complete_info"]
+    return len(str(ci.get("raw_description_excerpt") or "").strip())
+
+
+def _carlos_refresh_desc_on_live_dup(pl, prior) -> None:
+    mode = DESC_REFRESH_IN_DEDUP
+    if mode not in ("1", "true", "yes", "on", "report"):
+        return
+    import logging as _lg
+    import re as _re2
+    try:
+        if prior is None:
+            return
+        # 1. cheap pre-filter, no network, no AI
+        min_gain = int(os.getenv("DESC_REFRESH_MIN_GAIN_CHARS", "250"))
+        min_ratio = float(os.getenv("DESC_REFRESH_MIN_RATIO", "1.25"))
+        new_raw = _carlos_raw_len(pl)
+        if new_raw < min_gain:
+            return
+        # the caller may have loaded `prior` with .only(...): read the fields we need fresh
+        from models import ParsedListing as _PL
+        prior = _PL.objects(id=prior.id).only(
+            "post_id", "address", "complete_info", "wp_property_description", "desc_refreshed_at").first()
+        if not prior or not getattr(prior, "post_id", None):
+            return
+        prior_pid = prior.post_id
+        old_raw = _carlos_raw_len(prior)
+        if not (new_raw >= old_raw + min_gain and new_raw >= old_raw * min_ratio):
+            return
+        # 3. cooldown per live post
+        last = getattr(prior, "desc_refreshed_at", None)
+        cooldown = int(os.getenv("DESC_REFRESH_COOLDOWN_DAYS", "7"))
+        if last and (_now() - last).days < cooldown:
+            return
+        house_no = (_re2.match(r"\s*(\d+[A-Za-z]?)\b", str(getattr(prior, "address", "") or "")) or [None, ""])[1]
+        if not house_no:
+            return  # no real house number -> cannot double-check the post, skip
+        from integrations.wordpress.address_dedup import post_is_live as _pil
+        if _pil(prior_pid) is not True:
+            return
+        if mode == "report":
+            _lg.info("carlos refresh REPORT: would refresh post=%s id=%s raw new=%d old=%d", prior_pid, pl.id, new_raw, old_raw)
+            return
+        from integrations.wordpress.ai_property_description import ai_build_wp_property_description_by_id
+        ai_build_wp_property_description_by_id(str(pl.id))
+        pl.reload("wp_property_description")
+        new_desc = (getattr(pl, "wp_property_description", None) or "").strip()
+        old_desc = (getattr(prior, "wp_property_description", None) or "").strip()
+
+        def _tlen(h):
+            return len(_re2.sub(r"<[^>]+>", " ", h or "").strip())
+        nl, ol = _tlen(new_desc), _tlen(old_desc)
+        if not new_desc or not (nl >= ol + min_gain and nl >= ol * min_ratio):
+            _lg.info("carlos refresh: generated desc not richer post=%s id=%s new=%d old=%d", prior_pid, pl.id, nl, ol)
+            return
+        import requests as _rq
+        base = os.getenv("WP_API_BASE", "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1")
+        # 2. by post ID, description only; token in a header, never in the URL
+        resp = _rq.post(base + "/update-desc", timeout=30,
+                        headers={"X-Api-Token": os.getenv("WP_API_TOKEN") or ""},
+                        json={"post_id": int(prior_pid), "postdesc": new_desc, "expect_house_no": house_no})
+        ok = False
+        try:
+            ok = resp.status_code == 200 and bool(resp.json().get("success"))
+        except Exception:
+            ok = False
+        if ok:
+            _PL.objects(id=prior.id).update(set__wp_property_description=new_desc, set__desc_refreshed_at=_now())
+            _lg.info("carlos refresh: post=%s id=%s desc %d -> %d chars", prior_pid, pl.id, ol, nl)
+        else:
+            _lg.warning("carlos refresh: post=%s id=%s -> %s %s", prior_pid, pl.id, resp.status_code, (resp.text or "")[:200])
+    except Exception:
+        _lg.exception("carlos refresh failed id=%s", getattr(pl, "id", None))
+
+
+_MASK_RUN_RE = re.compile(r"^(\s*\d+)\s*((?:[^\w\s]|_){2,})\s*")  # legacy: used by the re-geocode gate
+_MASK_CHARS_RE = re.compile(r"[*xX_#•]")                     # B.1: mask characters in a house number
+
+
+def _jbl_masked_house_tok(tok: str) -> bool:
+    """A leading house-number token that mixes real digits with mask chars (X/x/*/_/#) or a run of
+    2+ dashes - i.e. the house number is partly or fully unknown. (Named uniquely to avoid the
+    pre-existing _is_masked_num(sn) helper later in this file.)"""
+    return bool(re.search(r"\d", tok)) and bool(_MASK_CHARS_RE.search(tok) or re.search(r"-{2,}", tok))
+
 
 def normalize_masked_street(addr: str) -> str:
-    """
-    If address starts with a street number followed by a masked run like *** ___ ---,
-    convert that run to 'xxx' (lowercase) so we standardize.
+    """Build the GEOCODING input for a (possibly masked) street address.
+
+    B.1 option B (Blagojche 01.10): a masked house number is UNKNOWN, so DROP it and let Google
+    resolve the STREET (route level). That yields a stable place_id regardless of how the mask was
+    written (2**, 2****, 2XX0, 2**0 all resolve to the same street), so dedup of masked listings
+    stays consistent across sources and we never feed Google a fabricated number. A clean house
+    number is kept as-is. Only the geocode INPUT is affected; the stored address (guarded to stay
+    masked, never '0') and review_reason are unchanged.
     Examples:
-      '2*** SW Natura Ave...' -> '2xxx SW Natura Ave...'
-      '2___ SW Natura Ave...' -> '2xxx SW Natura Ave...'
-      '2--- SW Natura Ave...' -> '2xxx SW Natura Ave...'
+      '2**0 NW 91st St'       -> 'NW 91st St'
+      '2XX0 NW 91st St'       -> 'NW 91st St'
+      '2 *** SW Natura Ave'   -> 'SW Natura Ave'   (space between number and mask)
+      '22**/22** NW 56th Ave' -> 'NW 56th Ave'
+      '2490 NW 91st St'       -> '2490 NW 91st St' (clean number kept)
+      '644-646 Main St'       -> '644-646 Main St' (real range kept)
     """
     print("addr before masked func>>",addr)
     if not isinstance(addr, str) or not addr.strip():
         return addr
-    return _MASK_RUN_RE.sub(r"\1xxx ", addr.strip(), count=1)
+    s = addr.strip()
+    # merge a space between a leading number and a mask run ("2 *** ..." -> "2*** ...") so the
+    # house-number token is seen as one unit.
+    s = re.sub(r"^(\d+)\s+([0-9xX*_#•]*[xX*_#•][0-9xX*_#•]*)(?=\s|$)", r"\1\2", s, count=1)
+    parts = s.split(None, 1)
+    head = parts[0]
+    rest = parts[1] if len(parts) > 1 else ""
+    if any(_jbl_masked_house_tok(t) for t in head.split("/")):
+        return rest if rest else head           # drop the masked house number -> street-level geocode
+    return head + ((" " + rest) if rest else "")
 
 
 
@@ -494,6 +677,32 @@ def process_not_processed_with_duplicate_rule(
             if prior:
                 dedup_src = "cross_source"
 
+        # Item 3 "live-only" reappear (Blagojche 30.09): if the matched prior's WP post is NOT
+        # live, it no longer occupies a live slot for this address, so drop the duplicate and let
+        # this listing go back up (it still re-enters the poster, which keeps its own masked->review
+        # and address gates). The remaining "prior is live" path below IS the live-address gate:
+        # while a live post exists for the matched address, dups stay suppressed. Podio Sold /
+        # Under Contract keeps it hidden even when the post is down.
+        if prior is not None and DEDUP_REAPPEAR_PUBLISH:
+            _prior_pid = getattr(prior, "post_id", None)
+            _prior_live = _prior_post_is_live(prior)
+            if _prior_pid and _prior_live is False:
+                _pstat = _podio_status_for(prior)
+                if _pstat and _pstat.strip().lower() in _PODIO_HOLD_STATUSES:
+                    import logging as _lg
+                    _lg.info("dedup reappear: prior post %s hidden but Podio=%s -> stay hidden "
+                             "(id=%s src=%s)", _prior_pid, _pstat, pl.id, dedup_src)
+                elif _reappear_addr_untrusted(pl, prior, cand_list):
+                    import logging as _lg
+                    _lg.info("dedup reappear: prior post %s not live but address masked/no-house "
+                             "-> stay in review, no reappear (id=%s src=%s)", _prior_pid, pl.id, dedup_src)
+                    # keep prior -> existing dup handling (masked stays in review, as now)
+                else:
+                    import logging as _lg
+                    _lg.info("dedup reappear: prior post %s not live (Podio=%s) -> re-publish "
+                             "(id=%s src=%s)", _prior_pid, _pstat, pl.id, dedup_src)
+                    prior = None
+                    dedup_src = None
 
         # prior = _find_recent_prior(addr, city, zip_, since, pl.id)
 
@@ -580,6 +789,7 @@ def process_not_processed_with_duplicate_rule(
                 pass
             processed += 1
         else:
+            _carlos_refresh_desc_on_live_dup(pl, prior)  # 38, env-gated (default off)
             pl.update(
                 set__status="skipped",
                 set__rules_ai_reason=_reason(
