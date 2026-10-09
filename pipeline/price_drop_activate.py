@@ -66,6 +66,9 @@ REDUCED_TITLE_PREFIX = "<strong><span style='color: #ff6600;'>REDUCED!!</span> <
 # #36 (Rich 01.10, rule A): the Today's Deals tag only for a drop of 6% or more. The WP price
 # (rule B) and the reduction date _deal_date (rule C) are still updated on every drop by the plugin.
 TODAYS_DEAL_MIN_DROP = float(os.getenv("TODAYS_DEAL_MIN_DROP", "0.06"))
+# A (Rich 08.10 / Blagojche 09.10): a hidden (private = 404) post is only requeued to the poster when the
+# re-send comes from a DIRECT sender; anyone else's re-send stays hidden (490 NW 3rd Terrace, 08.10).
+REVIVE_DIRECT_ONLY = os.getenv("REVIVE_DIRECT_ONLY", "1").strip().lower() not in ("0", "false", "no", "")
 
 
 def _now() -> datetime:
@@ -252,11 +255,27 @@ def process_price_drop_activations(limit: int = 50) -> Dict[str, Any]:
                           set__price_drop_activate_error="address matched a different post (%s != %s); stopped" % (_found_any[0], _expected_pid),
                           set__updated_at=_now())
             else:
+                try:
+                    from services.direct_wholesaler_service import listing_sender_is_direct as _lsd
+                    _is_direct = bool(_lsd(pl))
+                except Exception:
+                    _is_direct = False
+                if REVIVE_DIRECT_ONLY and not _is_direct:
+                    # A: the post is hidden (private answers 404) and the re-send is NOT from a direct
+                    # sender -> it stays hidden. Drop price-drop ownership, no requeue, no retry loop.
+                    logging.info("price_drop: expected post %s missing (hidden/404) and sender NOT direct "
+                                 "-> stays hidden (A) id=%s", _expected_pid, pl.id)
+                    pl.update(set__price_drop_pass=False,
+                              set__price_drop_activate_error="expected post missing (hidden/404); non-direct sender -> not revived (A)",
+                              set__rules_ai_reason="[A] prior post hidden; a re-send from a non-direct sender stays hidden",
+                              set__updated_at=_now())
+                    failed += 1
+                    continue
                 # expected post is gone (404) / no post for the address -> hand back to the poster as a
                 # NEW listing (A3): drop price-drop ownership + requeue des_generated so sync_poster
                 # re-posts it (with its own masked/no-house + dup gates). Stops the 2-min retry loop.
-                logging.warning("price_drop: expected post %s missing (404) id=%s -> requeue to poster (des_generated)",
-                                _expected_pid, pl.id)
+                logging.warning("price_drop: expected post %s missing (404) id=%s direct=%s -> requeue to poster (des_generated)",
+                                _expected_pid, pl.id, _is_direct)
                 pl.update(set__price_drop_pass=False, set__wp_status="des_generated",
                           set__price_drop_activate_error="expected post missing (404); requeued to poster",
                           set__updated_at=_now())
