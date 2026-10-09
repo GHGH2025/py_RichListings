@@ -159,6 +159,7 @@ class ParsedListing(Document):
     new_email_podio_sent_at = DateTimeField(null=True)
 
     wp_property_description = StringField()
+    desc_refreshed_at = DateTimeField()  # 38: last description refresh pushed to the live post
 
     wp_parsed_data = DictField()
 
@@ -207,6 +208,7 @@ class ParsedListing(Document):
         default="none"
     )
     buyer_matching_podio_item_id = IntField()  # podio properties item id passed by globiflow
+    listing_posted_fired_at = DateTimeField(null=True)  # #2 idempotency: when listing_posted was fired (defer mode)
     buyer_matching_attempts = IntField(default=0)
     buyer_matching_consecutive_errors = IntField(default=0)
     buyer_matching_last_error_sig = StringField()
@@ -580,6 +582,7 @@ class StageEvent(EmbeddedDocument):
 class ListingPipelineMetric(Document):
     meta = {
         "collection": "pipeline_metrics",
+        "strict": False,   # tolerate stray fields on legacy docs (wa_* etc.) - Blagojche 30.09
         "indexes": [
             # Names align with default mongoengine index names already in MongoDB.
             {"fields": ["listing_id"], "unique": True, "name": "listing_id_1"},
@@ -624,6 +627,12 @@ class ListingPipelineMetric(Document):
     posted_at = DateTimeField()
     podio_webhook_at = DateTimeField()
     whatsapp_sent_at = DateTimeField()
+    # WhatsApp tracking config (Blagojche 30.09: were causing FieldDoesNotExist on the metric write,
+    # 76 errors/day -> the tracker stage never updated so it looked stuck e.g. at "rules").
+    wa_config_name = DynamicField()
+    wa_tracked_message_id = DynamicField()
+    wa_group_name = DynamicField()
+    wa_config_email = DynamicField()
     podio_linked_at = DateTimeField()
     wp_keys_at = DateTimeField()
     wp_des_at = DateTimeField()

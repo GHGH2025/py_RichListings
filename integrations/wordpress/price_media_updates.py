@@ -282,10 +282,15 @@ def process_wp_price_and_media_updates(limit: int = 200, gmail_message_id: str |
                         "address": wp_address,
                         "asking_price": str(int(parsed_price)) if float(parsed_price).is_integer()
                                        else str(float(parsed_price)),
-                        "newest_deals": ["Todays Deal"],
                         "token": WP_TOKEN,
                         "custom_title": f"<strong><span style='color: #ff6600;'>REDUCED!!</span> </strong> {wp_address}",
                     }
+                    # #36 (Rich 01.10, rule A): Today's Deals tag only for a drop of 6% or more.
+                    try:
+                        if (wp_price - float(parsed_price)) / wp_price >= float(os.getenv("TODAYS_DEAL_MIN_DROP", "0.06")):
+                            body_reduction["newest_deals"] = ["Todays Deal"]
+                    except Exception:
+                        pass
                     ParsedListing.objects(id=pl.id).update_one(
                         set__wp_check_reduced="updated",
                         set__wp_check_prev_price=float(wp_price),
