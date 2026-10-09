@@ -22,8 +22,23 @@ PRICE_DROP_MAX_AUTO = float(os.getenv("PRICE_DROP_MAX_AUTO", "0.50"))  # Rich 30
 DEDUP_REAPPEAR_PUBLISH = os.getenv("DEDUP_REAPPEAR_PUBLISH", "1").strip().lower() not in ("0", "false", "no", "")
 _PODIO_HOLD_STATUSES = {
     x.strip().lower() for x in os.getenv(
-        "DEDUP_PODIO_HOLD_STATUSES", "sold,under contract,pending").split(",") if x.strip()
+        "DEDUP_PODIO_HOLD_STATUSES", "sold,under contract,pending,pending sale,closed,dead").split(",") if x.strip()
 }
+# A (Rich 08.10 / Blagojche 09.10): only a DIRECT sender may bring a hidden / non-active deal back.
+# A re-send from anyone else stays hidden (490 NW 3rd Terrace, 08.10). Env kill-switch.
+REVIVE_DIRECT_ONLY = os.getenv("REVIVE_DIRECT_ONLY", "1").strip().lower() not in ("0", "false", "no", "")
+_PODIO_NONACTIVE_STATUSES = {
+    x.strip().lower() for x in os.getenv(
+        "DEDUP_PODIO_NONACTIVE_STATUSES", "non-active,inactive").split(",") if x.strip()
+}
+
+
+def _sender_is_direct(pl) -> bool:
+    try:
+        from services.direct_wholesaler_service import listing_sender_is_direct as _lsd
+        return bool(_lsd(pl))
+    except Exception:
+        return False
 
 
 def _podio_status_for(prior) -> Optional[str]:
@@ -686,9 +701,23 @@ def process_not_processed_with_duplicate_rule(
         if prior is not None and DEDUP_REAPPEAR_PUBLISH:
             _prior_pid = getattr(prior, "post_id", None)
             _prior_live = _prior_post_is_live(prior)
-            if _prior_pid and _prior_live is False:
+            _is_direct = _sender_is_direct(pl)
+            _pstat = None
+            # A: a DIRECT sender also revives a deal whose Podio record is Non-Active while the WP
+            # post is still up (the record is then taken over in the Podio linking step).
+            _podio_nonactive = False
+            if _prior_pid and _is_direct and _prior_live is True:
                 _pstat = _podio_status_for(prior)
-                if _pstat and _pstat.strip().lower() in _PODIO_HOLD_STATUSES:
+                _podio_nonactive = bool(_pstat) and _pstat.strip().lower() in _PODIO_NONACTIVE_STATUSES
+            if _prior_pid and (_prior_live is False or _podio_nonactive):
+                if _pstat is None:
+                    _pstat = _podio_status_for(prior)
+                if REVIVE_DIRECT_ONLY and not _is_direct:
+                    import logging as _lg
+                    _lg.info("dedup reappear: prior post %s not live (Podio=%s) but sender NOT direct "
+                             "-> stay hidden (A) (id=%s src=%s)", _prior_pid, _pstat, pl.id, dedup_src)
+                    # keep prior -> existing dup handling below (skipped / price-drop)
+                elif _pstat and _pstat.strip().lower() in _PODIO_HOLD_STATUSES:
                     import logging as _lg
                     _lg.info("dedup reappear: prior post %s hidden but Podio=%s -> stay hidden "
                              "(id=%s src=%s)", _prior_pid, _pstat, pl.id, dedup_src)
@@ -699,8 +728,8 @@ def process_not_processed_with_duplicate_rule(
                     # keep prior -> existing dup handling (masked stays in review, as now)
                 else:
                     import logging as _lg
-                    _lg.info("dedup reappear: prior post %s not live (Podio=%s) -> re-publish "
-                             "(id=%s src=%s)", _prior_pid, _pstat, pl.id, dedup_src)
+                    _lg.info("dedup reappear: prior post %s live=%s Podio=%s direct=%s -> re-publish (A) "
+                             "(id=%s src=%s)", _prior_pid, _prior_live, _pstat, _is_direct, pl.id, dedup_src)
                     prior = None
                     dedup_src = None
 
