@@ -25,6 +25,9 @@ client = OpenAI()
 
 
 POSTED_LISTING_WEBHOOK_URL = os.getenv("POSTED_LISTING_WEBHOOK_URL")
+# #2 (Blagojche 01.10): when on, do NOT fire listing_posted here; sync_poster fires it after the
+# WP decision for genuinely-new/review listings only (not for already_found/dedup_linked).
+DEFER_LISTING_POSTED = os.getenv("DEFER_LISTING_POSTED", "0").strip().lower() not in ("0", "false", "no", "")
 TEAM_NUMBERS = [n.strip() for n in os.getenv("TEAM_WHATSAPP_NUMBERS","").split(",") if n.strip()]
 
 
@@ -63,19 +66,19 @@ def _serialize_listing_full(pl) -> dict:
     }
 
 
-def _post_listing_to_webhook(pl_id) -> None:
+def _post_listing_to_webhook(pl_id) -> bool:
     """
     Best-effort webhook post. Never raises; short timeout.
     Sends the full, current DB view of the listing after it is marked posted.
     """
     if not POSTED_LISTING_WEBHOOK_URL:
-        return  # disabled by config
+        return False  # disabled by config (not a confirmed fire)
 
     try:
         # re-load from DB to ensure we send exactly what's persisted
         fresh = ParsedListing.objects(id=pl_id).first()
         if not fresh:
-            return
+            return False
 
         payload = {
             "event": "listing_posted",
@@ -90,11 +93,15 @@ def _post_listing_to_webhook(pl_id) -> None:
             headers=headers,
             timeout=5,
         )
-        # Don't raise—log-ish only
+        # Don't raise—log-ish only. Return True ONLY on a confirmed 2xx so the caller
+        # (defer _defer_fire_listing_posted) records fired_at solely on success (Blagojche 02.10).
         if r.status_code >= 400:
             print(f"[webhook] non-2xx: {r.status_code} {r.text[:200]}")
+            return False
+        return True
     except Exception as e:
         print(f"[webhook] failed: {e}")
+        return False
 
 # System prompt keeps it dead simple and forces WhatsApp formatting
 SYSTEM_PROMPT = """You create short wholesale property posts for WHATSAPP.
@@ -244,7 +251,7 @@ def make_whatsapp_posts_from_ready_to_post(
 
             # NEW: best-effort webhook (does not affect flow)
             is_test = str(getattr(pl, "gmail_message_id", "") or "").startswith("test_")
-            if not skip_webhook and not is_test:
+            if not skip_webhook and not is_test and not DEFER_LISTING_POSTED:
                 _post_listing_to_webhook(pl.id)
 
             # try:

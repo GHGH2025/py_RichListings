@@ -116,6 +116,15 @@ def apply_ai_english_rules(
         ruleid = result.get("matched_rule_id")
         rules_version = str(rules_yaml.get("version")) if rules_yaml.get("version") is not None else None
 
+        # Rich 30.09: the 2-bed rules R1/R2 apply to single-family homes ONLY. If the LLM flagged
+        # R1/R2 on a duplex/multi-family/condo/townhouse/manufactured, override to Passed.
+        _ptype = str((getattr(pl, "complete_info", None) or {}).get("property_type") or "").lower()
+        if status == "Skipped" and ruleid in ("R1", "R2") and _ptype in (
+                "multi_family", "multifamily", "duplex", "triplex", "fourplex", "quadplex",
+                "condo", "townhouse", "town_home", "manufactured", "mobile_home"):
+            status = "Passed"; ruleid = None; reason = None
+            reasonP = "R1/R2 (2-bed rule) does not apply: property_type=%s is not single-family" % _ptype
+
         if status == "Skipped":
             skipped += 1
             pl.update(

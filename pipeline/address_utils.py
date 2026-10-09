@@ -79,15 +79,42 @@ def _street_only_from_line(line: str) -> str:
     return (line or "").split(",")[0].strip()
 
 
+# Comp/Comparable/Sold heading - verbatim scan must stay ABOVE the first such heading (Blagojche 02.10).
+_COMPS_HEADING_RE = re.compile(
+    r"(?im)^\s*(comps?|comparable sales|comparables?|recently\s+sold|recent\s+sold|sold\s+comps|sold)\b.*$"
+)
+
+# Generic directional/suffix tokens that cannot discriminate a street (NAME tokens are the rest).
+_GENERIC_STREET_TOKENS = frozenset({
+    "n","s","e","w","ne","nw","se","sw","north","south","east","west",
+    "northeast","northwest","southeast","southwest",
+    "st","street","ave","avenue","blvd","boulevard","rd","road","dr","drive","ln","lane",
+    "ct","court","pl","place","ter","terr","terrace","way","cir","circle","hwy","highway",
+    "pkwy","parkway","trl","trail","sq","square","loop","run","pt","point","apt","unit","ste","suite",
+})
+
+
+def _street_name_tokens(key: str):
+    return [t for t in (key or "").split() if t and t not in _GENERIC_STREET_TOKENS]
+
+
 def _extract_from_verbatim(verbatim: str, street_hint: str) -> Optional[str]:
     if not verbatim:
         return None
 
+    # Only scan the DEAL portion ABOVE the first Comps/Comparable/Sold heading so a comp
+    # address can never be borrowed as the deal (Rich 01-02.10).
+    mh = _COMPS_HEADING_RE.search(verbatim)
+    head = verbatim[:mh.start()] if mh else verbatim
+
     hint_key = _normalize_street_key(street_hint) if street_hint else ""
+    hint_names = set(_street_name_tokens(hint_key))
     first_match: Optional[str] = None
 
-    for m in _STREET_WITH_HOUSE_RE.finditer(verbatim):
+    for m in _STREET_WITH_HOUSE_RE.finditer(head):
         house, rest = m.group(1), m.group(2).strip()
+        if re.search(r"(?i)\bsold\b", f"{house} {rest}"):
+            continue  # a comp/sold line that slipped above the heading
         street = f"{house} {rest}".strip()
         street = _street_only_from_line(street)
         if is_bed_bath_descriptor_address(street):
@@ -97,10 +124,17 @@ def _extract_from_verbatim(verbatim: str, street_hint: str) -> Optional[str]:
         if not hint_key:
             return street
         rest_key = _normalize_street_key(rest)
-        if hint_key in rest_key or rest_key in hint_key or _token_overlap(hint_key, rest_key):
+        rest_names = set(_street_name_tokens(rest_key))
+        # Require the street NAME to match (e.g. "158th"), not just generic sw/pl.
+        if hint_names and hint_names.issubset(rest_names):
+            return street
+        if hint_names and (hint_key in rest_key or rest_key in hint_key):
             return street
 
-    return first_match
+    # No street-name match: only fall back to the first numbered street when there was NO hint.
+    if not hint_key:
+        return first_match
+    return None
 
 
 def _extract_from_whatsapp_bold(post_content: str) -> Optional[str]:

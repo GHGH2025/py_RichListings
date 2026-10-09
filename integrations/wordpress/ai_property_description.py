@@ -86,7 +86,7 @@ B) Exclude entirely (even if present in either source):
    - Closing/escrow details: COE, closing date, “close of escrow”, title company name, “closing at…”, escrow amount
    - Any deposit/earnest money/escrow deposit terms or amounts: “deposit”, “deposit amount”, “earnest money”, “EMD”, “escrow deposit”
    - Any “under contract / ready for assignment” language (assignment of contract, ready for assignment, under contract, etc.)
-   - Any ARV / After Repair Value, rehab/repair cost, estimate repair costs
+   - Rehab/repair cost or repair-cost estimates; any ESTIMATED / computed / guessed ARV or value range (a seller-STATED After Repair Value present in complete_info.arv_usd is allowed - see section C)
    - Any “estimated” rental income
    - Emojis
    - Fluff/opinions: school zones, close to shopping, “great for investors”, “amazing”, “best”, etc.
@@ -98,7 +98,8 @@ C) Include ALL extracted property features, amenities, and special preferences (
    - Do not truncate, cut off, or shorten the property's condition / rehab / description wording; include it in full - subject to the exclusions in section B.
    - Unit mix if explicitly stated (e.g., duplex 2/1 + 2/1)
    - Rental income ONLY if explicitly stated as actual rent (do NOT include anything labeled “estimated”)
-   - Comps ONLY if explicitly stated (never compute/infer comps)
+   - Comparable Sales: if complete_info.comparable_sales is non-empty, add a "Comparable Sales" section and list each comp (address if present, sold price, sold date) exactly as given in complete_info; never compute, infer, or add comps that are not in complete_info.
+   - ARV: if complete_info.arv_usd is present (a value stated by the seller, not a guess), include it as "ARV: $<value>"; never include an estimated/computed ARV.
    - You MUST ALSO include ANY additional features, amenities, or special preferences found in the post_content or complete_info (e.g., pools, elevators, views, luxury features, "1 Million Dollar Houses and Up", "Property Needs a Full Rehab"). Do not drop any valid property features or matching special preferences if explicitly stated.
 
 D) Formatting requirements:

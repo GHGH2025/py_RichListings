@@ -8,6 +8,7 @@ class SpecialAvailList(Document):
 
   meta = {
     "collection": "special_avail_list",
+    "strict": False,  # tracker (Node/Mongoose) writes __v on this doc; do not reject it
     "indexes": [
       {"fields": ["wholesaler_name"], "unique": True, "name": "uniq_wholesaler_name"},
       {"fields": ["active"], "name": "active_idx"},

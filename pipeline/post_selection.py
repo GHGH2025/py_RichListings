@@ -172,7 +172,11 @@ Do-not-post cities:
                     "content": user_content,
                 },
             ],
-            max_tokens=3,
+            # gpt-6-luna is a reasoning model: a tiny budget is spent entirely on reasoning_tokens
+            # (finish_reason='length', empty content) so the fuzzy do-not-post answer came back
+            # blank. 256 leaves headroom for reasoning + the 1-token YES/NO. (max_tokens is
+            # rejected by this model; temperature is stripped by tracked_chat_create.)
+            max_completion_tokens=256,
             temperature=0,  # deterministic
         )
         # answer = (resp.choices[0].message.content or "").strip().upper()
@@ -333,6 +337,15 @@ def _send_skipped_listing_to_webhook(
 
     if str(getattr(pl, "gmail_message_id", "") or "").startswith("test_"):
         return {"ok": False, "reason": "test_listing"}
+
+    # #37 (Blagojche 03.10): a price drop on a deal that is ALREADY live (price_drop_activate
+    # updated the WP post and #26b linked the existing Podio item) must not create a second
+    # "skipped" Podio item via this webhook (GlobiFlow creates the item, then /enqueue attaches
+    # it). Seen 02.10 23:53-23:57 on posts 52589 + 52475. Rollback: SKIP_WEBHOOK_PRICE_DROP=0.
+    _p37_on = os.getenv("SKIP_WEBHOOK_PRICE_DROP", "1").strip().lower() not in ("0", "false", "no", "")
+    if _p37_on and getattr(pl, "price_drop_pass", False) and getattr(pl, "price_drop_activated", False):
+        print(f"[skipped_listing] #37 price drop on live post={getattr(pl, 'post_id', None)} id={pl.id} - no skipped webhook")
+        return {"ok": False, "reason": "price_drop_live_post"}
 
     payload: Dict[str, Any] = {
         "listing_id": str(pl.id),

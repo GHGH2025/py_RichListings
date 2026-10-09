@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import logging
 from typing import Any, Callable, Optional, Tuple
 
 NEW = "new"
@@ -54,7 +55,13 @@ def post_is_live(post_id: Any) -> Optional[bool]:
 
 _SUF = {"street": "st", "avenue": "ave", "road": "rd", "drive": "dr", "court": "ct",
         "terrace": "ter", "place": "pl", "boulevard": "blvd", "lane": "ln",
-        "circle": "cir", "parkway": "pkwy", "highway": "hwy"}
+        "circle": "cir", "parkway": "pkwy", "highway": "hwy",
+        # Blagojche/Claude 30.09 (Rich RED address request): Google writes directions and a few
+        # types out in full ("Northwest ... Court") while emails/Ekta use "NW ... Ct". 60-day proof:
+        # 14 duplicate WP post pairs differed ONLY in this (e.g. 1502 E Linebaugh Ave / East ... Avenue).
+        "trail": "trl", "point": "pt", "square": "sq", "crossing": "xing", "cove": "cv",
+        "north": "n", "south": "s", "east": "e", "west": "w",
+        "northeast": "ne", "northwest": "nw", "southeast": "se", "southwest": "sw"}
 
 _JUNK = re.compile(r"parking space|vacant lot|^\s*lot\b|\bacres?\b|beds?\s*/|\bbath\b|sqft|for lease", re.I)
 
@@ -85,6 +92,12 @@ def review_reason(address: Optional[str]) -> Optional[str]:
     parts = street.split()
     lead = parts[0] if parts else ""
     # masked / partial / garbled house number -> flag, do not block
+    if re.fullmatch(r"0+", lead):
+        # B.1 (Blagojche 01.10): "0 Main St" = a collapsed mask OR a genuine vacant-lot format.
+        # Either way there is no usable house number -> review as no_house_number (street+city+price,
+        # per Rich). Logged so we can see the daily volume of these.
+        logging.getLogger(__name__).info("review_reason: zero house number -> no_house_number | %s", a)
+        return "no_house_number"
     if re.search(r"[xX]{2,}", street):
         return "masked"                       # 2xxx / XXXX
     if lead and re.fullmatch(r"[*xX]+", lead):

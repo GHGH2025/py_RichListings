@@ -14,10 +14,12 @@ rules:
   - id: R1
     text: >
       No 2-bed property over $250,000 in South Florida Tri-County unless they are on the water.
+      This rule applies to single-family homes only; never apply it to a duplex, multi-family, condo, townhouse, or any property with more than one unit.
 
   - id: R2
     text: >
       No 2-bed property over $199,000 in the rest of Florida unless they are on the water.
+      This rule applies to single-family homes only; never apply it to a duplex, multi-family, condo, townhouse, or any property with more than one unit.
 
   - id: R3
     text: >
@@ -51,3 +53,7 @@ rules:
   - id: R10
     text: >
       No mobile homes when the only thing being sold in the ad is a mobile home.
+
+  - id: R11
+    text: >
+      Skip any property whose listing indicates it is a Mobile Home, Modular Home, or Manufactured Home, based on the property type or keywords in the listing.
