@@ -27,7 +27,7 @@ rules:
 
   - id: R4
     text: >
-      No condos with HOA (fee + any assessments) over $600 when the asking price is under $150,000.
+      No condos with HOA (fee + any assessments) over $700 when the asking price is under $150,000.
 
   - id: R5
     text: >

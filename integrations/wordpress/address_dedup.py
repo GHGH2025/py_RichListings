@@ -75,6 +75,9 @@ def canonical_key(address: Optional[str], city: Optional[str] = None) -> str:
     return " ".join(_SUF.get(w, w) for w in t.split()).strip()
 
 
+MASK_NO_DIGITS_TO_REVIEW = os.getenv("MASK_NO_DIGITS_TO_REVIEW", "1").strip().lower() not in ("0", "false", "no", "")
+
+
 def review_reason(address: Optional[str]) -> Optional[str]:
     """Why an address cannot be trusted for auto-match. None => usable.
 
@@ -97,6 +100,13 @@ def review_reason(address: Optional[str]) -> Optional[str]:
         # Either way there is no usable house number -> review as no_house_number (street+city+price,
         # per Rich). Logged so we can see the daily volume of these.
         logging.getLogger(__name__).info("review_reason: zero house number -> no_house_number | %s", a)
+        return "no_house_number"
+    # Rich 09.10 (X* NW 5th St = second copy of 3675 NW 5th St, posted 08.10): a mask with NO
+    # digit at all is not a partial number, it is no house number -> review, never post.
+    # Partial masks that keep digits (13XX, 2xxx, 5x) stay "masked" = post + flag (option b).
+    if MASK_NO_DIGITS_TO_REVIEW and lead and not re.search(r"\d", lead) and (
+            re.fullmatch(r"[*xX]+", lead) or re.search(r"[xX]{2,}", street)):
+        logging.getLogger(__name__).info("review_reason: digitless mask -> no_house_number | %s", a)
         return "no_house_number"
     if re.search(r"[xX]{2,}", street):
         return "masked"                       # 2xxx / XXXX

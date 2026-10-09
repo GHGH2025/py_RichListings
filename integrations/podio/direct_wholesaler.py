@@ -27,6 +27,14 @@ WHOLESELLERS_APP_ID = int(os.getenv("PODIO_WHOLESELLERS_APP_ID", "18339395"))
 
 # Field IDs from your JSON snippets
 PROPERTY_STATUS_FIELD_ID = 144394555     # "Status" category field in Properties app
+# A (Rich 08.10 / Blagojche 09.10): direct-sender takeover of a Non-Active Properties item.
+DIRECT_TAKEOVER_NONACTIVE = os.getenv("DIRECT_TAKEOVER_NONACTIVE", "1").strip().lower() not in ("0", "false", "no", "")
+PROPERTY_STATUS_ACTIVE_OPTION_ID = int(os.getenv("PODIO_STATUS_ACTIVE_OPTION_ID", "1"))   # Status = Active
+MARKED_NONACTIVE_BY_AI_FIELD_ID = int(os.getenv("PODIO_FIELD_MARKED_NONACTIVE_ID", "275206364"))  # category Yes
+SPECIAL_AVAILS_NOT_FOUND_FIELD_ID = int(os.getenv("PODIO_FIELD_SA_NOT_FOUND_ID", "275206129"))   # number
+_NONACTIVE_STATUS_TEXTS = {
+    x.strip().lower() for x in os.getenv("DEDUP_PODIO_NONACTIVE_STATUSES", "non-active,inactive").split(",") if x.strip()
+}
 WHOLESELLER_REF_FIELD_ID = 144394554     # "Wholeseller" app reference field in Properties app
 WHOLESELLER_EMAIL_FIELD_ID = 144394623   # "Email" text field in Wholesellers app
 
@@ -611,7 +619,28 @@ def addresses_clearly_match(
 
 
 # newest
-def search_properties_app_for_listing(token: str, listing: ParsedListing) -> Optional[int]:
+def _direct_takeover_reactivate(token: str, property_item_id: int) -> bool:
+    """A: put a Non-Active Properties item back to Active for a direct sender: Status=Active, clear
+    'Marked Non-Active By AI', reset the Special Avails miss counter. Status is the must; the two
+    helper fields are best-effort (logged, never fatal)."""
+    ok = _podio_request("PUT", f"/item/{property_item_id}/value/{PROPERTY_STATUS_FIELD_ID}",
+                        token=token, json=[PROPERTY_STATUS_ACTIVE_OPTION_ID])
+    if ok is None:
+        logging.error("direct takeover (A): failed to set Status=Active on property %s", property_item_id)
+        return False
+    for fid, val, what in ((MARKED_NONACTIVE_BY_AI_FIELD_ID, [], "clear Marked Non-Active By AI"),
+                           (SPECIAL_AVAILS_NOT_FOUND_FIELD_ID, [{"value": "0"}], "reset Not Found counter")):
+        try:
+            r = _podio_request("PUT", f"/item/{property_item_id}/value/{fid}", token=token, json=val)
+            if r is None:
+                logging.warning("direct takeover (A): could not %s on property %s", what, property_item_id)
+        except Exception:
+            logging.exception("direct takeover (A): %s failed on property %s", what, property_item_id)
+    logging.info("direct takeover (A): property %s re-activated", property_item_id)
+    return True
+
+
+def search_properties_app_for_listing(token: str, listing: ParsedListing, allow_non_active: bool = False) -> Optional[int]:
     """
     Use (address, city) and address_search_keys to find the correct Properties item,
     restricted to Status = 'Active', with strict address matching to avoid wrong updates.
@@ -698,8 +727,9 @@ def search_properties_app_for_listing(token: str, listing: ParsedListing) -> Opt
             status = _get_property_status(item)
 
             if not IGNORE_PODIO_STATUS_FOR_TEST:
-                # Normal behavior: require Active
-                if not status or status.lower() != "active":
+                # Normal behavior: require Active (A: a direct-sender takeover also accepts Non-Active)
+                _st = (status or "").strip().lower()
+                if _st != "active" and not (allow_non_active and _st in _NONACTIVE_STATUS_TEXTS):
                     continue
             else:
                 # Test behavior: just log, but do NOT filter by status
@@ -840,6 +870,31 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
         return False
 # revert after test
     property_item_id = search_properties_app_for_listing(token, listing)
+    _takeover = False
+    if not property_item_id and DIRECT_TAKEOVER_NONACTIVE:
+        # A (Rich 08.10): a DIRECT sender re-sending a deal whose Podio record is Non-Active (and was
+        # created from someone else's email) takes the record over: re-activate it and move it under
+        # the direct wholesaler. Non-direct senders never get here (Active-only search above).
+        try:
+            from services.direct_wholesaler_service import listing_sender_is_direct as _lsd
+            _is_direct = bool(_lsd(listing))
+        except Exception:
+            _is_direct = False
+        if _is_direct:
+            _na_id = search_properties_app_for_listing(token, listing, allow_non_active=True)
+            if _na_id:
+                logging.info("direct takeover (A): listing %s from a direct sender matches Non-Active property %s -> re-activate + reassign",
+                             listing.id, _na_id)
+                if _direct_takeover_reactivate(token, _na_id):
+                    property_item_id = _na_id
+                    _takeover = True
+                    try:
+                        from observability.pipeline_metrics import record_listing_stage
+                        record_listing_stage(str(listing.id), "podio_direct_takeover", podio_item_id=str(_na_id))
+                    except Exception:
+                        pass
+    if _takeover:
+        allow_podio_update = True   # the direct wholesaler owns the record now, whatever the map flag says
     if not property_item_id:
         # We tried to find a matching property but couldn't.
         # Mark this as not_found so it doesn't block future batches.
