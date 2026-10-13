@@ -1,5 +1,5 @@
 version: 2
-updated: "2026-06-11"
+updated: "2026-10-13"
 
 policy: |
   Apply the rules below IN ORDER. Stop at the first rule that applies and is not exempted by its “Unless” line.
@@ -13,7 +13,7 @@ policy: |
 rules:
   - id: R1
     text: >
-      No 2-bed property over $250,000 in South Florida Tri-County unless they are on the water.
+      No 2-bed property over $279,000 in South Florida Tri-County unless they are on the water.
       This rule applies to single-family homes only; never apply it to a duplex, multi-family, condo, townhouse, or any property with more than one unit.
 
   - id: R2
@@ -27,7 +27,7 @@ rules:
 
   - id: R4
     text: >
-      No condos with HOA (fee + any assessments) over $700 when the asking price is under $150,000.
+      No condos with HOA (fee + any assessments) over $600 when the asking price is under $699,000.
 
   - id: R5
     text: >
@@ -45,10 +45,11 @@ rules:
     text: >
       No frame or wood houses, except in Jacksonville, Port St Lucie, Ft Pierce, Tampa, Ocala, Pensacola, or anywhere in South Florida Tri-County.
       If the ad says “Tear Down” or “Re-Development”, ignore the location exception above and allow it to pass this rule.
+      If the ad says “Tear Down” or “Re-Development”, also set the property type to “land” in addition to the current property type. Keep the existing property type; do not replace it.
 
   - id: R9
     text: >
-      Outside South Florida only: No property under 900 sqft unless the price is $170,000 or less.
+      Outside South Florida only: No property under 900 sqft unless the price is $199,000 or less.
 
   - id: R10
     text: >
