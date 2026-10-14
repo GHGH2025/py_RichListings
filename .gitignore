@@ -19,3 +19,7 @@ pipeline/post_selection.py
 pipeline/process_email.py
 pipeline/test_pipeline.py
 whatsapp/sender.py
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore
