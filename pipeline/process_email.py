@@ -88,12 +88,24 @@ def process_pending(limit=2):
     # FilteredListingEmail.ensure_indexes()
     # ParsedListing.ensure_indexes()
 
+    from new_emails.isolation import registered_senders
+    new_senders = registered_senders()
     pending = FilteredListingEmail.objects(
         status="not_processed",
+        from_info__email__nin=new_senders,
+        input_source__ne="new_email",
         gmail_message_id__not__startswith="test_",
     ).limit(limit)
 
     for fe in pending:
+        from new_emails.sender_match import matches_sender
+        if new_senders and fe.bodies and any(matches_sender(
+            getattr(fe.from_info, "raw", "") or getattr(fe.from_info, "email", ""),
+            fe.bodies.text or "", fe.bodies.html_full or "", sender,
+        ) for sender in new_senders):
+            # Handled by the independent inbox worker, including forwarded templates.
+            fe.update(set__status="processed", set__input_source="new_email", set__forward_status="skipped")
+            continue
         print("fe.id",fe.id)
         # ---- new window check (before taking the lock) ----
         # local_dt = _email_local_dt(fe)

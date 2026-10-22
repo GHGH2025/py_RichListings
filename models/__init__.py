@@ -151,11 +151,12 @@ class ParsedListing(Document):
     )
 
     status            = StringField(
-        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","skipped_quota","ready_for_image_processing","image_curation_failed","ready_for_primary_image_check","primary_image_failed","bypassed","held_no_gallery"),
+        choices=("not_processed", "verified", "ready_to_post", "processed", "passed", "posted", "skipped","skipped_quota","ready_for_image_processing","image_curation_failed","ready_for_primary_image_check","primary_image_failed","bypassed","held_no_gallery", "price_drop_review"),
         default="not_processed"
     )
 
     post_content = StringField()
+    new_email_podio_sent_at = DateTimeField(null=True)
 
     wp_property_description = StringField()
     desc_refreshed_at = DateTimeField()  # 38: last description refresh pushed to the live post
@@ -163,7 +164,7 @@ class ParsedListing(Document):
     wp_parsed_data = DictField()
 
     wp_status = StringField(
-        choices=("ready_to_process", "keys_generated", "description_generated","posted","failed",
+        choices=("ready_to_process", "keys_generated", "description_generated", "des_generated", "already_found", "posted","failed",
                  "needs_address_review")
     )
     address_review = StringField()

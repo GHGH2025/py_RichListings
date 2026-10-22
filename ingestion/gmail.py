@@ -307,6 +307,9 @@ def process_account(acct: AccountConfig) -> None:
     messages.sort(key=lambda m: int(m.get("internalDate", "0")))
     print(f"[{acct.label}] Window {after_ep} → {before_ep} | fetched: {len(messages)}")
 
+    from new_emails.isolation import registered_senders
+    from new_emails.sender_match import matches_sender
+    new_senders = registered_senders()
     kept = 0
     for m in messages:
         payload = m.get("payload", {}) or {}
@@ -317,6 +320,10 @@ def process_account(acct: AccountConfig) -> None:
             # Skip this message based on post-fetch sender rules
             continue
 
+        # New templates belong exclusively to their independent worker.
+        new_text, new_html = _decode_body(payload)
+        if any(matches_sender(from_h, new_text, new_html, sender) for sender in new_senders):
+            continue
         kept += 1
         subj = _header(headers, "Subject") or "(no subject)"
         date_h = _header(headers, "Date") or ""

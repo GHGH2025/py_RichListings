@@ -232,7 +232,7 @@ def process_whatsapp_queue(
     if gmail_message_id:
         q = q & Q(gmail_message_id=gmail_message_id)
     else:
-        q = q & Q(gmail_message_id__not__startswith="test_")
+        q = q & Q(gmail_message_id__not__startswith="test_") & Q(input_source__ne="new_email")
 
     qs = apply_publication_gate(ParsedListing.objects(q)).only(
         "id", "post_content", "images", "whatsapp_status", "account_label",
