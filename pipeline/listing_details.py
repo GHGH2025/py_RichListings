@@ -12,6 +12,7 @@ from services.direct_wholesaler_service import get_wholesaler_map, normalize_ema
 from pipeline.address_utils import (
     is_bed_bath_descriptor_address,
     resolve_street_address_from_fields,
+    has_house_number,
 )
 from buyers.special_preferences import (
     build_extraction_prompt_block,
@@ -685,7 +686,18 @@ def upsert_parsed_listings_from_html(
                         logging.info("B.1 masked-guard: kept source addr %r (geocode gave %r / %r)", addr, fa, fc)
                     else:
                         if fa and fc:
-                            addr, city = fa, fc   # overwrite with geocoded components
+                            # (d) Blagojche 20.10 #6: belt-and-braces house-number-drop guard.
+                            # If the SOURCE line had a house number (real or masked) but the geocoded
+                            # street dropped it, do NOT accept the number-less geocode - keep the source
+                            # line and flag for review (same failure Rich saw on 9730 NW 24th Ct, there
+                            # Podio-side; this catches it if it ever happens in OUR geocode step).
+                            if has_house_number(addr) and not has_house_number(fa):
+                                logging.warning(
+                                    "house-number-drop guard: geocode dropped the house number "
+                                    "(source=%r -> geocode=%r); keeping source line, flagging review", addr, fa)
+                                lst["address_review_flag"] = "geocode_dropped_house_number"
+                            else:
+                                addr, city = fa, fc   # overwrite with geocoded components
                         if fz and not zip_:
                             zip_ = fz
             except Exception as e:

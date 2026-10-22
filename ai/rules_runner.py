@@ -20,6 +20,7 @@ def _facts_from_doc(pl: ParsedListing) -> Dict[str, Any]:
     # If extractor didn't write list_price_usd, fallback to top-level price:
     if facts.get("list_price_usd") is None and getattr(pl, "price", None) is not None:
         facts["list_price_usd"] = float(pl.price)
+    facts = _infer_single_family(facts)
     return facts
 
 def _num(v):
@@ -62,6 +63,38 @@ def deterministic_rule_skip(facts):
         return ("R6", "Tri-County 3-bed/1-bath at $%.0f > $375,000, not on water" % price)
     return None
 
+
+# --- FIX (a) 2026-10-21 (Blagojche): property_type null -> treat as single-family for R1/R2,
+# unless the listing text/flags indicate a non-single-family type. Done in code BEFORE the AI call
+# (not by rewording the yaml). Root case: 2764 NW 31st St (2bd $337,500) posted as 54023 because
+# property_type was null so the LLM did not apply the single-family-only R1/R2.
+import re as _re_sf
+_NONSF_RE = _re_sf.compile(r"(condo|town\s*-?\s*house|town\s*-?\s*home|duplex|triplex|tri-plex|fourplex|four-plex|quadplex|quad-plex|multi[\s-]*family|multifamily|([2-9]|\d{2,})\s*(?:units?|doors?)|(?:two|three|four)\s*(?:units?|doors?)|mobile\s*home|manufactured)", _re_sf.I)
+
+def _infer_single_family(facts):
+    """If property_type is null/unknown, set it to single_family UNLESS the text or structured
+    flags say condo/townhouse/duplex/multi-family/unit-count>1 (or mobile/manufactured). Marks
+    property_type_inferred=True for traceability. Returns facts (mutated)."""
+    pt = str(facts.get("property_type") or "").strip().lower()
+    if pt not in ("", "unknown"):
+        return facts  # explicit type (incl. other/land/condo/...) -> leave as-is
+    # Blagojche 21.10: scope to the 2-bed rules (R1/R2 are the ONLY single-family-only rules),
+    # so inferring single_family cannot affect R3/R4/R5 on non-2-bed null-type listings.
+    try:
+        _beds = float(facts.get("bedrooms")) if facts.get("bedrooms") is not None else None
+    except (TypeError, ValueError):
+        _beds = None
+    if _beds != 2:
+        return facts
+    if facts.get("is_condo") is True or facts.get("is_mobile_home") is True:
+        return facts  # structured non-SF signal
+    parts = [facts.get("raw_description_excerpt"), facts.get("source_title"), facts.get("marketing_tags")]
+    text = " ".join(str(p) for p in parts if p)
+    if _NONSF_RE.search(text):
+        return facts  # text indicates a non-single-family type -> do NOT force single_family
+    facts["property_type"] = "single_family"
+    facts["property_type_inferred"] = True
+    return facts
 
 def apply_ai_english_rules(
     rules_path: str,

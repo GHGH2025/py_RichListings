@@ -436,6 +436,88 @@ def _addr_has_no_house_number(pl) -> bool:
         return False
 
 
+def _street_only_key(address, city=None, zip_=None):
+    """(c-i) Street+city+zip key with the house number / mask REMOVED. Unlike canonical_key (which
+    KEEPS the number, so a masked item never matches a numbered one), this lets us spot a masked
+    listing that sits on the SAME STREET as a numbered live post. Loose by design - only ever used to
+    raise a "possible dup, check" flag, never to merge."""
+    import re as _re
+    from integrations.wordpress.address_dedup import _SUF
+    street = (address or "").split(",")[0]
+    street = _re.sub(r"^\s*[\dxX*\u2013\-]+\s+", "", street)   # drop leading house number / mask token
+    base = (street + " " + (city or "") + " " + (str(zip_) if zip_ else "")).lower()
+    base = _re.sub(r"\bfl\b|\bflorida\b|,?\s*usa", " ", base)
+    base = _re.sub(r"[^a-z0-9 ]+", " ", base)
+    return " ".join(_SUF.get(w, w) for w in base.split()).strip()
+
+
+_CI_MASK = "xX*\u2013"  # mask chars in masked house numbers (x, X, *, en-dash)
+
+def _ci_num_token(addr):
+    """(c-i tighten) leading house-number token of the street part (digits + mask chars)."""
+    import re as _re
+    street = (addr or "").split(",")[0].strip()
+    m = _re.match(r"^\s*([0-9xX*\u2013\-]+)", street)
+    return m.group(1) if m else ""
+
+def _ci_masked_number_consistent(masked_addr, cand_addr):
+    """(c-i tighten) True if the masked listing's visible digits are consistent with the candidate
+    live post's house number: *4421 -> candidate ends 4421; 38XX -> starts 38; full number -> exact."""
+    import re as _re
+    mt = _ci_num_token(masked_addr)
+    cand_digits = _re.sub(r"[^0-9]", "", _ci_num_token(cand_addr))
+    if not cand_digits:
+        return False
+    has_mask = any(c in _CI_MASK for c in mt)
+    pre = _re.match(r"^([0-9]+)", mt)
+    prefix = pre.group(1) if pre else ""
+    suf = _re.search(r"([0-9]+)$", mt)
+    suffix = suf.group(1) if suf else ""
+    if not has_mask:
+        md = _re.sub(r"[^0-9]", "", mt)
+        return bool(md) and md == cand_digits
+    if not prefix and not suffix:
+        return False
+    if prefix and not cand_digits.startswith(prefix):
+        return False
+    if suffix and not cand_digits.endswith(suffix):
+        return False
+    return len(cand_digits) >= (len(prefix) + len(suffix))
+
+
+def _possible_dup_live_post_id(pl):
+    """(c-i) For a MASKED listing, return the post_id of a LIVE posted listing on the same
+    street+city+zip that HAS a real house number - a POSSIBLE dup for Rich to check, never merged.
+    Best-effort; returns None on anything uncertain."""
+    try:
+        from pipeline.address_utils import has_house_number
+        addr = resolve_street_address(pl)
+        key = _street_only_key(addr, getattr(pl, "city", None), getattr(pl, "zip", None))
+        if not key or len(key) < 6:
+            return None
+        q = dict(status="posted", wp_status__in=["posted", "already_found"], post_id__ne=None)
+        _city = (getattr(pl, "city", "") or "").strip()
+        if _city:
+            q["city__iexact"] = _city
+        for cand in ParsedListing.objects(**q).only("address", "city", "zip", "post_id").limit(200):
+            caddr = getattr(cand, "address", "") or ""
+            if not has_house_number(caddr):
+                continue
+            if _street_only_key(caddr, getattr(cand, "city", None), getattr(cand, "zip", None)) != key:
+                continue
+            # (c-i tighten 20.10): require same zip AND masked-digit consistency - advisory note only
+            _mzip = (str(getattr(pl, "zip", "") or "")).strip()[:5]
+            _czip = (str(getattr(cand, "zip", "") or "")).strip()[:5]
+            if not (_mzip and _czip and _mzip == _czip):
+                continue
+            if not _ci_masked_number_consistent(addr, caddr):
+                continue
+            return cand.post_id
+    except Exception:
+        return None
+    return None
+
+
 def _price_mismatch(pl, found_post):
     """None => do not block (within tolerance, or a price is unknown on either side =>
     FAIL-OPEN, keep the current link behaviour). Otherwise (pct_str, found_price)."""
@@ -468,6 +550,124 @@ def _try_search_in_wp(pl: ParsedListing):
             keys.append(key)
     state, pid, _item, detail = search_keys(GET_URL, WP_TOKEN, keys, REQUEST_TIMEOUT)
     return pid, state, detail, _item  # B.2: expose found post (asking_price) to caller
+
+# --- Out-of-window price reduction (Blagojche 14.10) ------------------------------------------
+# When a listing re-arrives OLDER than the 30-day dup window it never gets price_drop_pass, so the
+# "Reduced from $X" line was never written (bug: 524 NE 71st St - re-sent lower, no reduction line).
+# These helpers write the REDUCED!! line via the Podio-free addproperty/create upsert, upserting by
+# the existing post's EXACT title (no second post). Guards: only when the post is currently PUBLISH
+# (never revive a private/hidden post - direct-sender rule), tag Today's Deals only on a drop >= 6%,
+# hold a > 50% drop (misread), skip if the post already shows REDUCED. No Podio, no buyer re-match.
+_REDUCED_TITLE_PREFIX = "<strong><span style='color: #ff6600;'>REDUCED!!</span> </strong>"
+_TODAYS_DEAL_MIN_DROP = float(os.getenv("TODAYS_DEAL_MIN_DROP", "0.06"))
+_PRICE_DROP_MAX_AUTO = float(os.getenv("PRICE_DROP_MAX_AUTO", "0.50"))
+
+
+def _listing_price(pl):
+    """New arrival price: top-level price, else complete_info.list_price_usd."""
+    v = getattr(pl, "price", None)
+    if v is None:
+        ci = getattr(pl, "complete_info", None) or {}
+        v = ci.get("list_price_usd") if isinstance(ci, dict) else None
+    try:
+        return float(v) if v is not None and str(v) != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _item_price(item):
+    if not isinstance(item, dict):
+        return None
+    for k in ("asking_price", "price", "asking"):
+        if item.get(k) not in (None, ""):
+            try:
+                return float(str(item.get(k)).replace(",", "").replace("$", "").strip())
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _getproperty_item(address):
+    """Direct getproperty lookup by full address. Returns the first item dict (carries post_status,
+    posttitle, asking_price, custom_title) or None. search_keys can miss where a direct address hits."""
+    addr = _trim(address)
+    if not addr:
+        return None
+    try:
+        r = requests.get(GET_URL, params={"address": addr, "token": WP_TOKEN}, timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            return None
+        data = (r.json() or {}).get("data") or []
+        return data[0] if data and isinstance(data[0], dict) else None
+    except Exception:
+        logging.exception("getproperty item lookup failed addr=%r", address)
+        return None
+
+
+def _reduction_decision(old_price, new_price):
+    """Pure decision: returns dict(action, drop, todays_deal) or None when not a reduction."""
+    try:
+        op = float(old_price); np_ = float(new_price)
+    except (TypeError, ValueError):
+        return None
+    if not (op > 0 and np_ > 0 and np_ < op):
+        return None
+    drop = (op - np_) / op
+    return {
+        "action": "hold_over_50pct" if drop > _PRICE_DROP_MAX_AUTO else "reduce",
+        "drop": drop,
+        "todays_deal": drop >= _TODAYS_DEAL_MIN_DROP,
+    }
+
+
+def _apply_out_of_window_reduction(pl, item, new_price):
+    """Found-branch reduction writer. `item` is a getproperty item for the matched post. Writes the
+    REDUCED!! line + new price via set_wp_post_status ONLY when: the post is publish, the new price is
+    lower, the drop <= 50%, and the post is not already REDUCED. Returns the decision dict or None."""
+    if not isinstance(item, dict):
+        return None
+    status = str(item.get("post_status") or "").strip().lower()
+    match_title = _trim(item.get("posttitle"))
+    match_pid = item.get("post_id")
+    d = _reduction_decision(_item_price(item), new_price)
+    if not d or not match_title:
+        return d
+    if status != "publish":
+        logging.info("reduction skipped: post private (status=%s) id=%s title=%r",
+                     status or "unknown", getattr(pl, "id", None), match_title)
+        d["action"] = "skip_private"
+        return d
+    if d["action"] != "reduce":
+        logging.warning("reduction HOLD >50%%: id=%s title=%r old=%s new=%s drop=%.2f",
+                        getattr(pl, "id", None), match_title, _item_price(item), new_price, d["drop"])
+        return d
+    if "REDUCED" in str(item.get("custom_title") or "").upper():
+        logging.info("reduction skipped: post already REDUCED id=%s title=%r",
+                     getattr(pl, "id", None), match_title)
+        d["action"] = "already_reduced"
+        return d
+    from integrations.wordpress.post_status import set_wp_post_status
+    np_ = float(new_price)
+    asking = str(int(np_)) if float(np_).is_integer() else str(np_)
+    custom_title = "%s %s" % (_REDUCED_TITLE_PREFIX, match_title)
+    ok, scode, payload = set_wp_post_status(
+        match_title, "publish",
+        asking_price=asking,
+        custom_title=custom_title,
+        address=match_title,
+        newest_deals=(["Todays Deal"] if d["todays_deal"] else None),  # set_wp_post_status drops falsy
+    )
+    if ok and isinstance(payload, dict) and match_pid:
+        _ret = payload.get("post_id")
+        if _ret is not None and int(_ret) != int(match_pid):
+            logging.error("reduction ALARM: /create post_id=%s != expected %s id=%s title=%r",
+                          _ret, match_pid, getattr(pl, "id", None), match_title)
+    if not ok:
+        logging.error("reduction write failed id=%s status=%s detail=%s",
+                      getattr(pl, "id", None), scode, str(payload)[:200])
+    d["wp_ok"] = bool(ok)
+    return d
+
 
 def sync_wp_for_descriptions(
     *,
@@ -589,6 +789,15 @@ def sync_wp_for_descriptions(
                     continue
 
             if found_id:
+                # Out-of-window reduction (Blagojche 14.10): matched an existing post via getproperty;
+                # the already_found branch never updated price. If the new price is lower AND the post
+                # is currently PUBLISH (never revive a private post), write price + REDUCED!! (Podio-free).
+                try:
+                    _red_item = _found_post if (isinstance(_found_post, dict) and _found_post.get("post_status")) \
+                                else _getproperty_item(_main_search_key(pl))
+                    _apply_out_of_window_reduction(pl, _red_item, _listing_price(pl))
+                except Exception:
+                    logging.exception("out-of-window reduction (found branch) failed id=%s", pl.id)
                 pl.update(
                     set__wp_status="already_found",
                     set__post_id=found_id,
@@ -673,6 +882,20 @@ def sync_wp_for_descriptions(
                     continue
                 if _dg_status == _DEDUP_REVIEW:  # masked -> post but flag
                     pl.update(set__address_review="masked")
+                    # (c-i) Blagojche 20.10 #6: if this masked address sits on the same street+city+zip
+                    # as a numbered LIVE post, flag it as a POSSIBLE dup for Rich to check - never merged
+                    # (different house numbers stay distinct properties). Podio write rides the token
+                    # bucket once #1 lands.
+                    try:
+                        _dup_pid = _possible_dup_live_post_id(pl)
+                        _pid = getattr(pl, "buyer_matching_podio_item_id", None)
+                        if _dup_pid and _pid:
+                            from buyers.matching_api import podio_set_address_review_needs
+                            podio_set_address_review_needs(int(_pid),
+                                comment=f"POSSIBLE DUP of post {_dup_pid} (masked address) - check. "
+                                        f"Not auto-linked; the house number is masked so this is a street match only.")
+                    except Exception:
+                        logging.exception("(c-i) possible-dup note failed listing=%s", getattr(pl, "id", None))
                 # create
                 body = _build_post_body(pl)
                 # fail early if posttitle is missing
@@ -704,6 +927,34 @@ def sync_wp_for_descriptions(
                 # posted += 1
                 # B (28.09): tag Today only on a genuine new post (this is the not-found/create path)
                 body["newest_deals"] = ["Todays Deal"]
+                # Out-of-window reduction (Blagojche 14.10): getproperty search can miss where a direct
+                # address lookup still finds the post (/create upserts by exact title). If a currently
+                # PUBLISH post exists at a HIGHER price, make this a REDUCED!! upsert; gate the tag on
+                # >= 6% and NEVER send newest_deals=null (would clear the plugin's tags). Private post
+                # or already-REDUCED -> leave as a normal create (do not revive, do not double-write).
+                try:
+                    _ci = _getproperty_item(_compose_full_address(pl) or body.get("posttitle"))
+                    if isinstance(_ci, dict) and str(_ci.get("post_status") or "").strip().lower() == "publish" \
+                            and "REDUCED" not in str(_ci.get("custom_title") or "").upper():
+                        _rd = _reduction_decision(_item_price(_ci), _listing_price(pl))
+                        if _rd and _rd["action"] == "reduce":
+                            body["posttitle"] = _trim(_ci.get("posttitle")) or body["posttitle"]
+                            body["custom_title"] = "%s %s" % (_REDUCED_TITLE_PREFIX, body["posttitle"])
+                            if _rd["todays_deal"]:
+                                body["newest_deals"] = ["Todays Deal"]
+                            else:
+                                body.pop("newest_deals", None)  # FIX2: drop key, never send null
+                                # Blagojche 19.10 (option a): also strip a STALE Todays-Deal term on a sub-6% drop
+                                try:
+                                    from integrations.wordpress.price_media_updates import _remove_todays_deal_tag
+                                    _remove_todays_deal_tag(_ci.get("id") or _ci.get("post_id"), drop=_rd.get("drop"))
+                                except Exception:
+                                    logging.exception("todays-deal remove (create path) failed id=%s", pl.id)
+                        elif _rd and _rd["action"] == "hold_over_50pct":
+                            logging.warning("create-path reduction HOLD >50%%: id=%s title=%r old=%s new=%s",
+                                            pl.id, body.get("posttitle"), _item_price(_ci), _listing_price(pl))
+                except Exception:
+                    logging.exception("out-of-window reduction (create path) failed id=%s", pl.id)
                 post_id = _wp_post_create(body)
                 if post_id:
                     pl.update(

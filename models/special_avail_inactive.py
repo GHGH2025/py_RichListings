@@ -37,7 +37,7 @@ class SpecialAvailInactiveTracker(Document):
     last_seen_in_email = StringField()  # YYYY-MM-DD when last found
 
     status = StringField(
-        choices=("watching", "fired", "resolved"),
+        choices=("watching", "fired", "resolved", "stale"),
         default="watching",
     )
     webhook_fired_at = DateTimeField()

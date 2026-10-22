@@ -28,6 +28,15 @@ from integrations.podio.web_form_submissions import (
     update_web_form_submission_item,   # ✅ NEW (you'll add below)
 )
 
+# buy-box (ii)-A (20.10, STAGED): create a Web Form item only on a LOCAL Buyers-app-mirror match, capped.
+import logging
+from integrations.podio.throttle import podio_allow
+from buyers.buyers_app_mirror import (
+    find_mirrored_buyer,
+    autocreate_allowed,
+    record_autocreate,
+)
+
 router = APIRouter(prefix="/api", tags=["buyer-submissions"])
 
 import json
@@ -588,6 +597,69 @@ class UpdateSaveRequest(BaseModel):
 # from your existing code:
 # class BuyerSubmissionPayload(BaseModel): ...
 
+def _try_autocreate_from_buyers_mirror(email: str) -> Optional[WebFormBuyerSubmission]:
+    """Buy-box (ii)-A: when an email has no Web Form submission, create one ONLY if the email
+    matches a real Buyers-app item in the LOCAL mirror (no live Podio lookup), within the
+    per-email/day + global/day caps, and only via the #1 token bucket. The created item is
+    contact-minimal; the buyer fills the buy box on first save. Returns the new local doc, or
+    None (caller then 404s)."""
+    match = find_mirrored_buyer(email)
+    if not match:
+        return None
+    ok, reason = autocreate_allowed(email)
+    if not ok:
+        logging.info("buybox autocreate blocked email=%s reason=%s", email, reason)
+        return None
+    # build a minimal local submission first (so the Podio item carries its mongo id)
+    try:
+        doc = WebFormBuyerSubmission(
+            contact=BuyerContact(
+                name=(match.get("name") or "").strip(),
+                company=(match.get("company") or "").strip(),
+                email=email,
+                text_number=(match.get("phone") or "").strip(),
+                phone_call=(match.get("phone") or "").strip(),
+                call_whatsapp=(match.get("phone") or "").strip(),
+            ),
+            raw_payload={},
+            raw_payload_json="{}",
+        )
+        doc.save()
+    except Exception:
+        logging.exception("buybox autocreate: local doc save failed email=%s", email)
+        return None
+    # create the Web Form Submissions Podio item (a WRITE) through the token bucket
+    if not podio_allow("/item/app/webform/create"):
+        logging.warning("buybox autocreate: token bucket exhausted, skipping create email=%s", email)
+        doc.delete()
+        return None
+    try:
+        item_id = create_web_form_submission_item(
+            name=doc.contact.name,
+            company=doc.contact.company or "",
+            email=doc.contact.email,
+            phone_call=doc.contact.phone_call or "",
+            text_number=doc.contact.text_number or "",
+            city="",
+            mongo_object_id=str(doc.id),
+            property_html={},
+            contact_preference="",
+            counties_html={},
+        )
+    except Exception:
+        logging.exception("buybox autocreate: Podio create failed email=%s", email)
+        item_id = None
+    if not item_id:
+        doc.delete()
+        return None
+    doc.podio_item_id = int(item_id)
+    doc.save()
+    record_autocreate(email, match.get("buyers_podio_item_id"), int(item_id), str(doc.id))
+    logging.info("buybox autocreate: created webform item=%s for email=%s (buyers item=%s)",
+                 item_id, email, match.get("buyers_podio_item_id"))
+    return doc
+
+
 @router.post("/buyer-submissions/update/request-link")
 def request_update_link(body: UpdateLinkRequest):
     email = _normalize_email(body.email)
@@ -596,6 +668,8 @@ def request_update_link(body: UpdateLinkRequest):
         raise HTTPException(status_code=400, detail="Invalid email")
 
     doc = _find_submission_by_email(email)
+    if not doc:
+        doc = _try_autocreate_from_buyers_mirror(email)  # (ii)-A: only on a local Buyers-app-mirror match
     if not doc:
         raise HTTPException(status_code=404, detail="No profile found for that email.")
 

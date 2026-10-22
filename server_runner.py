@@ -67,6 +67,7 @@ os.environ["APP_START_TIME"] = str(START_TIME)  # used by api_app for consistent
 BUYER_MATCHING_CRON_MINUTES = int(os.getenv("BUYER_MATCHING_CRON_MINUTES", "3"))
 BUYER_EMAIL_BOUNCE_CHECK_TIME = os.getenv("BUYER_EMAIL_BOUNCE_CHECK_TIME", "06:00")
 SPECIAL_AVAIL_INACTIVE_CHECK_TIME = os.getenv("SPECIAL_AVAIL_INACTIVE_CHECK_TIME", "22:00")
+BUYERS_MIRROR_SYNC_TIME = os.getenv("BUYERS_MIRROR_SYNC_TIME", "06:15")  # buy-box (ii)-A: nightly Buyers-app mirror, 06:15 UTC ~ 02:15 ET (06:00 collides with the bounce-check cron)
 
 
 def safe_scheduled_job(fn):
@@ -238,6 +239,33 @@ def run_direct_wholeseller_linking():
     # default 3; you can change to 5 if you want to push harder:
     process_direct_wholeseller_batch(batch_limit=5)
 
+
+@repeat(every(3).minutes)
+@safe_scheduled_job
+def run_paced_redrain():
+    # #1b part-2: feed <=2 property_not_found listings (7-day window) back to not_processed when the
+    # last-hour Podio budget is under 120, so the LIVE direct-wholesaler batch re-searches them.
+    # In-process so podio_throttle_stats() reads the shared rolling-hour counter. Never calls Podio.
+    import datetime
+    from integrations.podio.throttle import podio_throttle_stats
+    FEED_PER_CYCLE, BUDGET_MAX, WINDOW_DAYS, COOLDOWN_H = 2, 120, 7, 1
+    in_window = podio_throttle_stats().get("in_window")
+    if in_window is None or in_window >= BUDGET_MAX:
+        logging.info("[redrain] gate=%s feed=0 (>=%s)", in_window, BUDGET_MAX)
+        return
+    now = datetime.datetime.utcnow()
+    win = now - datetime.timedelta(days=WINDOW_DAYS)
+    cool = now - datetime.timedelta(hours=COOLDOWN_H)
+    coll = ParsedListing._get_collection()
+    q = {"direct_wholeseller": "property_not_found", "updated_at": {"$gte": win},
+         "redrain_fed_at": {"$exists": False}}
+    fed = 0
+    for doc in coll.find(q, {"address": 1}).sort("updated_at", 1).limit(FEED_PER_CYCLE):
+        coll.update_one({"_id": doc["_id"]}, {"$set": {"direct_wholeseller": "not_processed", "redrain_fed_at": now}})
+        fed += 1
+        logging.info("[redrain] fed %s %s (gate=%d)", doc["_id"], str(doc.get("address", ""))[:40], in_window)
+    logging.info("[redrain] cycle done: fed=%d gate=%d", fed, in_window)
+
 @repeat(every(15).minutes)
 @safe_scheduled_job
 def run_forward_email():
@@ -312,6 +340,15 @@ def run_special_avail_inactive_check_cron():
     logging.info("run_special_avail_inactive_check: start")
     result = run_special_avail_inactive_check()
     logging.info("run_special_avail_inactive_check: result=%s", result)
+
+@repeat(every().day.at(BUYERS_MIRROR_SYNC_TIME))
+@safe_scheduled_job
+def run_buyers_app_mirror_cron():
+    # buy-box (ii)-A: nightly paced mirror of Buyers app 18339401 emails into buyers_app_mirror
+    logging.info("run_buyers_app_mirror_cron: start")
+    from buyers.buyers_app_mirror import sync_buyers_app_mirror
+    result = sync_buyers_app_mirror()
+    logging.info("run_buyers_app_mirror_cron: result=%s", result)
 
 # @repeat(every(15).hours)
 # def run_whatsapp_keepalive():

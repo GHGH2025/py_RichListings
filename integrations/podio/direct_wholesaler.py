@@ -20,6 +20,9 @@ load_dotenv()
 # -------------------------------------------------------------------
 
 PODIO_BASE_URL = "https://api.podio.com"
+# 19.10: last non-OK Podio response (status, path, epoch). Callers that must fail CLOSED on Podio
+# errors (opt-out lookups) read this to tell "no match" from "Podio failed".
+LAST_PODIO_ERROR = {"status": None, "path": None, "at": 0.0}
 
 # App IDs (you can override via env if needed, but defaults are your IDs)
 PROPERTIES_APP_ID = int(os.getenv("PODIO_PROPERTIES_APP_ID", "18339388"))
@@ -135,6 +138,17 @@ def _podio_request(
     headers.setdefault("Content-Type", "application/json")
 
     url = f"{PODIO_BASE_URL}{path}"
+    # Blagojche 20.10 (#1): global Podio rate-limit guard, shared with matching_api (same OAuth app).
+    # READS ONLY (GET/search/filter) are throttled; a WRITE (PUT) always proceeds so it is never lost.
+    # Over budget on a read -> record it like a non-OK response so /wholesaler/optout fails CLOSED
+    # (server-02 falls to its cache) instead of the app being hammered into HTTP 420.
+    from integrations.podio.throttle import podio_allow, is_read_path
+    if is_read_path(method, path) and not podio_allow(path):
+        logging.warning("Podio read throttled (over hourly cap): %s %s", method, path)
+        LAST_PODIO_ERROR["status"] = 429
+        LAST_PODIO_ERROR["path"] = path
+        LAST_PODIO_ERROR["at"] = time.time()
+        return None
  
 
     resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
@@ -149,6 +163,10 @@ def _podio_request(
     
 
     if not resp.ok:
+        logging.error("Podio %s %s -> HTTP %s: %s", method, path, resp.status_code, (resp.text or "")[:200])
+        LAST_PODIO_ERROR["status"] = resp.status_code
+        LAST_PODIO_ERROR["path"] = path
+        LAST_PODIO_ERROR["at"] = time.time()
         return None
 
     # 204 or no content -> treat as success with empty payload
@@ -673,8 +691,9 @@ def search_properties_app_for_listing(token: str, listing: ParsedListing, allow_
     if addr and city:
         search_queries.append(f"{addr}, {city}")
 
-    # All variations from address_search_keys
-    for key in addr_keys:
+    # #1b (20.10): keep the variants (Podio writes addresses differently - "NE 11 Place" vs
+    # "Northeast 11th Pl") but CAP at primary + 2 keys, and stop at the first hit below.
+    for key in addr_keys[:2]:
         search_queries.append(key)
 
     # De-duplicate, case-insensitive, order-preserving
@@ -742,6 +761,10 @@ def search_properties_app_for_listing(token: str, listing: ParsedListing, allow_
 
             loc = _get_property_location_components(item)
             active_candidates[item_id] = loc
+            # #1b (20.10): stop at the FIRST strict active match - most listings then cost 1 call.
+            if not IGNORE_PODIO_STATUS_FOR_TEST and addresses_clearly_match(
+                    addr, city, loc.get("street"), loc.get("city"), loc.get("full")):
+                return item_id
 
     if not active_candidates:
         if IGNORE_PODIO_STATUS_FOR_TEST:
@@ -869,6 +892,7 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
         )
         return False
 # revert after test
+    _pnf_err_before = (LAST_PODIO_ERROR.get("at") or 0.0)  # #1b: detect a throttle-drop during this listing's search
     property_item_id = search_properties_app_for_listing(token, listing)
     _takeover = False
     if not property_item_id and DIRECT_TAKEOVER_NONACTIVE:
@@ -896,6 +920,14 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
     if _takeover:
         allow_podio_update = True   # the direct wholesaler owns the record now, whatever the map flag says
     if not property_item_id:
+        # #1b (20.10): if a /search/app query hit a TRANSIENT failure this cycle (throttle drop 429,
+        # Podio rate-limit 420, or 5xx), do NOT mark property_not_found - leave not_processed to retry.
+        _pnf_st = LAST_PODIO_ERROR.get("status")
+        if ((_pnf_st in (420, 429) or (isinstance(_pnf_st, int) and _pnf_st >= 500))
+                and (LAST_PODIO_ERROR.get("at") or 0.0) > _pnf_err_before
+                and "/search/app/" in str(LAST_PODIO_ERROR.get("path") or "")):
+            logging.warning("[direct-wholesaler] deferred (transient %s) %s - leaving not_processed for retry", _pnf_st, listing.id)
+            return False
         # We tried to find a matching property but couldn't.
         # Mark this as not_found so it doesn't block future batches.
         ParsedListing.objects(id=listing.id).update_one(
@@ -909,6 +941,13 @@ def process_single_listing_direct_wholeseller(listing: ParsedListing, token: str
         )
  
         return False
+
+    # #1b (20.10): property item resolved past this point - cache it so matching_api's
+    # /search/app-by-mongo-id (buyers/matching_api.py ~2347) is never needed for this listing again.
+    try:
+        ParsedListing.objects(id=listing.id).update_one(set__buyer_matching_podio_item_id=int(property_item_id))
+    except Exception:
+        logging.exception("(#1b) cache buyer_matching_podio_item_id failed for listing %s", listing.id)
 
 # revert after test
 

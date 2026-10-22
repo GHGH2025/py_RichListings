@@ -563,6 +563,31 @@ def send_sms_to_buyer(
     if not sms_text or not sms_text.strip():
         return {"ok": False, "error": "empty_sms_text"}
 
+    # Opt-out suppression (Blagojche 19.10): never text a number that replied STOP, on ANY
+    # provider (Telnyx or RingCentral). Same source + fail-open-on-missing as the A campaign
+    # (routes/campaign_sms.py -> services.sms_suppression).
+    from services import sms_suppression
+    if sms_suppression.is_suppressed(to_number):
+        return {"ok": False, "skipped": "suppressed", "reason": "sms_optout", "to": to_number}
+
+    # Telnyx move (Blagojche 13.10): when SMS_PROVIDER=telnyx, deal-match SMS go via Telnyx
+    # instead of RingCentral (RC blocks the deal links). Default stays RingCentral, so nothing
+    # changes until the flag flips. Opt-out line is ensured in the body on the Telnyx path.
+    if (os.getenv("SMS_PROVIDER") or "").strip().lower() == "telnyx":
+        try:
+            from services.sms_provider import send_sms as _provider_send, get_from_number as _provider_from, SmsSendError
+            frm = from_number or _provider_from()
+            body = sms_text
+            optout = (os.getenv("SMS_OPTOUT_LINE") or "Reply STOP to opt out.").strip()
+            if optout and "stop" not in body.lower():
+                body = body.rstrip() + "\n\n" + optout
+            mid = _provider_send(_normalize_phone(to_number), body, frm)
+            return {"ok": True, "mode": "sms", "provider": "telnyx", "message_id": mid}
+        except SmsSendError as e:
+            return {"ok": False, "error": f"telnyx_send_failed:{e}"}
+        except Exception as e:
+            return {"ok": False, "error": f"telnyx_send_error:{e}"}
+
     # Allow from_number override via env
     from_number = from_number or os.getenv("RC_FROM_NUMBER")
     if not from_number:
