@@ -102,6 +102,22 @@ def doc_to_response(doc: DirectWholesaler) -> dict:
     }
 
 
+def listing_sender_is_direct(listing) -> bool:
+    """A (Rich 08.10 / Blagojche 09.10): True when the listing's ORIGINAL sender is on the direct
+    wholesaler list - same map + normalizer the Allan guard uses. Fallback (source_email not loaded):
+    the parse-time flag, which is only ever 'not_processed'/'bypassed' for a mapped sender.
+    Never raises; False on doubt (safe default = non-direct)."""
+    try:
+        se = getattr(listing, "source_email", None)
+        fi = getattr(se, "from_info", None) if se is not None else None
+        email = normalize_email(getattr(fi, "email", None) if fi is not None else None)
+        if email:
+            return bool((get_wholesaler_map() or {}).get(email))
+        return str(getattr(listing, "direct_wholeseller", "") or "") in ("not_processed", "bypassed")
+    except Exception:
+        return False
+
+
 def get_by_id(doc_id: str) -> Optional[DirectWholesaler]:
     try:
         oid = ObjectId(str(doc_id))
