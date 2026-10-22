@@ -157,6 +157,13 @@ def _podio_request(
     headers.setdefault("Content-Type", "application/json")
 
     url = f"{PODIO_BASE_URL}{path}"
+    # Blagojche 20.10 (#1): global Podio rate-limit guard - READS ONLY (GET/search/filter). A write
+    # (PUT/POST create/comment) is never dropped (it is low-volume and losing it corrupts state); only
+    # reads are throttled, which is where the 420 storm was. Over budget -> None (handled like a failure).
+    from integrations.podio.throttle import podio_allow, is_read_path
+    if is_read_path(method, path) and not podio_allow(path):
+        logger.warning("Podio read throttled (over hourly cap): %s %s", method, path)
+        return None
     resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
 
     if resp.status_code == 401 and retry_on_401:
@@ -2327,6 +2334,16 @@ def match_buyers(payload: MatchBuyersPayload):
 
     # If property_item_id not provided, search Properties app by the MongoDB Object ID field
     if property_item_id is None:
+        # Blagojche 20.10 (#1): resolve the Podio property item from the listing's stored
+        # buyer_matching_podio_item_id (local) instead of a Podio /search/app call (the storm source).
+        try:
+            from models import ParsedListing as _PL
+            _pl1 = _PL.objects(id=payload.mongodb_object_id.strip()).only("buyer_matching_podio_item_id").first()
+            if _pl1 and getattr(_pl1, "buyer_matching_podio_item_id", None):
+                property_item_id = int(_pl1.buyer_matching_podio_item_id)
+        except Exception:
+            property_item_id = None
+    if property_item_id is None:
         found_props = podio_search_app_items(
             PROPERTIES_APP_ID,
             payload.mongodb_object_id.strip(),
@@ -2353,15 +2370,10 @@ def match_buyers(payload: MatchBuyersPayload):
                 except Exception:
                     pass
 
-            # fallback search
-            buyer_item_ids = podio_search_app_items(
-                BUYERS_APP_ID,
-                str(b.id),
-                search_fields=[BUYERS_MONGO_ID_FIELD_ID],
-                limit=3,
-            )
-            if buyer_item_ids:
-                matched_podio_buyer_item_ids.append(int(buyer_item_ids[0]))
+            # Blagojche 20.10 (#1): no Podio /search fallback - log + skip buyers without a stored
+            # podio_item_id (these were the per-buyer /search/app calls in the storm). Match is still
+            # written for every buyer that HAS a stored id; the rare missing ones are logged.
+            logger.warning("buyer_match: buyer %s has no stored podio_item_id; skipping its Podio write (no search)", getattr(b, "id", None))
 
     matched_podio_buyer_item_ids = sorted(list(set(matched_podio_buyer_item_ids)))
 

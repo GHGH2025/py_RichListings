@@ -320,8 +320,14 @@ def wholesaler_optout(email: str = "", request: Request = None):
         from integrations.podio.direct_wholesaler import (
             get_podio_access_token, find_wholeseller_item_by_email, _get_item)
         tok = get_podio_access_token()
+        import time as _t
+        from integrations.podio import direct_wholesaler as _dw
+        _t0 = _t.time()
         iid = find_wholeseller_item_by_email(tok, e)
         if not iid:
+            # 19.10: a Podio error during the search (rate limit 420, 5xx) must NOT read as not_found
+            if float(_dw.LAST_PODIO_ERROR.get("at") or 0.0) >= _t0:
+                raise HTTPException(status_code=502, detail="podio_lookup_failed")
             return {"email": e, "opted_out": False, "reason": "not_found", "item_id": None}
         item = _get_item(tok, int(iid))
         if not item:
@@ -343,3 +349,55 @@ def wholesaler_optout(email: str = "", request: Request = None):
         import logging as _lg
         _lg.exception("wholesaler_optout failed email=%s", e)
         raise HTTPException(status_code=502, detail="podio_lookup_failed")
+
+
+# --- Bulk opt-out list for the server-02 suppression cache (Blagojche 16.10) ---
+# Returns every Wholeseller email with Opted Out=Yes OR Special List="Exclude from ALL".
+# server-02 availabilityQueue refreshes its local cache from this (daily + at boot) and falls back to
+# that cache (SKIP) when a per-email lookup fails, so a slow or down server-01 can never leak an opt-out.
+_optout_all_cache = {"emails": [], "at": 0.0}
+_OPTOUT_ALL_TTL = 600  # seconds
+
+
+@router.get("/wholesaler/optout_all")
+def wholesaler_optout_all(request: Request = None):
+    _check_token(request)
+    import time
+    now = time.time()
+    if _optout_all_cache["emails"] and (now - _optout_all_cache["at"]) < _OPTOUT_ALL_TTL:
+        return {"emails": _optout_all_cache["emails"], "count": len(_optout_all_cache["emails"]),
+                "cached": True, "generated_at": _optout_all_cache["at"]}
+    from integrations.podio.direct_wholesaler import get_podio_access_token, _podio_request
+    APP_ID = 18339395
+    EMAIL_FIELD = 144394623
+    tok = get_podio_access_token()
+    emails = set()
+    try:
+        for fid in (_OPT_FIELD_ID, _SPECIAL_LIST_FIELD_ID):
+            offset = 0
+            while True:
+                body = {"filters": {str(fid): [1]}, "limit": 100, "offset": offset}
+                r = _podio_request("POST", "/item/app/%d/filter/" % APP_ID, token=tok, json=body)
+                if r is None:
+                    # 19.10: non-OK from Podio (rate limit / outage) -> 502, never an empty list
+                    raise RuntimeError("podio_filter_failed field=%s offset=%s" % (fid, offset))
+                items = (r or {}).get("items") or []
+                total = (r or {}).get("total") or 0
+                for it in items:
+                    for f in (it.get("fields") or []):
+                        if f.get("field_id") == EMAIL_FIELD:
+                            for vv in (f.get("values") or []):
+                                v = vv.get("value")
+                                e = v.get("value") if isinstance(v, dict) else v
+                                if e:
+                                    emails.add(str(e).strip().lower())
+                offset += len(items)
+                if not items or offset >= total:
+                    break
+    except Exception:
+        logging.exception("wholesaler_optout_all failed")
+        raise HTTPException(status_code=502, detail="optout_all_lookup_failed")
+    out = sorted(emails)
+    _optout_all_cache["emails"] = out
+    _optout_all_cache["at"] = now
+    return {"emails": out, "count": len(out), "cached": False, "generated_at": now}

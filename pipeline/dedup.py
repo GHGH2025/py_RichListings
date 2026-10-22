@@ -2,6 +2,26 @@
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 from mongoengine.queryset.visitor import Q
+from pipeline.dedup_normalize import same_deal as _same_deal, street_name_token as _street_tok  # FIX (b) 2026-10-21
+from pipeline.dedup_normalize import _norm_city as _norm_city_b  # Rich 22.10 zip-less city/county refinement
+_ZIPCITY_CACHE = {}
+def _cities_for_zip(z5):
+    """Cached set of normalized cities seen for a 5-digit zip prefix in historical posts."""
+    if not z5:
+        return set()
+    if z5 in _ZIPCITY_CACHE:
+        return _ZIPCITY_CACHE[z5]
+    out = set()
+    try:
+        for c in (ParsedListing.objects(Q(zip__startswith=z5) | Q(complete_info__zip__startswith=z5))
+                  .only("city", "complete_info.city").limit(800)):
+            cc = _norm_city_b(getattr(c, "city", None) or (c.complete_info or {}).get("city"))
+            if cc:
+                out.add(cc)
+    except Exception:
+        pass
+    _ZIPCITY_CACHE[z5] = out
+    return out
 
 # from db.mongo_engine_conn import init_db
 from models import ParsedListing
@@ -311,7 +331,7 @@ def _sanitize_match_text(value: Optional[str]) -> Optional[str]:
 
 
 def _find_recent_prior(addr: str, city: Optional[str], zip_: Optional[str],
-                       since: datetime, exclude_id) -> Optional[ParsedListing]:
+                       since: datetime, exclude_id, county: Optional[str] = None) -> Optional[ParsedListing]:
     """
     Find most-recent prior POST in last 30 days with SAME address (and city/zip when present),
     across top-level vs complete_info fields. Excludes the current doc. Skipped listings
@@ -345,7 +365,54 @@ def _find_recent_prior(addr: str, city: Optional[str], zip_: Optional[str],
         .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status")
         .order_by("-skipped_or_posted_at")
     )
-    return qs.first()
+    prior = qs.first()
+    if prior is not None:
+        return prior  # exact-match fast path (unchanged)
+
+    # --- FIX (b) 2026-10-21 (Blagojche): normalized fallback for masked-unit / variant address
+    # strings that the iexact above misses (e.g. 918 Ocean Dr #306 vs *** vs no-unit; 4449 Moncrief
+    # Rd W vs W*; 3494 E 4TH AVE vs 3xx4 E 4th Avenue). Narrow candidates by 5-digit zip (or street
+    # token when zip is absent), then compare with the normalized same-deal key. Read-only match.
+    import re as _re_b
+    def _zip5(z):
+        m = _re_b.search(r"\d{5}", str(z or ""))
+        return m.group(0) if m else None
+    z5 = _zip5(zip_)
+    stok = _street_tok(addr)   # street-name token (not a direction/suffix): ocean, moncrief, 4th
+    cand_q = (Q(status__in=HISTORICAL_STATUSES) & Q(skipped_or_posted_at__gte=since)
+              & Q(id__ne=exclude_id) & Q(gmail_message_id__not__startswith="test_"))
+    if z5:
+        # Rich 22.10: include zip-less priors too (a dup can have the zip on only one side); the
+        # street-NAME token AND below keeps this bounded, and same_deal does the precise check.
+        cand_q &= (Q(zip__startswith=z5) | Q(complete_info__zip__startswith=z5)
+                   | (Q(zip__in=[None, ""]) & Q(complete_info__zip__in=[None, ""])))
+    # Narrow by the street-NAME token in BOTH branches so a busy zip (918 Ocean Dr has 20+ docs)
+    # cannot push the real prior past the row limit, and the no-zip branch does not match on a
+    # bare suffix like 'Avenue'. The precise same_deal() check (+ city) still runs per candidate.
+    if stok:
+        cand_q &= (Q(address__icontains=stok) | Q(complete_info__address__icontains=stok))
+    elif not z5:
+        return None   # no zip and no usable street token -> cannot narrow safely
+    cands = (ParsedListing.objects(cand_q)
+             .only("price", "complete_info.list_price_usd", "skipped_or_posted_at", "status",
+                   "address", "zip", "city", "complete_info.address", "complete_info.zip",
+                   "complete_info.city", "complete_info.county")
+             .order_by("-skipped_or_posted_at").limit(500))
+    for c in cands:
+        ci_c = c.complete_info or {}
+        c_addr = getattr(c, "address", None) or ci_c.get("address")
+        c_zip = getattr(c, "zip", None) or ci_c.get("zip")
+        c_city = getattr(c, "city", None) or ci_c.get("city")
+        c_county = ci_c.get("county")
+        czip5 = _zip5(c_zip)
+        zc = {}
+        for zz in (z5, czip5):
+            if zz and zz not in zc:
+                zc[zz] = _cities_for_zip(zz)
+        if _same_deal(addr, zip_, c_addr, c_zip, city, c_city,
+                      county_a=county, county_b=c_county, zip_cities=zc):
+            return c
+    return None
 
 def _compose_raw_for_google(addr: str, city: str, state: str, zip_: str) -> str:
     parts = [p.strip() for p in [addr, city, state, zip_] if p and str(p).strip()]
@@ -675,7 +742,7 @@ def process_not_processed_with_duplicate_rule(
         prior = None
         dedup_src = None
         for (addr, city, zip_) in cand_list:
-            prior = _find_recent_prior(addr, city, zip_, since, pl.id)
+            prior = _find_recent_prior(addr, city, zip_, since, pl.id, county=(pl.complete_info or {}).get("county"))
             if prior:
                 dedup_src = "exact"
                 break
@@ -701,6 +768,11 @@ def process_not_processed_with_duplicate_rule(
         if prior is not None and DEDUP_REAPPEAR_PUBLISH:
             _prior_pid = getattr(prior, "post_id", None)
             _prior_live = _prior_post_is_live(prior)
+            # Blagojche 21.10: did this match come via the WIDER normalized logic (addr strings
+            # differ) rather than an exact string match? Such a match to a HIDDEN post is a
+            # possible re-send -> route to Review below.
+            _p_addr = getattr(prior, "address", None) or (getattr(prior, "complete_info", None) or {}).get("address")
+            _via_wider = (addr or "").strip().lower() != (_p_addr or "").strip().lower()
             _is_direct = _sender_is_direct(pl)
             _pstat = None
             # A: a DIRECT sender also revives a deal whose Podio record is Non-Active while the WP
@@ -721,11 +793,30 @@ def process_not_processed_with_duplicate_rule(
                     import logging as _lg
                     _lg.info("dedup reappear: prior post %s hidden but Podio=%s -> stay hidden "
                              "(id=%s src=%s)", _prior_pid, _pstat, pl.id, dedup_src)
-                elif _reappear_addr_untrusted(pl, prior, cand_list):
+                elif _via_wider or _reappear_addr_untrusted(pl, prior, cand_list):
                     import logging as _lg
-                    _lg.info("dedup reappear: prior post %s not live but address masked/no-house "
-                             "-> stay in review, no reappear (id=%s src=%s)", _prior_pid, pl.id, dedup_src)
-                    # keep prior -> existing dup handling (masked stays in review, as now)
+                    # Blagojche 21.10 (iii): a masked NEW listing that matches only a hidden/private
+                    # prior is a possible re-send of a deliberately-hidden deal. Do not suppress
+                    # silently and do not re-post: route it to Review (needs_address_review) with a
+                    # clear note for a human to decide.
+                    _lg.info("dedup reappear: prior post %s not live + masked -> ROUTE TO REVIEW "
+                             "(possible re-send) (id=%s src=%s)", _prior_pid, pl.id, dedup_src)
+                    pl.update(
+                        set__status="skipped",
+                        set__wp_status="needs_address_review",
+                        set__rules_ai_reason=_reason(
+                            "POSSIBLE RE-SEND of hidden post %s - review" % _prior_pid,
+                            "masked new listing matched only a private/hidden prior [%s]" % dedup_src),
+                        set__skipped_or_posted_at=_now(),
+                        set__updated_at=_now(),
+                    )
+                    try:
+                        from observability.pipeline_metrics import record_listing_stage
+                        record_listing_stage(str(pl.id), "dedup_resend_review", listing_status="skipped", skip_reason="possible_resend_hidden_post")
+                    except Exception:
+                        pass
+                    skipped += 1
+                    continue
                 else:
                     import logging as _lg
                     _lg.info("dedup reappear: prior post %s live=%s Podio=%s direct=%s -> re-publish (A) "

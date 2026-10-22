@@ -45,6 +45,63 @@ WEBHOOK_TIMEOUT = int(os.getenv("SPECIAL_AVAIL_INACTIVE_WEBHOOK_TIMEOUT", "20"))
 # but do NOT fire the Podio webhook or private the WP post. Flip to apply only once
 # the Podio writeback is deterministic (item_id, confirmed) and the business rule is set.
 APPLY_HIDE = os.getenv("SPECIAL_AVAIL_INACTIVE_APPLY", "false").strip().lower() in ("1", "true", "yes", "on")
+# Apply-mode guards (2026-10-15, Blagojche go). All inert while APPLY_HIDE is false.
+MAX_FIRE = int(os.getenv("SPECIAL_AVAIL_INACTIVE_MAX_FIRE", "25"))            # fire at most N / run
+EXCLUDE_DIRECT = os.getenv("SPECIAL_AVAIL_INACTIVE_EXCLUDE_DIRECT", "true").strip().lower() in ("1", "true", "yes", "on")
+SNAPSHOT_DIR = os.getenv("SPECIAL_AVAIL_INACTIVE_SNAPSHOT_DIR", os.path.expanduser("~/special_avail_apply_snapshots"))
+
+
+def _direct_wholesaler_names() -> Set[str]:
+    """Lowercased name/email set of direct wholesalers, to exclude from auto-hide."""
+    names: Set[str] = set()
+    try:
+        from mongoengine.connection import get_db
+        for d in get_db()["direct_wholesalers"].find({}, {"name": 1, "email": 1, "sender_email": 1}):
+            for k in ("name", "email", "sender_email"):
+                v = (d.get(k) or "").strip().lower()
+                if v:
+                    names.add(v)
+    except Exception:
+        logging.exception("special_avail_inactive: could not load direct_wholesalers set")
+    return names
+
+
+def _wp_status(address: str) -> str:
+    """Current WP post_status for an address via getproperty. '' if unknown (fail-safe: skip private).
+    Tries the address as-is, then a whitespace-normalized form (empty-ZIP "FL , USA" -> "FL, USA")
+    so a stray-space title mismatch doesn't make us miss a real post."""
+    import re
+    from integrations.wordpress.sync_poster import _getproperty_item
+    variants = [address]
+    norm = re.sub(r"\s+", " ", (address or "")).replace(" ,", ",").strip()
+    if norm and norm != address:
+        variants.append(norm)
+    for a in variants:
+        try:
+            item = _getproperty_item(a)
+            if item:
+                return str(item.get("post_status") or "").strip().lower()
+        except Exception:
+            logging.exception("special_avail_inactive: wp status read failed addr=%r", a)
+    return ""
+
+
+def _is_masked_address(address: str) -> bool:
+    """A masked / no-house-number street line (e.g. 'Xxxx W Euclid Ave', '*** NE 6th St',
+    '2**0 NW 91st St', or a line with no leading house number) can never match a WP post title,
+    so it is excluded from firing (Blagojche 15.10)."""
+    import re
+    street = (address or "").split(",")[0].strip()
+    if not street:
+        return True
+    first = street.split()[0] if street.split() else ""
+    if re.search(r"[*xX]{2,}", first):          # Xxxx / *** / 2xxx
+        return True
+    if re.search(r"\d*[*xX]+\d*", first) and re.search(r"[*xX]", first):  # 2**0 / 137XX / 2XX0
+        return True
+    if not re.match(r"\d", first):              # no leading house number at all
+        return True
+    return False
 
 
 def _est_day_range_utc(day) -> Tuple[datetime, datetime]:
@@ -322,9 +379,20 @@ def run_special_avail_inactive_check(
     fired_addresses: List[str] = []
     wholesaler_summaries: List[Dict[str, Any]] = []
     errors: List[str] = []
+    # apply-mode bookkeeping (inert in report-only)
+    excluded_masked = 0
+    excluded_direct = 0
+    capped_deferred = 0
+    wp_skipped_not_publish = 0
+    apply_snapshots: List[Dict[str, Any]] = []
+    direct_names = _direct_wholesaler_names() if (APPLY_HIDE and EXCLUDE_DIRECT) else set()
 
     for wholesaler_name, sender_emails in cfg.items():
         wh_key = (wholesaler_name or "").strip().lower()
+        wh_is_direct = bool(direct_names) and (
+            wh_key in direct_names
+            or any((e or "").strip().lower() in direct_names for e in (sender_emails or []))
+        )
         podio_ids = bucket.get(wh_key, []) or []
         wh_summary: Dict[str, Any] = {
             "wholesaler_name": wholesaler_name,
@@ -460,39 +528,94 @@ def run_special_avail_inactive_check(
                     and tracker.webhook_fired_at is None
                     and tracker.status != "fired"
                 ):
-                    ok = (False if not APPLY_HIDE else _fire_inactive_webhook(addr, prop_id))
+                    # Decide whether to actually fire now or just record intent (would_fire).
+                    _defer = None
                     if not APPLY_HIDE:
-                        # report-only: record intent, do NOT webhook or private
+                        _defer = "report_only"           # report-only: record, never fire
+                    elif _is_masked_address(addr):
+                        _defer = "excluded_masked"       # no WP post can be found for a masked addr
+                    elif wh_is_direct:
+                        _defer = "excluded_direct"       # never auto-hide direct wholesalers
+                    elif webhooks_fired >= MAX_FIRE:
+                        _defer = "capped"                # per-run cap reached; drain next run
+                    if _defer is not None:
                         tracker.would_fire_at = datetime.utcnow()
                         would_fire_count += 1
                         would_fire.append({"address": addr, "podio_item_id": prop_id})
                         wh_summary["would_fire"] = wh_summary.get("would_fire", 0) + 1
-                    elif ok:
-                        tracker.webhook_fired_at = datetime.utcnow()
-                        tracker.webhook_ok = True
-                        tracker.status = "fired"
-                        webhooks_fired += 1
-                        wh_summary["webhooks_fired"] += 1
-                        fired_addresses.append(addr)
-
-                        wp_ok = _mark_wp_private(addr)
-                        tracker.wp_private_ok = wp_ok
-                        tracker.wp_private_at = datetime.utcnow()
-                        if wp_ok:
-                            wp_privates_ok += 1
-                            wh_summary["wp_privates_ok"] += 1
-                        else:
-                            wp_private_failures += 1
-                            wh_summary["wp_private_failures"] += 1
+                        if _defer == "excluded_masked":
+                            excluded_masked += 1
+                            wh_summary["excluded_masked"] = wh_summary.get("excluded_masked", 0) + 1
+                        elif _defer == "excluded_direct":
+                            excluded_direct += 1
+                            wh_summary["excluded_direct"] = wh_summary.get("excluded_direct", 0) + 1
+                        elif _defer == "capped":
+                            capped_deferred += 1
+                            wh_summary["capped_deferred"] = wh_summary.get("capped_deferred", 0) + 1
                     else:
-                        tracker.webhook_ok = False
-                        webhook_failures += 1
+                        # APPLY: snapshot BEFORE any change (for the undo), then fire.
+                        snap = {
+                            "podio_item_id": prop_id,
+                            "address": addr,
+                            "tracker_id": str(getattr(tracker, "id", "")),
+                            "wp_status_before": _wp_status(addr),
+                            "miss_streak_before": int(tracker.miss_streak or 0),
+                            "status_before": tracker.status,
+                            "at": datetime.utcnow().isoformat(),
+                        }
+                        ok = _fire_inactive_webhook(addr, prop_id)
+                        snap["webhook_ok"] = bool(ok)
+                        if ok:
+                            tracker.webhook_fired_at = datetime.utcnow()
+                            tracker.webhook_ok = True
+                            tracker.status = "fired"
+                            webhooks_fired += 1
+                            wh_summary["webhooks_fired"] += 1
+                            fired_addresses.append(addr)
+                            # publish-only guard: never private a post that is not currently published
+                            if snap["wp_status_before"] == "publish":
+                                wp_ok = _mark_wp_private(addr)
+                                tracker.wp_private_ok = wp_ok
+                                tracker.wp_private_at = datetime.utcnow()
+                                if wp_ok:
+                                    wp_privates_ok += 1
+                                    wh_summary["wp_privates_ok"] += 1
+                                else:
+                                    wp_private_failures += 1
+                                    wh_summary["wp_private_failures"] += 1
+                            else:
+                                wp_skipped_not_publish += 1
+                                wh_summary["wp_skipped_not_publish"] = wh_summary.get("wp_skipped_not_publish", 0) + 1
+                            snap["wp_privated"] = bool(getattr(tracker, "wp_private_ok", False))
+                            apply_snapshots.append(snap)
+                        else:
+                            tracker.webhook_ok = False
+                            webhook_failures += 1
 
             tracker.last_checked_date = target_date
             tracker.touch()
-            tracker.save()
+            try:
+                tracker.save()
+            except Exception:
+                logging.exception(
+                    "special_avail_inactive: tracker.save() failed podio_item_id=%s addr=%s - skipping this item",
+                    prop_id, addr,
+                )
 
         wholesaler_summaries.append(wh_summary)
+
+    # Persist the pre-change snapshot of everything we fired this run, for the undo script.
+    snapshot_path = None
+    if apply_snapshots:
+        try:
+            import json as _json
+            os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+            snapshot_path = os.path.join(SNAPSHOT_DIR, f"snapshot_{target_date}_{int(datetime.utcnow().timestamp())}.json")
+            with open(snapshot_path, "w") as _f:
+                _json.dump({"target_date": str(target_date), "items": apply_snapshots}, _f, indent=1)
+            logging.info("special_avail_inactive: wrote apply snapshot %s (%d items)", snapshot_path, len(apply_snapshots))
+        except Exception:
+            logging.exception("special_avail_inactive: failed to write apply snapshot")
 
     result = {
         "ok": len(errors) == 0,
@@ -516,6 +639,14 @@ def run_special_avail_inactive_check(
         "wholesaler_summaries": wholesaler_summaries,
         "errors": errors,
         "webhook_url": WEBHOOK_URL or None,
+        "apply": APPLY_HIDE,
+        "max_fire": MAX_FIRE,
+        "exclude_direct": EXCLUDE_DIRECT,
+        "excluded_masked": excluded_masked,
+        "excluded_direct": excluded_direct,
+        "capped_deferred": capped_deferred,
+        "wp_skipped_not_publish": wp_skipped_not_publish,
+        "snapshot_path": snapshot_path,
     }
     _persist_job_run(result)
     logging.info(

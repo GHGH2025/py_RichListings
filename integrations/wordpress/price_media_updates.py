@@ -12,6 +12,37 @@ from media.slugify import slugify_for_folder
 from media.dropbox_upload import handle_Link
 from media.scrape_images import is_gallery_url
 WP_TOKEN = os.getenv("WP_API_TOKEN")
+
+# Blagojche 19.10 (option a): strip the sticky "Todays Deal" term on a sub-6% price update, so a
+# small later reduction does not leave the tag on. DRY-RUN by default (log only); flip
+# REMOVE_TODAYS_DEAL_DRYRUN=false to go live. Server-side route is idempotent (removed:false if absent).
+REMOVE_TD_DRYRUN = os.getenv("REMOVE_TODAYS_DEAL_DRYRUN", "true").strip().lower() not in ("false", "0", "no", "")
+WHS_REMOVE_TERM_URL = os.getenv("WHS_REMOVE_TERM_URL", "https://inventory.joinbuyerslist.com/wp-json/whs/v1/remove-term")
+
+
+def _remove_todays_deal_tag(post_id, drop=None):
+    try:
+        pid = int(post_id)
+    except (TypeError, ValueError):
+        return
+    if not pid:
+        return
+    pct = ("%.2f%%" % (drop * 100)) if isinstance(drop, (int, float)) else "?"
+    if REMOVE_TD_DRYRUN:
+        logging.info("[todays-deal] DRYRUN would remove 'Todays Deal' from post_id=%s (drop=%s)", pid, pct)
+        return
+    try:
+        r = requests.post(WHS_REMOVE_TERM_URL,
+                          json={"token": WP_TOKEN, "post_id": pid, "taxonomy": "newest_deals", "term": "Todays Deal"},
+                          timeout=REQUEST_TIMEOUT)
+        body = {}
+        try:
+            body = r.json() or {}
+        except Exception:
+            pass
+        logging.info("[todays-deal] remove post_id=%s drop=%s http=%s removed=%s", pid, pct, r.status_code, body.get("removed"))
+    except Exception as e:
+        logging.warning("[todays-deal] remove failed post_id=%s: %s", pid, e)
 GET_URL  = "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1/getproperty"
 POST_URL = "https://inventory.joinbuyerslist.com/wp-json/addproperty/v1/create"
 REQUEST_TIMEOUT = 25
@@ -287,8 +318,12 @@ def process_wp_price_and_media_updates(limit: int = 200, gmail_message_id: str |
                     }
                     # #36 (Rich 01.10, rule A): Today's Deals tag only for a drop of 6% or more.
                     try:
-                        if (wp_price - float(parsed_price)) / wp_price >= float(os.getenv("TODAYS_DEAL_MIN_DROP", "0.06")):
+                        _drop = (wp_price - float(parsed_price)) / wp_price
+                        if _drop >= float(os.getenv("TODAYS_DEAL_MIN_DROP", "0.06")):
                             body_reduction["newest_deals"] = ["Todays Deal"]
+                        else:
+                            # Blagojche 19.10 (option a): a sub-6% update must not leave a stale Todays-Deal tag
+                            _remove_todays_deal_tag(wp_post_id, drop=_drop)
                     except Exception:
                         pass
                     ParsedListing.objects(id=pl.id).update_one(

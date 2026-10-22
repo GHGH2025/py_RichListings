@@ -117,6 +117,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# IP allowlist on write routes (Blagojche/Claude 20.10) - S01_ALLOWLIST_MODE in .env; rollback = log/off
+from security_ip_allowlist import install as _install_ip_allowlist
+_install_ip_allowlist(app)
+
 app.include_router(rc_media_router)
 app.include_router(buyer_submissions_router)
 app.include_router(buyer_matching_router)

@@ -347,10 +347,38 @@ def _send_skipped_listing_to_webhook(
         print(f"[skipped_listing] #37 price drop on live post={getattr(pl, 'post_id', None)} id={pl.id} - no skipped webhook")
         return {"ok": False, "reason": "price_drop_live_post"}
 
+    # Blagojche 20.10 (#6 Review folder): make skip->Review items self-explanatory and auto-mark
+    # dups of a live post, WITHOUT a GlobiFlow flow edit - the catch writes our `reason` into the
+    # Podio Notes verbatim, so changing the reason text changes the Notes. (a) prefix so rule/quota
+    # skips read as "no action needed"; (b) if the canonical address is already live, say so with the
+    # live post id; REVIEW_WEBHOOK_SUPPRESS=1 stops creating the Review item at all for these types.
+    _review_auto_types = ("Do_Not_Post_City", "POST_POLICY_35PC")
+    already_live_post_id = None
+    try:
+        _addr = (resolve_street_address(pl) or getattr(pl, "address", "") or "").strip()
+        if _addr:
+            _live = ParsedListing.objects(
+                address=_addr, status="posted", wp_status__in=["posted", "already_found"]
+            ).only("post_id").first()
+            if _live and getattr(_live, "post_id", None):
+                already_live_post_id = _live.post_id
+    except Exception:
+        already_live_post_id = None
+
+    if skip_type in _review_auto_types:
+        if os.getenv("REVIEW_WEBHOOK_SUPPRESS", "0").strip().lower() not in ("0", "false", "no", ""):
+            print(f"[skipped_listing] REVIEW_WEBHOOK_SUPPRESS on - not creating Review item for {skip_type} id={pl.id}")
+            return {"ok": False, "reason": "review_webhook_suppressed", "already_live_post_id": already_live_post_id}
+        if already_live_post_id:
+            reason = f"ALREADY LIVE (post {already_live_post_id}) - no action needed. {reason}"
+        else:
+            reason = f"NO ACTION NEEDED (auto-skipped) - {reason}"
+
     payload: Dict[str, Any] = {
         "listing_id": str(pl.id),
         "skip_type": skip_type,
         "reason": reason,
+        "already_live_post_id": already_live_post_id,
         "status": pl.status,
         "region_bucket": getattr(pl, "region_bucket", None),
         "rules_ai_rule_id": getattr(pl, "rules_ai_rule_id", None),
